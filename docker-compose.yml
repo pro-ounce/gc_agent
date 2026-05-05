@@ -1,0 +1,74 @@
+version: "3.9"
+
+services:
+
+  # ── MCP Agent API ─────────────────────────────────────────────────────────
+  mcp-agent:
+    build:
+      context: .
+      target: runtime
+    image: mcp-agent:local
+    container_name: mcp-agent
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      ENV: development
+      DEBUG: "true"
+      LOG_LEVEL: DEBUG
+      RELOAD: "false"
+
+      # MCP Spring Boot backend
+      MCP_BASE_URL: http://mcp-server:8090
+
+      # LLM — set ANTHROPIC_API_KEY in .env.local
+      LLM_PROVIDER: anthropic
+      LLM_MODEL: claude-3-5-sonnet-20241022
+
+      # Redis
+      REDIS_URL: redis://redis:6379/0
+
+      # Auth
+      AUTH_ENABLED: "true"
+      RBAC_ENABLED: "true"
+      JWT_SECRET: dev-jwt-secret-change-in-prod
+
+    env_file:
+      - .env.local       # Secrets (ANTHROPIC_API_KEY, MCP_API_KEY)
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - mcp-net
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: mcp-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - mcp-net
+
+  # ── Spring Boot MCP server (stub — replace with real image) ───────────────
+  # mcp-server:
+  #   image: your-registry/mcp-server:latest
+  #   ports:
+  #     - "8090:8090"
+  #   networks:
+  #     - mcp-net
+
+volumes:
+  redis_data:
+
+networks:
+  mcp-net:
+    driver: bridge

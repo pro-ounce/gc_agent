@@ -1,0 +1,17 @@
+{
+  "projectName": "MCP Agent",
+  "projectDescription": "Enterprise FastAPI MCP Agent & Chatbot — bridge to Spring Boot MCP server",
+  "includeCoAuthoredBy": true,
+  "enabledMcpServers": [],
+  "ignorePatterns": [
+    ".venv/**",
+    "venv/**",
+    "__pycache__/**",
+    "*.pyc",
+    ".pytest_cache/**",
+    "htmlcov/**",
+    "*.egg-info/**",
+    "dist/**",
+    "build/**"
+  ]
+}
