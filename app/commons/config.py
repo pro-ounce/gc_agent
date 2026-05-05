@@ -106,7 +106,14 @@ class AppConfig:
     CORS_ORIGINS: list[str] = env_list("CORS_ORIGINS") or ["*"]
 
     # MCP / Spring Boot backend
-    MCP_BASE_URL: str = env_str("MCP_BASE_URL", "http://localhost:19170") or "http://localhost:19170"
+    # JAVA_MCP_BASE_URL is the primary env var (matches Spring Boot deploy convention);
+    # MCP_BASE_URL is accepted as an alias.  The value should be the full MCP API root
+    # including any context path, e.g. http://host:19170/mcp-service/mcp
+    MCP_BASE_URL: str = (
+        env_str("JAVA_MCP_BASE_URL")
+        or env_str("MCP_BASE_URL", "http://localhost:19170/mcp")
+        or "http://localhost:19170/mcp"
+    )
     MCP_TIMEOUT_SECONDS: float = env_float("MCP_TIMEOUT_SECONDS", 30.0) or 30.0
     MCP_TOOLS_CACHE_TTL: int = env_int("MCP_TOOLS_CACHE_TTL", 600) or 600
     MCP_API_KEY: str | None = env_str("MCP_API_KEY")

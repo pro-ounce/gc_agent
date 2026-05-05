@@ -40,16 +40,32 @@ class MCPClientError(Exception):
 
 
 class MCPClient:
-    """Thin async wrapper around the Spring Boot MCP REST/JSON-RPC API."""
+    """Thin async wrapper around the Spring Boot MCP REST/JSON-RPC API.
+
+    URL layout (MCP_BASE_URL = full API root, e.g. http://host:19170/mcp-service/mcp):
+      GET  {base}/tools   → list tools (JSON-RPC envelope)
+      POST {base}/tools   → execute tool (JSON-RPC body)
+
+    Both list and execute share the same /tools path; method discriminates.
+    """
 
     @property
     def _http(self) -> httpx.AsyncClient:
         return get_mcp_http_client()
 
+    def _base(self) -> str:
+        """Return MCP_BASE_URL with no trailing slash."""
+        return cfg.MCP_BASE_URL.rstrip("/")
+
+    def _url(self, path: str) -> str:
+        """Build a full URL: base + path (path should start with '/')."""
+        return self._base() + path
+
     def _auth_headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         """
         Build headers for MCP requests.
         Priority: caller-supplied Authorization → MCP_BEARER_TOKEN config.
+        X-API-KEY is already set as a default header on the httpx client.
         """
         headers: dict[str, str] = {}
         if extra and "Authorization" in extra:
@@ -62,12 +78,12 @@ class MCPClient:
 
     async def list_tools(self) -> list[dict[str, Any]]:
         """
-        Return raw tool definitions from GET /mcp/tools.
+        Return raw tool definitions from GET {base}/tools.
         Response: { "jsonrpc":"2.0", "id":"1", "result": [ tool, ... ] }
         Each tool is already in near-OpenAI format:
           { "type":"function", "name":"...", "description":"...", "parameters":{...} }
         """
-        resp = await self._get("/mcp/tools")
+        resp = await self._get("/tools")
         data = resp.json()
         result = data.get("result", [])
         if not isinstance(result, list):
@@ -81,7 +97,7 @@ class MCPClient:
         request_headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """
-        Execute a named tool via POST /mcp (JSON-RPC).
+        Execute a named tool via POST {base}/tools (JSON-RPC).
 
         Request:
           { "jsonrpc":"2.0", "id":"<uuid>", "method":"tool_name", "params":{...args...} }
@@ -103,7 +119,7 @@ class MCPClient:
             "params": arguments,
         }
 
-        resp = await self._post("/mcp", body=body, extra_headers=request_headers)
+        resp = await self._post("/tools", body=body, extra_headers=request_headers)
         duration_ms = round((time.perf_counter() - start) * 1000, 1)
 
         data = resp.json()
@@ -122,7 +138,7 @@ class MCPClient:
         return data  # caller reads data["result"]
 
     # ── Prompts ───────────────────────────────────────────────────────────────
-    # The Spring Boot MCP server has no /mcp/prompts endpoint.
+    # The Spring Boot MCP server has no prompts endpoint.
     # These return empty / raise gracefully so the rest of the app still works.
 
     async def list_prompts(self) -> list[dict[str, Any]]:
@@ -137,9 +153,9 @@ class MCPClient:
     # ── Health ────────────────────────────────────────────────────────────────
 
     async def health(self) -> dict[str, Any]:
-        """Probe by calling GET /mcp/tools — UP if it responds."""
+        """Probe by calling GET {base}/tools — UP if it responds."""
         try:
-            resp = await self._get("/mcp/tools")
+            resp = await self._get("/tools")
             data = resp.json()
             tool_count = len(data.get("result", []))
             return {"status": "UP", "tools": tool_count}
@@ -149,15 +165,16 @@ class MCPClient:
     # ── Private HTTP helpers ──────────────────────────────────────────────────
 
     async def _get(self, path: str, extra_headers: dict[str, str] | None = None) -> httpx.Response:
+        url = self._url(path)
         headers = self._auth_headers(extra_headers)
         try:
-            resp = await self._http.get(path, headers=headers)
-            self._raise_for_status(resp, path)
+            resp = await self._http.get(url, headers=headers)
+            self._raise_for_status(resp, url)
             return resp
         except httpx.TimeoutException as exc:
-            raise MCPClientError(f"MCP server timeout on GET {path}: {exc}")
+            raise MCPClientError(f"MCP server timeout on GET {url}: {exc}")
         except httpx.RequestError as exc:
-            raise MCPClientError(f"MCP server connection error on GET {path}: {exc}")
+            raise MCPClientError(f"MCP server connection error on GET {url}: {exc}")
 
     async def _post(
         self,
@@ -165,15 +182,16 @@ class MCPClient:
         body: dict[str, Any],
         extra_headers: dict[str, str] | None = None,
     ) -> httpx.Response:
+        url = self._url(path)
         headers = self._auth_headers(extra_headers)
         try:
-            resp = await self._http.post(path, json=body, headers=headers)
-            self._raise_for_status(resp, path)
+            resp = await self._http.post(url, json=body, headers=headers)
+            self._raise_for_status(resp, url)
             return resp
         except httpx.TimeoutException as exc:
-            raise MCPClientError(f"MCP server timeout on POST {path}: {exc}")
+            raise MCPClientError(f"MCP server timeout on POST {url}: {exc}")
         except httpx.RequestError as exc:
-            raise MCPClientError(f"MCP server connection error on POST {path}: {exc}")
+            raise MCPClientError(f"MCP server connection error on POST {url}: {exc}")
 
     @staticmethod
     def _raise_for_status(resp: httpx.Response, path: str) -> None:

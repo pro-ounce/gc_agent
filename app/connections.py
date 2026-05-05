@@ -124,8 +124,10 @@ def get_mcp_http_client() -> httpx.AsyncClient:
         headers: dict[str, str] = {"Content-Type": "application/json"}
         if cfg.MCP_API_KEY:
             headers["X-API-KEY"] = cfg.MCP_API_KEY
+        # No base_url — client.py builds full URLs from cfg.MCP_BASE_URL so that
+        # the path prefix (e.g. /mcp-service/mcp) is preserved correctly regardless
+        # of whether the URL has a trailing slash.
         _mcp_http_client = httpx.AsyncClient(
-            base_url=cfg.MCP_BASE_URL,
             headers=headers,
             timeout=cfg.MCP_TIMEOUT_SECONDS,
         )
