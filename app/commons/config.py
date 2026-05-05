@@ -106,10 +106,12 @@ class AppConfig:
     CORS_ORIGINS: list[str] = env_list("CORS_ORIGINS") or ["*"]
 
     # MCP / Spring Boot backend
-    MCP_BASE_URL: str = env_str("MCP_BASE_URL", "http://localhost:8090") or "http://localhost:8090"
+    MCP_BASE_URL: str = env_str("MCP_BASE_URL", "http://localhost:19170") or "http://localhost:19170"
     MCP_TIMEOUT_SECONDS: float = env_float("MCP_TIMEOUT_SECONDS", 30.0) or 30.0
     MCP_TOOLS_CACHE_TTL: int = env_int("MCP_TOOLS_CACHE_TTL", 600) or 600
     MCP_API_KEY: str | None = env_str("MCP_API_KEY")
+    # Bearer token forwarded to MCP server on every request
+    MCP_BEARER_TOKEN: str | None = env_str("MCP_BEARER_TOKEN")
 
     # LLM — OLLAMA (open-source, self-hosted)
     LLM_PROVIDER: str = env_str("LLM_PROVIDER", "ollama") or "ollama"

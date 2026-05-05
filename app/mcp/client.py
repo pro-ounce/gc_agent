@@ -1,21 +1,26 @@
 """
 mcp/client.py
 ─────────────
-Async HTTP client that speaks to the Spring Boot MCP server.
+Async HTTP client for the Spring Boot MCP server (port 19170).
 
-Expected Spring Boot MCP REST API:
-  GET  /mcp/tools                    → list all tools
-  POST /mcp/tools/{name}/execute     → execute a tool
-  GET  /mcp/prompts                  → list all prompts
-  GET  /mcp/prompts/{name}           → get prompt definition
-  POST /mcp/prompts/{name}/execute   → render a prompt with arguments
-  GET  /mcp/health                   → health probe
+Actual API (discovered from GenericMcpController.java):
+  GET  /mcp/tools   Authorization: Bearer ...
+       → { "jsonrpc": "2.0", "id": "1",
+           "result": [ { "type":"function", "name":"opId_method",
+                         "description":"...", "parameters":{...} }, ... ] }
 
-All endpoints may be prefixed by MCP_BASE_PATH (default "").
+  POST /mcp         Authorization: Bearer ...
+       body: { "jsonrpc":"2.0", "id":"1", "method":"opId_method",
+               "params": { ...args... } }
+       → { "jsonrpc": "2.0", "id":"1", "result": <response payload> }
+
+  (No /mcp/health endpoint — we probe with GET /mcp/tools)
+  (No /mcp/prompts endpoint)
 """
 from __future__ import annotations
 
 import time
+import uuid
 from typing import Any
 
 import httpx
@@ -26,33 +31,48 @@ from app.connections import get_mcp_http_client
 
 log = get_logger(__name__)
 
-_BASE_PATH = ""  # Override if Spring Boot context-path is set
-
 
 class MCPClientError(Exception):
-    """Raised when the MCP server returns an error."""
+    """Raised when the MCP server returns an error or is unreachable."""
     def __init__(self, message: str, status_code: int | None = None) -> None:
         super().__init__(message)
         self.status_code = status_code
 
 
 class MCPClient:
-    """Thin async wrapper around the Spring Boot MCP REST API."""
+    """Thin async wrapper around the Spring Boot MCP REST/JSON-RPC API."""
 
     @property
     def _http(self) -> httpx.AsyncClient:
         return get_mcp_http_client()
 
+    def _auth_headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
+        """
+        Build headers for MCP requests.
+        Priority: caller-supplied Authorization → MCP_BEARER_TOKEN config.
+        """
+        headers: dict[str, str] = {}
+        if extra and "Authorization" in extra:
+            headers["Authorization"] = extra["Authorization"]
+        elif cfg.MCP_BEARER_TOKEN:
+            headers["Authorization"] = f"Bearer {cfg.MCP_BEARER_TOKEN}"
+        return headers
+
     # ── Tool endpoints ────────────────────────────────────────────────────────
 
     async def list_tools(self) -> list[dict[str, Any]]:
-        """Return raw tool definitions from the MCP server."""
+        """
+        Return raw tool definitions from GET /mcp/tools.
+        Response: { "jsonrpc":"2.0", "id":"1", "result": [ tool, ... ] }
+        Each tool is already in near-OpenAI format:
+          { "type":"function", "name":"...", "description":"...", "parameters":{...} }
+        """
         resp = await self._get("/mcp/tools")
         data = resp.json()
-        # Support both {"tools": [...]} and plain [...]
-        if isinstance(data, list):
-            return data
-        return data.get("tools", [])
+        result = data.get("result", [])
+        if not isinstance(result, list):
+            return []
+        return result
 
     async def execute_tool(
         self,
@@ -60,62 +80,79 @@ class MCPClient:
         arguments: dict[str, Any],
         request_headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        """Execute a named tool and return the raw result payload."""
+        """
+        Execute a named tool via POST /mcp (JSON-RPC).
+
+        Request:
+          { "jsonrpc":"2.0", "id":"<uuid>", "method":"tool_name", "params":{...args...} }
+
+        Response:
+          { "jsonrpc":"2.0", "id":"<uuid>", "result": <payload> }
+        """
         start = time.perf_counter()
+        rpc_id = str(uuid.uuid4())
+
         log.bind(func="execute_tool", tool=tool_name).info(
             f"Executing tool '{tool_name}' with args={list(arguments)}"
         )
-        resp = await self._post(
-            f"/mcp/tools/{tool_name}/execute",
-            body={"arguments": arguments},
-            extra_headers=request_headers,
-        )
+
+        body = {
+            "jsonrpc": "2.0",
+            "id": rpc_id,
+            "method": tool_name,
+            "params": arguments,
+        }
+
+        resp = await self._post("/mcp", body=body, extra_headers=request_headers)
         duration_ms = round((time.perf_counter() - start) * 1000, 1)
+
+        data = resp.json()
+
+        # Surface JSON-RPC application-level errors
+        if "error" in data:
+            err = data["error"]
+            raise MCPClientError(
+                f"MCP tool error: {err}",
+                status_code=None,
+            )
+
         log.bind(func="execute_tool", tool=tool_name, duration_ms=duration_ms).info(
             f"Tool '{tool_name}' completed in {duration_ms}ms"
         )
-        return resp.json()
+        return data  # caller reads data["result"]
 
-    # ── Prompt endpoints ──────────────────────────────────────────────────────
+    # ── Prompts ───────────────────────────────────────────────────────────────
+    # The Spring Boot MCP server has no /mcp/prompts endpoint.
+    # These return empty / raise gracefully so the rest of the app still works.
 
     async def list_prompts(self) -> list[dict[str, Any]]:
-        resp = await self._get("/mcp/prompts")
-        data = resp.json()
-        if isinstance(data, list):
-            return data
-        return data.get("prompts", [])
+        return []
 
     async def get_prompt(self, name: str) -> dict[str, Any]:
-        resp = await self._get(f"/mcp/prompts/{name}")
-        return resp.json()
+        return {}
 
-    async def execute_prompt(
-        self, name: str, arguments: dict[str, str]
-    ) -> str:
-        """Render a prompt server-side and return the resulting text."""
-        resp = await self._post(
-            f"/mcp/prompts/{name}/execute",
-            body={"arguments": arguments},
-        )
-        data = resp.json()
-        # Support {"text": "..."} or {"content": "..."}
-        return data.get("text") or data.get("content") or str(data)
+    async def execute_prompt(self, name: str, arguments: dict[str, str]) -> str:
+        raise MCPClientError("Prompts are not supported by this MCP server.")
 
     # ── Health ────────────────────────────────────────────────────────────────
 
     async def health(self) -> dict[str, Any]:
+        """Probe by calling GET /mcp/tools — UP if it responds."""
         try:
-            resp = await self._get("/mcp/health")
-            return resp.json()
+            resp = await self._get("/mcp/tools")
+            data = resp.json()
+            tool_count = len(data.get("result", []))
+            return {"status": "UP", "tools": tool_count}
         except Exception as exc:
             return {"status": "DOWN", "error": str(exc)}
 
     # ── Private HTTP helpers ──────────────────────────────────────────────────
 
-    async def _get(self, path: str, **kw: Any) -> httpx.Response:
+    async def _get(self, path: str, extra_headers: dict[str, str] | None = None) -> httpx.Response:
+        headers = self._auth_headers(extra_headers)
         try:
-            resp = await self._http.get(_BASE_PATH + path, **kw)
-            self._raise_for_status(resp)
+            resp = await self._http.get(path, headers=headers)
+            self._raise_for_status(resp, path)
             return resp
         except httpx.TimeoutException as exc:
             raise MCPClientError(f"MCP server timeout on GET {path}: {exc}")
@@ -125,22 +162,13 @@ class MCPClient:
     async def _post(
         self,
         path: str,
-        body: dict[str, Any] | None = None,
+        body: dict[str, Any],
         extra_headers: dict[str, str] | None = None,
     ) -> httpx.Response:
-        headers: dict[str, str] = {}
-        if extra_headers:
-            # Only pass through safe headers (authorization, etc.)
-            for h in ("Authorization", "X-API-KEY", "X-Forwarded-For"):
-                if h in extra_headers:
-                    headers[h] = extra_headers[h]
+        headers = self._auth_headers(extra_headers)
         try:
-            resp = await self._http.post(
-                _BASE_PATH + path,
-                json=body or {},
-                headers=headers,
-            )
-            self._raise_for_status(resp)
+            resp = await self._http.post(path, json=body, headers=headers)
+            self._raise_for_status(resp, path)
             return resp
         except httpx.TimeoutException as exc:
             raise MCPClientError(f"MCP server timeout on POST {path}: {exc}")
@@ -148,14 +176,14 @@ class MCPClient:
             raise MCPClientError(f"MCP server connection error on POST {path}: {exc}")
 
     @staticmethod
-    def _raise_for_status(resp: httpx.Response) -> None:
+    def _raise_for_status(resp: httpx.Response, path: str) -> None:
         if resp.status_code >= 400:
             try:
                 detail = resp.json().get("message") or resp.text
             except Exception:
                 detail = resp.text
             raise MCPClientError(
-                f"MCP server error {resp.status_code}: {detail}",
+                f"MCP server {resp.status_code} on {path}: {detail}",
                 status_code=resp.status_code,
             )
 

@@ -30,16 +30,33 @@ class Tool(BaseModel):
 
     @classmethod
     def from_mcp_payload(cls, payload: dict[str, Any]) -> "Tool":
-        """Parse a Spring Boot MCP tool definition."""
+        """
+        Parse a Spring Boot MCP tool definition.
+
+        Server returns flat near-OpenAI format:
+          { "type":"function", "name":"opId_httpMethod",
+            "description":"... Risk level: HIGH. ...",
+            "parameters": { "type":"object", "properties":{...}, "required":[...] } }
+
+        Risk level and confirmation requirement are embedded in the description
+        by the SwaggerLoaderService.
+        """
         desc = payload.get("description", "")
         risk = _extract_risk(desc)
+        # Server embeds "Requires user confirmation before execution." in description
+        confirm = (
+            "requires user confirmation" in desc.lower()
+            or _needs_confirmation(payload, risk)
+        )
+        # Parameters schema uses "parameters" key (not "inputSchema")
+        param_schema = payload.get("parameters") or payload.get("inputSchema") or {}
         return cls(
             name=payload.get("name", ""),
             description=desc,
             risk_level=risk,
-            requires_confirmation=_needs_confirmation(payload, risk),
-            parameters=_parse_parameters(payload),
-            input_schema=payload.get("inputSchema", {}),
+            requires_confirmation=confirm,
+            parameters=_parse_parameters(param_schema),
+            input_schema=param_schema,
             raw=payload,
         )
 
@@ -100,8 +117,8 @@ def _needs_confirmation(payload: dict[str, Any], risk: str) -> bool:
     return False
 
 
-def _parse_parameters(payload: dict[str, Any]) -> list[ToolParameter]:
-    schema = payload.get("inputSchema", {})
+def _parse_parameters(schema: dict[str, Any]) -> list[ToolParameter]:
+    """Parse a JSON Schema 'parameters' or 'inputSchema' object into ToolParameter list."""
     props = schema.get("properties", {})
     required = set(schema.get("required", []))
     params: list[ToolParameter] = []
