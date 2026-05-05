@@ -11,8 +11,12 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
+from pathlib import Path
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.commons.config import cfg
 from app.commons.flags import flags
@@ -106,6 +110,15 @@ def create_app() -> FastAPI:
     if flags.rbac_enabled:
         from app.routers.auth import router as auth_router
         app.include_router(auth_router)
+
+    # ── Static UI ─────────────────────────────────────────────────────────────
+    _static = Path(__file__).parent / "static"
+    if _static.is_dir():
+        app.mount("/static", StaticFiles(directory=str(_static)), name="static")
+
+        @app.get("/", include_in_schema=False)
+        async def ui():
+            return FileResponse(str(_static / "index.html"))
 
     log.bind(func="create_app").info("Application initialised")
     return app
