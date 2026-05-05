@@ -13,7 +13,7 @@ from typing import Any
 from dotenv import load_dotenv
 
 # Load .env.local first, then .env as fallback
-_ROOT = Path(__file__).resolve().parents[3]
+_ROOT = Path(__file__).resolve().parents[2]  # agent/ (app/commons/config.py → up 2)
 load_dotenv(_ROOT / ".env.local", override=False)
 load_dotenv(_ROOT / ".env", override=False)
 
