@@ -1,13 +1,7 @@
-[build-system]
-requires = ["setuptools>=68", "wheel"]
-build-backend = "setuptools.backends.legacy:build"
-
-[project]
-name = "mcp-agent"
-version = "1.0.0"
-description = "Enterprise-grade MCP Agent & Chatbot — FastAPI bridge to Spring Boot MCP server"
-readme = "README.md"
-requires-python = ">=3.11"
+# ── Tool configuration only — no [build-system] block ────────────────────────
+# This is a standalone application (not a library).
+# Install deps with:  pip install -r requirements.txt
+# Run with:          uvicorn app.main:app --host 0.0.0.0 --port 8080
 
 [tool.ruff]
 line-length = 100
@@ -26,4 +20,4 @@ filterwarnings = ["ignore::DeprecationWarning"]
 
 [tool.coverage.run]
 source = ["app"]
-omit = ["tests/*", "app/rbac/generated/*"]
+omit = ["tests/*"]
