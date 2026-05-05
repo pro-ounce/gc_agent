@@ -15,8 +15,8 @@ os.environ.setdefault("RBAC_ENABLED", "false")
 os.environ.setdefault("REDIS_ENABLED", "false")
 os.environ.setdefault("LOG_LEVEL", "WARNING")
 os.environ.setdefault("MCP_BASE_URL", "http://localhost:19999")   # Never actually called
-os.environ.setdefault("LLM_PROVIDER", "anthropic")
-os.environ.setdefault("ANTHROPIC_API_KEY", "test-key")
+os.environ.setdefault("LLM_PROVIDER", "ollama")
+os.environ.setdefault("OLLAMA_BASE_URL", "http://localhost:11434")
 os.environ.setdefault("JWT_SECRET", "test-secret-key")
 os.environ.setdefault("TOOL_RISK_CONFIRMATION", "false")
 

@@ -2,9 +2,11 @@
 models/session.py
 ─────────────────
 Session data model — persisted to Redis as JSON.
+Message history is stored in OpenAI-compatible format (used by OLLAMA).
 """
 from __future__ import annotations
 
+import json as _json
 from datetime import datetime, timezone
 from typing import Any
 
@@ -16,10 +18,12 @@ def _now_iso() -> str:
 
 
 class Message(BaseModel):
-    role: str          # "user" | "assistant" | "tool" | "tool_result"
-    content: str | list[dict[str, Any]]
-    tool_use_id: str | None = None
+    role: str          # "user" | "assistant" | "tool"
+    content: str
+    tool_call_id: str | None = None   # for role="tool" results
     tool_name: str | None = None
+    # Serialised JSON list of OpenAI tool_call objects (on assistant messages)
+    tool_calls_json: str | None = None
     timestamp: str = Field(default_factory=_now_iso)
 
 
@@ -35,60 +39,90 @@ class Session(BaseModel):
     def touch(self) -> None:
         self.updated_at = _now_iso()
 
-    def add_message(self, role: str, content: str | list[dict[str, Any]], **kw: Any) -> None:
+    def add_user(self, content: str) -> None:
+        self.messages.append(Message(role="user", content=content))
+        self.touch()
+
+    def add_assistant(self, content: str, tool_calls: list[dict[str, Any]] | None = None) -> None:
+        msg = Message(role="assistant", content=content)
+        if tool_calls:
+            msg.tool_calls_json = _json.dumps(tool_calls)
+        self.messages.append(msg)
+        self.touch()
+
+    def add_tool_result(self, tool_call_id: str, tool_name: str, content: str) -> None:
+        self.messages.append(
+            Message(role="tool", content=content, tool_call_id=tool_call_id, tool_name=tool_name)
+        )
+        self.touch()
+
+    # Convenience shim so old call sites still work
+    def add_message(self, role: str, content: Any, **kw: Any) -> None:
+        if isinstance(content, dict):
+            content = _json.dumps(content)
+        elif not isinstance(content, str):
+            content = str(content)
         self.messages.append(Message(role=role, content=content, **kw))
         self.touch()
 
     def to_llm_messages(self) -> list[dict[str, Any]]:
-        """Convert session history to the format expected by the LLM."""
-        import json as _json
+        """
+        Convert session history to OpenAI-compatible message list for OLLAMA.
 
+        Roles used:
+          user      → regular user message
+          assistant → LLM response (may include tool_calls list)
+          tool      → result of a tool call (tool_call_id required)
+        """
         result: list[dict[str, Any]] = []
         for msg in self.messages:
-            if msg.role in ("user", "assistant"):
-                result.append({"role": msg.role, "content": msg.content})
-            elif msg.role == "tool_use":
-                # tool input stored as JSON string; deserialise back to dict for LLM
-                raw_input = msg.content
-                if isinstance(raw_input, str):
-                    try:
-                        tool_input: Any = _json.loads(raw_input)
-                    except (ValueError, TypeError):
-                        tool_input = raw_input
-                else:
-                    tool_input = raw_input
+            if msg.role == "user":
+                result.append({"role": "user", "content": msg.content})
 
-                # Append tool_use block into the last assistant message if possible
+            elif msg.role == "assistant":
+                entry: dict[str, Any] = {"role": "assistant", "content": msg.content}
+                if msg.tool_calls_json:
+                    try:
+                        entry["tool_calls"] = _json.loads(msg.tool_calls_json)
+                    except (ValueError, TypeError):
+                        pass
+                result.append(entry)
+
+            elif msg.role == "tool":
+                result.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": msg.tool_call_id or "",
+                        "content": msg.content,
+                    }
+                )
+
+            # Legacy roles written by earlier versions of chat_service
+            elif msg.role == "tool_use":
+                # Reconstruct as assistant message with tool_calls
+                try:
+                    args = _json.loads(msg.content) if isinstance(msg.content, str) else msg.content
+                except (ValueError, TypeError):
+                    args = {}
+                tool_calls = [
+                    {
+                        "id": msg.tool_call_id or "",
+                        "type": "function",
+                        "function": {"name": msg.tool_name or "", "arguments": _json.dumps(args)},
+                    }
+                ]
                 if result and result[-1]["role"] == "assistant":
-                    if isinstance(result[-1]["content"], list):
-                        result[-1]["content"].append(
-                            {"type": "tool_use", "id": msg.tool_use_id, "name": msg.tool_name, "input": tool_input}
-                        )
-                    else:
-                        result[-1]["content"] = [
-                            {"type": "text", "text": result[-1]["content"]},
-                            {"type": "tool_use", "id": msg.tool_use_id, "name": msg.tool_name, "input": tool_input},
-                        ]
+                    result[-1].setdefault("tool_calls", []).extend(tool_calls)
                 else:
-                    result.append(
-                        {
-                            "role": "assistant",
-                            "content": [
-                                {"type": "tool_use", "id": msg.tool_use_id, "name": msg.tool_name, "input": tool_input}
-                            ],
-                        }
-                    )
+                    result.append({"role": "assistant", "content": "", "tool_calls": tool_calls})
+
             elif msg.role == "tool_result":
                 result.append(
                     {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "tool_result",
-                                "tool_use_id": msg.tool_use_id,
-                                "content": msg.content,
-                            }
-                        ],
+                        "role": "tool",
+                        "tool_call_id": msg.tool_call_id or "",
+                        "content": msg.content,
                     }
                 )
+
         return result

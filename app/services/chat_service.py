@@ -4,7 +4,7 @@ services/chat_service.py
 Core agentic loop that orchestrates:
   1. Session history management
   2. Tool discovery from MCP registry
-  3. LLM invocation (Claude or OLLAMA)
+  3. LLM invocation (OLLAMA)
   4. Risk-aware tool execution / pending-action gating
   5. Iterative tool-call → result → LLM loop (up to MAX_ITERATIONS)
 
@@ -12,7 +12,6 @@ Both blocking and streaming chat modes are supported.
 """
 from __future__ import annotations
 
-import json
 import uuid
 from typing import Any, AsyncIterator
 
@@ -44,11 +43,11 @@ class ChatService:
         request_headers: dict[str, str] | None = None,
     ) -> ChatResponse:
         session = session_service.get_or_create(session_id, user_id)
-        session.add_message("user", user_message)
+        session.add_user(user_message)
         session_service.save(session)
 
         system = system_prompt or cfg.AGENT_SYSTEM_PROMPT
-        tools = await tool_registry.as_anthropic_tools()
+        tools = await tool_registry.as_tools()
         tool_calls_made: list[str] = []
 
         llm_response: LLMResponse | None = None
@@ -71,12 +70,12 @@ class ChatService:
             pending = await self._process_tool_calls(
                 session=session,
                 tool_calls=llm_response.tool_calls,
+                llm_text=llm_response.text,
                 tool_calls_made=tool_calls_made,
                 request_headers=request_headers,
             )
 
             if pending:
-                # Save session with pending action, return to user for confirmation
                 session.pending_action_id = pending.id
                 session_service.save(session)
                 return ChatResponse(
@@ -96,7 +95,7 @@ class ChatService:
 
         # Final assistant message
         final_text = llm_response.text if llm_response else "I was unable to process your request."
-        session.add_message("assistant", final_text)
+        session.add_assistant(final_text)
         session_service.save(session)
 
         return ChatResponse(
@@ -119,11 +118,11 @@ class ChatService:
         system_prompt: str | None = None,
     ) -> AsyncIterator[StreamChunk]:
         session = session_service.get_or_create(session_id, user_id)
-        session.add_message("user", user_message)
+        session.add_user(user_message)
         session_service.save(session)
 
         system = system_prompt or cfg.AGENT_SYSTEM_PROMPT
-        tools = await tool_registry.as_anthropic_tools()
+        tools = await tool_registry.as_tools()
         messages = session.to_llm_messages()
 
         full_text = ""
@@ -131,7 +130,7 @@ class ChatService:
             full_text += chunk
             yield StreamChunk(type="delta", session_id=session_id, content=chunk)
 
-        session.add_message("assistant", full_text)
+        session.add_assistant(full_text)
         session_service.save(session)
 
         yield StreamChunk(
@@ -160,7 +159,6 @@ class ChatService:
                 finish_reason="no_pending_action",
             )
 
-        # Load the pending action from the session metadata
         pending_raw = session.metadata.get("pending_actions", {}).get(action_id)
         if not pending_raw:
             return ChatResponse(
@@ -175,12 +173,7 @@ class ChatService:
         session.metadata.setdefault("pending_actions", {}).pop(action_id, None)
 
         if not confirmed:
-            session.add_message(
-                "tool_result",
-                "User cancelled this operation.",
-                tool_use_id=action_id,
-                tool_name=pending.tool_name,
-            )
+            session.add_tool_result(action_id, pending.tool_name, "User cancelled this operation.")
             session_service.save(session)
             return ChatResponse(
                 session_id=session_id,
@@ -190,26 +183,19 @@ class ChatService:
             )
 
         # Execute the confirmed tool
-        result = await tool_registry.execute(
-            pending.tool_name, pending.tool_args, request_headers
-        )
+        result = await tool_registry.execute(pending.tool_name, pending.tool_args, request_headers)
         output_text = str(result.output) if result.success else f"Error: {result.error}"
 
-        session.add_message(
-            "tool_result",
-            output_text,
-            tool_use_id=action_id,
-            tool_name=pending.tool_name,
-        )
+        session.add_tool_result(action_id, pending.tool_name, output_text)
         session_service.save(session)
 
-        # Re-run LLM to generate final response with tool result
+        # Re-run LLM with tool result to generate the final response
         system = cfg.AGENT_SYSTEM_PROMPT
-        tools_schema = await tool_registry.as_anthropic_tools()
+        tools_schema = await tool_registry.as_tools()
         llm_response = await llm().complete(session.to_llm_messages(), tools_schema, system)
         final_text = llm_response.text or output_text
 
-        session.add_message("assistant", final_text)
+        session.add_assistant(final_text)
         session_service.save(session)
 
         return ChatResponse(
@@ -233,11 +219,7 @@ class ChatService:
     ) -> ChatResponse:
         """Render a server-side prompt and inject it as a user message."""
         rendered = await prompt_registry.execute_prompt(prompt_name, arguments)
-        return await self.chat(
-            session_id=session_id,
-            user_message=rendered,
-            user_id=user_id,
-        )
+        return await self.chat(session_id=session_id, user_message=rendered, user_id=user_id)
 
     # ── Internal helpers ──────────────────────────────────────────────────────
 
@@ -245,6 +227,7 @@ class ChatService:
         self,
         session: Session,
         tool_calls: list[ToolCall],
+        llm_text: str,
         tool_calls_made: list[str],
         request_headers: dict[str, str] | None,
     ) -> PendingAction | None:
@@ -252,10 +235,12 @@ class ChatService:
         Execute tool calls sequentially.
         Returns a PendingAction if any tool requires confirmation, else None.
         """
+        import json
+
         for tc in tool_calls:
             tool = await tool_registry.get_tool(tc.name)
 
-            # Risk gate
+            # Risk gate — pause and ask user before executing
             if (
                 flags.tool_risk_confirmation
                 and tool
@@ -270,16 +255,16 @@ class ChatService:
                     risk_level=tool.risk_level,
                     description=tool.description,
                 )
-                # Persist tool_use block in session so LLM history is correct
-                session.add_message(
-                    "tool_use",
-                    json.dumps(tc.input),
-                    tool_use_id=pending.id,
-                    tool_name=tc.name,
-                )
-                session.metadata.setdefault("pending_actions", {})[pending.id] = (
-                    pending.model_dump()
-                )
+                # Record the assistant message + tool_call in history
+                openai_tool_calls = [
+                    {
+                        "id": pending.id,
+                        "type": "function",
+                        "function": {"name": tc.name, "arguments": json.dumps(tc.input)},
+                    }
+                ]
+                session.add_assistant(llm_text, tool_calls=openai_tool_calls)
+                session.metadata.setdefault("pending_actions", {})[pending.id] = pending.model_dump()
                 return pending
 
             # Execute immediately
@@ -290,19 +275,16 @@ class ChatService:
             tool_calls_made.append(tc.name)
             output = str(result.output) if result.success else f"Error: {result.error}"
 
-            # Record in session history (tool_use + tool_result pair)
-            session.add_message(
-                "tool_use",
-                json.dumps(tc.input),
-                tool_use_id=tc.id,
-                tool_name=tc.name,
-            )
-            session.add_message(
-                "tool_result",
-                output,
-                tool_use_id=tc.id,
-                tool_name=tc.name,
-            )
+            # Record assistant tool_call + tool result in OpenAI format
+            openai_tool_calls = [
+                {
+                    "id": tc.id,
+                    "type": "function",
+                    "function": {"name": tc.name, "arguments": json.dumps(tc.input)},
+                }
+            ]
+            session.add_assistant(llm_text, tool_calls=openai_tool_calls)
+            session.add_tool_result(tc.id, tc.name, output)
 
         return None
 

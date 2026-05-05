@@ -111,17 +111,14 @@ class AppConfig:
     MCP_TOOLS_CACHE_TTL: int = env_int("MCP_TOOLS_CACHE_TTL", 600) or 600
     MCP_API_KEY: str | None = env_str("MCP_API_KEY")
 
-    # LLM — primary provider
-    LLM_PROVIDER: str = env_str("LLM_PROVIDER", "anthropic") or "anthropic"
-    LLM_MODEL: str = env_str("LLM_MODEL", "claude-3-5-sonnet-20241022") or "claude-3-5-sonnet-20241022"
+    # LLM — OLLAMA (open-source, self-hosted)
+    LLM_PROVIDER: str = env_str("LLM_PROVIDER", "ollama") or "ollama"
+    LLM_MODEL: str = env_str("LLM_MODEL", "llama3.1") or "llama3.1"
     LLM_MAX_TOKENS: int = env_int("LLM_MAX_TOKENS", 4096) or 4096
     LLM_TEMPERATURE: float = env_float("LLM_TEMPERATURE", 0.0) or 0.0
     LLM_MAX_ITERATIONS: int = env_int("LLM_MAX_ITERATIONS", 10) or 10
 
-    # Anthropic
-    ANTHROPIC_API_KEY: str | None = env_str("ANTHROPIC_API_KEY")
-
-    # OLLAMA (fallback)
+    # OLLAMA
     OLLAMA_BASE_URL: str = env_str("OLLAMA_BASE_URL", "http://localhost:11434") or "http://localhost:11434"
     OLLAMA_MODEL: str = env_str("OLLAMA_MODEL", "llama3.1") or "llama3.1"
 

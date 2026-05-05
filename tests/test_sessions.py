@@ -36,7 +36,7 @@ def test_session_lifecycle(client):
     original = cs.llm
 
     cs.llm = lambda: mock_llm
-    cs.tool_registry.as_anthropic_tools = AsyncMock(return_value=[])
+    cs.tool_registry.as_tools = AsyncMock(return_value=[])
 
     try:
         # Create session via chat

@@ -17,7 +17,7 @@ def _mock_llm_response(text: str = "Hello!", tool_calls=None) -> LLMResponse:
         text=text,
         tool_calls=tool_calls or [],
         finish_reason="stop",
-        model="claude-3-5-sonnet-test",
+        model="llama3.1",
         usage={"input_tokens": 10, "output_tokens": 5},
     )
 
@@ -36,7 +36,7 @@ def mock_llm(monkeypatch):
 def mock_tool_registry(monkeypatch):
     """Empty tool registry for most tests."""
     monkeypatch.setattr(
-        "app.services.chat_service.tool_registry.as_anthropic_tools",
+        "app.services.chat_service.tool_registry.as_tools",
         AsyncMock(return_value=[]),
     )
     monkeypatch.setattr(
@@ -115,8 +115,11 @@ def test_chat_with_tool_calls(client, monkeypatch, sample_session_id):
         AsyncMock(return_value=ToolResult(tool_name="get_info", success=True, output="test result")),
     )
     monkeypatch.setattr(
-        "app.services.chat_service.tool_registry.as_anthropic_tools",
-        AsyncMock(return_value=[{"name": "get_info", "description": "", "input_schema": {}}]),
+        "app.services.chat_service.tool_registry.as_tools",
+        AsyncMock(return_value=[{
+            "type": "function",
+            "function": {"name": "get_info", "description": "", "parameters": {}},
+        }]),
     )
 
     response = client.post(
@@ -126,7 +129,6 @@ def test_chat_with_tool_calls(client, monkeypatch, sample_session_id):
     assert response.status_code == 200
     data = response.json()
     assert "get_info" in data["tool_calls_made"]
-    assert "test result" in data["assistant_message"] or len(data["tool_calls_made"]) > 0
 
 
 def test_confirm_action_no_pending(client, sample_session_id):

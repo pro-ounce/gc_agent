@@ -1,12 +1,12 @@
 """
 mcp/tool_registry.py
 ────────────────────
-In-memory TTL cache for MCP tools, with Anthropic tool-use format conversion.
+In-memory TTL cache for MCP tools with OpenAI-compatible tool schema.
 
 Usage:
     registry = ToolRegistry()
-    tools = await registry.get_tools()           # list[Tool]
-    schema = await registry.as_anthropic_tools() # Anthropic SDK format
+    tools = await registry.get_tools()   # list[Tool]
+    schema = await registry.as_tools()   # OpenAI function-calling format
     result = await registry.execute(name, args)  # ToolResult
 """
 from __future__ import annotations
@@ -39,10 +39,10 @@ class ToolRegistry:
         tools = await self.get_tools()
         return next((t for t in tools if t.name == name), None)
 
-    async def as_anthropic_tools(self) -> list[dict[str, Any]]:
-        """Convert tool list to Anthropic tool_use schema."""
+    async def as_tools(self) -> list[dict[str, Any]]:
+        """Convert tool list to OpenAI function-calling schema (used by OLLAMA)."""
         tools = await self.get_tools()
-        return [_to_anthropic_schema(t) for t in tools]
+        return [_to_tool_schema(t) for t in tools]
 
     async def execute(
         self,
@@ -115,11 +115,11 @@ class ToolRegistry:
                 self._cache = []
 
 
-def _to_anthropic_schema(tool: Tool) -> dict[str, Any]:
-    """Convert Tool → Anthropic tool_use dict."""
+def _to_tool_schema(tool: Tool) -> dict[str, Any]:
+    """Convert Tool → OpenAI function-calling dict (compatible with OLLAMA)."""
+    # Build parameters schema from input_schema or parsed parameters
     schema: dict[str, Any] = tool.input_schema or {}
     if not schema:
-        # Build minimal schema from parsed parameters
         props: dict[str, Any] = {}
         required: list[str] = []
         for p in tool.parameters:
@@ -134,9 +134,12 @@ def _to_anthropic_schema(tool: Tool) -> dict[str, Any]:
             schema["required"] = required
 
     return {
-        "name": tool.name,
-        "description": tool.description,
-        "input_schema": schema,
+        "type": "function",
+        "function": {
+            "name": tool.name,
+            "description": tool.description,
+            "parameters": schema,
+        },
     }
 
 

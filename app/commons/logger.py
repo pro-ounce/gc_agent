@@ -93,7 +93,7 @@ def _configure_root() -> None:
     root.addHandler(_build_handler())
 
     # Silence noisy third-party loggers
-    for noisy in ("httpx", "httpcore", "anthropic", "uvicorn.access"):
+    for noisy in ("httpx", "httpcore", "uvicorn.access"):
         logging.getLogger(noisy).setLevel(logging.WARNING)
 
 
