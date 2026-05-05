@@ -3,7 +3,8 @@
 # Run ALL targets from:  /Users/six7/Git/gc/agent/
 # ════════════════════════════════════════════════════════════════════════════
 .DEFAULT_GOAL := help
-PYTHON        := python3
+# Requires Python 3.12 — pyenv will auto-select via .python-version
+PYTHON        := python3.12
 VENV          := .venv
 PIP           := $(VENV)/bin/pip
 APP           := $(VENV)/bin/python -m uvicorn app.main:app
@@ -49,6 +50,9 @@ help:
 
 # ── Setup ─────────────────────────────────────────────────────────────────────
 venv: _check-dir
+	@$(PYTHON) --version 2>&1 | grep -q "3\.1[12]" \
+		|| (echo "ERROR: Python 3.11+ required. Active: $$($(PYTHON) --version 2>&1)"; \
+		    echo "       Run: pyenv local 3.12.8"; exit 1)
 	$(PYTHON) -m venv $(VENV)
 	$(PIP) install --quiet --upgrade pip wheel
 
