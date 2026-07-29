@@ -47,3 +47,29 @@ def decode_token(token: str) -> dict[str, Any]:
         raise JWTError("Token has expired")
     except jwt.InvalidTokenError as exc:
         raise JWTError(f"Invalid token: {exc}")
+
+
+def decode_internal_token(token: str) -> dict[str, Any]:
+    """
+    Verify a gc gateway internal token (X-INT-TKN).
+
+    HS512, signed with the shared gc key (GC_JWT_SECRET, sealed from the DB setting),
+    with issuer/audience checked. This is the cryptographic proof that a request came
+    from the gc gateway — used by PLATFORM_AUTH_MODE=gateway.
+    """
+    secret = cfg.GC_JWT_SECRET
+    if not secret:
+        raise JWTError("GC_JWT_SECRET is not configured (required for PLATFORM_AUTH_MODE=gateway)")
+    try:
+        return jwt.decode(
+            token,
+            secret,
+            algorithms=[cfg.GC_JWT_ALGORITHM],
+            issuer=cfg.GC_INTERNAL_ISSUER,
+            audience=cfg.GC_INTERNAL_AUDIENCE,
+            leeway=cfg.GC_JWT_LEEWAY,
+        )
+    except jwt.ExpiredSignatureError:
+        raise JWTError("Internal token has expired")
+    except jwt.InvalidTokenError as exc:
+        raise JWTError(f"Invalid internal token: {exc}")

@@ -20,9 +20,20 @@ async def list_tools(
     force_refresh: bool = Query(False, alias="refresh"),
     _: object = Depends(require_permission(Permissions.TOOL_LIST)),
 ) -> dict:
-    tools = await tool_registry.get_tools(force_refresh=force_refresh)
+    from app.commons.config import cfg
+    from app.mcp.client import MCPClientError
+
+    error: str | None = None
+    try:
+        tools = await tool_registry.get_tools(force_refresh=force_refresh)
+    except MCPClientError as exc:
+        tools = []
+        error = str(exc)
+
     return {
         "total": len(tools),
+        "mcp_url": cfg.MCP_BASE_URL,
+        "error": error,
         "tools": [
             {
                 "name": t.name,

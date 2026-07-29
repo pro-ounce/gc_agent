@@ -25,6 +25,7 @@ from typing import Any
 
 import httpx
 
+from app.commons import metrics as M
 from app.commons.config import cfg
 from app.commons.logger import get_logger
 from app.connections import get_mcp_http_client
@@ -64,26 +65,57 @@ class MCPClient:
     def _auth_headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
         """
         Build headers for MCP requests.
-        Priority: caller-supplied Authorization → MCP_BEARER_TOKEN config.
-        X-API-KEY is already set as a default header on the httpx client.
+
+        Forwards the caller's auth context to the MCP server so it can call the real
+        downstream service on behalf of the user:
+          - X-INT-TKN  : the gc gateway's internal token (gateway mode). MCP validates it
+                         (caller stays gateway-service → no allow-list change) and re-issues
+                         a fresh internal token to the downstream service.
+          - Authorization : the user JWT (standalone / off-platform mode).
+          - X-AR-KEY / X-TRACE-ID / X-Time-Zone / X-Date-Time : role + tracing context.
+        Fallback: MCP_BEARER_TOKEN only when no user/gateway token is present (e.g. startup
+        tool listing). X-API-KEY is already a default header on the httpx client.
         """
+        forward = (cfg.GC_INTERNAL_HEADER, "Authorization", cfg.GC_ROLE_HEADER,
+                   "X-TRACE-ID", "X-Time-Zone", "X-Date-Time")
         headers: dict[str, str] = {}
-        if extra and "Authorization" in extra:
-            headers["Authorization"] = extra["Authorization"]
-        elif cfg.MCP_BEARER_TOKEN:
+        if extra:
+            lower = {k.lower(): v for k, v in extra.items()}
+            for name in forward:
+                val = lower.get(name.lower())
+                if val:
+                    headers[name] = val
+        # MCP's JwtSecurityContextFilter reads the caller token from the Authorization
+        # header and only treats it as internal when the Bearer token's X_TP claim is an
+        # internal type (e.g. SVC_PER_USER). The gateway delivers the internal token in the
+        # X-INT-TKN header, so mirror it into Authorization: Bearer — otherwise MCP falls to
+        # the user path and validates with the (short) jwtSecret instead of internalJwtSecret.
+        int_tkn = headers.get(cfg.GC_INTERNAL_HEADER)
+        if int_tkn and "Authorization" not in headers:
+            raw = int_tkn.split(" ", 1)[1] if int_tkn.lower().startswith("bearer ") else int_tkn
+            headers["Authorization"] = f"Bearer {raw}"
+
+        # Fallback service token only if the caller supplied no gateway/user credential.
+        has_cred = cfg.GC_INTERNAL_HEADER in headers or "Authorization" in headers
+        if not has_cred and cfg.MCP_BEARER_TOKEN:
             headers["Authorization"] = f"Bearer {cfg.MCP_BEARER_TOKEN}"
         return headers
 
     # ── Tool endpoints ────────────────────────────────────────────────────────
 
-    async def list_tools(self) -> list[dict[str, Any]]:
+    async def list_tools(
+        self, extra_headers: dict[str, str] | None = None
+    ) -> list[dict[str, Any]]:
         """
         Return raw tool definitions from GET {base}/tools.
         Response: { "jsonrpc":"2.0", "id":"1", "result": [ tool, ... ] }
         Each tool is already in near-OpenAI format:
           { "type":"function", "name":"...", "description":"...", "parameters":{...} }
+
+        `extra_headers` forwards the caller's X-INT-TKN so discovery authenticates to
+        MCP the same way execution does.
         """
-        resp = await self._get("/tools")
+        resp = await self._get("/tools", extra_headers=extra_headers)
         data = resp.json()
         result = data.get("result", [])
         if not isinstance(result, list):
@@ -97,7 +129,8 @@ class MCPClient:
         request_headers: dict[str, str] | None = None,
     ) -> dict[str, Any]:
         """
-        Execute a named tool via POST {base}/tools (JSON-RPC).
+        Execute a named tool via POST {base} (JSON-RPC). The MCP execute handler is
+        @PostMapping on the base (/mcp-service/mcp); /tools is GET-only (discovery).
 
         Request:
           { "jsonrpc":"2.0", "id":"<uuid>", "method":"tool_name", "params":{...args...} }
@@ -119,7 +152,7 @@ class MCPClient:
             "params": arguments,
         }
 
-        resp = await self._post("/tools", body=body, extra_headers=request_headers)
+        resp = await self._post("", body=body, extra_headers=request_headers)
         duration_ms = round((time.perf_counter() - start) * 1000, 1)
 
         data = resp.json()
@@ -167,14 +200,22 @@ class MCPClient:
     async def _get(self, path: str, extra_headers: dict[str, str] | None = None) -> httpx.Response:
         url = self._url(path)
         headers = self._auth_headers(extra_headers)
-        try:
-            resp = await self._http.get(url, headers=headers)
-            self._raise_for_status(resp, url)
-            return resp
-        except httpx.TimeoutException as exc:
-            raise MCPClientError(f"MCP server timeout on GET {url}: {exc}")
-        except httpx.RequestError as exc:
-            raise MCPClientError(f"MCP server connection error on GET {url}: {exc}")
+        op = f"GET {path}"
+        with M.timed(M.mcp_duration, op):
+            try:
+                resp = await self._http.get(url, headers=headers)
+                self._raise_for_status(resp, url)
+                M.mcp_requests_total.labels(op, "success").inc()
+                return resp
+            except httpx.TimeoutException as exc:
+                M.mcp_requests_total.labels(op, "timeout").inc()
+                raise MCPClientError(f"MCP server timeout on GET {url}: {exc}")
+            except httpx.RequestError as exc:
+                M.mcp_requests_total.labels(op, "error").inc()
+                raise MCPClientError(f"MCP server connection error on GET {url}: {exc}")
+            except MCPClientError:
+                M.mcp_requests_total.labels(op, "error").inc()
+                raise
 
     async def _post(
         self,
@@ -184,14 +225,22 @@ class MCPClient:
     ) -> httpx.Response:
         url = self._url(path)
         headers = self._auth_headers(extra_headers)
-        try:
-            resp = await self._http.post(url, json=body, headers=headers)
-            self._raise_for_status(resp, url)
-            return resp
-        except httpx.TimeoutException as exc:
-            raise MCPClientError(f"MCP server timeout on POST {url}: {exc}")
-        except httpx.RequestError as exc:
-            raise MCPClientError(f"MCP server connection error on POST {url}: {exc}")
+        op = f"POST {path}"
+        with M.timed(M.mcp_duration, op):
+            try:
+                resp = await self._http.post(url, json=body, headers=headers)
+                self._raise_for_status(resp, url)
+                M.mcp_requests_total.labels(op, "success").inc()
+                return resp
+            except httpx.TimeoutException as exc:
+                M.mcp_requests_total.labels(op, "timeout").inc()
+                raise MCPClientError(f"MCP server timeout on POST {url}: {exc}")
+            except httpx.RequestError as exc:
+                M.mcp_requests_total.labels(op, "error").inc()
+                raise MCPClientError(f"MCP server connection error on POST {url}: {exc}")
+            except MCPClientError:
+                M.mcp_requests_total.labels(op, "error").inc()
+                raise
 
     @staticmethod
     def _raise_for_status(resp: httpx.Response, path: str) -> None:

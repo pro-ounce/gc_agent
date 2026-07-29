@@ -23,6 +23,17 @@ class FeatureFlags:
     tool_caching_enabled: bool = field(
         default_factory=lambda: env_bool("TOOL_CACHING_ENABLED", True)
     )
+    # Tool-RAG: retrieve only the top-k relevant MCP tools per query (vs sending all).
+    # Default OFF — only worth enabling once the tool catalog is large. Fail-open.
+    tool_rag_enabled: bool = field(default_factory=lambda: env_bool("TOOL_RAG_ENABLED", False))
+    # Read-only chatbot: never OFFER mutating tools (create/update/delete/activate/…) to the
+    # model. Default ON — a Q&A chatbot must not be able to change state from a casual query
+    # (a "look up user" prompt once fired activateUserByUsername_put). Turn OFF only once
+    # write actions are gated behind explicit confirmation (see tool_risk_confirmation, which
+    # the STREAMING path does not yet enforce).
+    chatbot_read_only: bool = field(
+        default_factory=lambda: env_bool("CHATBOT_READ_ONLY", True)
+    )
 
     # Storage
     redis_enabled: bool = field(default_factory=lambda: env_bool("REDIS_ENABLED", True))
@@ -34,6 +45,7 @@ class FeatureFlags:
     audit_logging_enabled: bool = field(
         default_factory=lambda: env_bool("AUDIT_LOGGING_ENABLED", True)
     )
+    metrics_enabled: bool = field(default_factory=lambda: env_bool("METRICS_ENABLED", True))
 
     # API behaviour
     streaming_enabled: bool = field(default_factory=lambda: env_bool("STREAMING_ENABLED", True))

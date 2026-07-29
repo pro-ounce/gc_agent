@@ -19,10 +19,14 @@ Tool schema format: OpenAI function-calling style
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, AsyncIterator
 
 import httpx
 
+import time
+
+from app.commons import metrics as M
 from app.commons.config import cfg
 from app.commons.logger import get_logger
 
@@ -61,6 +65,79 @@ class LLMResponse:
         return bool(self.tool_calls)
 
 
+_TOOL_CALL_TAG = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.DOTALL)
+
+
+def _extract_text_tool_calls(text: str) -> tuple[list["ToolCall"], str]:
+    """
+    Recover tool calls a model emitted in the *content* instead of as a structured
+    tool_calls entry. Handles two shapes:
+      1. qwen2.5 / Hermes:  <tool_call>{"name": "...", "arguments": {...}}</tool_call>
+         (Ollama doesn't always lift these into message.tool_calls → they arrive as text)
+      2. bare JSON:         {"name": "getUser_get", "parameters": {...}}
+    Returns (calls, cleaned_text) with the matched call(s) removed from the text.
+    Conservative: only objects with a "name" plus "parameters"/"arguments" qualify.
+    """
+    calls: list[ToolCall] = []
+
+    # (1) Qwen/Hermes <tool_call> tags first — the format qwen2.5 actually emits.
+    def _take_tag(m: "re.Match[str]") -> str:
+        try:
+            obj = json.loads(m.group(1))
+        except Exception:
+            return m.group(0)  # leave malformed tags in place
+        args = obj.get("arguments") or obj.get("parameters") if isinstance(obj, dict) else None
+        if isinstance(obj, dict) and obj.get("name") and isinstance(args, dict):
+            calls.append(ToolCall(id=f"tc_{obj['name']}", name=str(obj["name"]), input=args))
+            return ""
+        return m.group(0)
+
+    text = _TOOL_CALL_TAG.sub(_take_tag, text).strip()
+    if calls:
+        return calls, text
+
+    # (2) Bare JSON object fallback.
+    if '"name"' not in text:
+        return [], text
+    out = text
+    i = 0
+    while True:
+        start = out.find("{", i)
+        if start == -1:
+            break
+        depth, end, in_str, esc = 0, -1, False, False
+        for j in range(start, len(out)):
+            c = out[j]
+            if in_str:
+                esc = (c == "\\") and not esc
+                if c == '"' and not esc:
+                    in_str = False
+            elif c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    end = j
+                    break
+        if end == -1:
+            break
+        try:
+            obj = json.loads(out[start : end + 1])
+        except Exception:
+            i = start + 1
+            continue
+        args = obj.get("parameters") or obj.get("arguments") if isinstance(obj, dict) else None
+        if isinstance(obj, dict) and obj.get("name") and isinstance(args, dict):
+            calls.append(ToolCall(id=f"tc_{obj['name']}", name=str(obj["name"]), input=args))
+            out = (out[:start] + out[end + 1 :]).strip()
+            i = start
+        else:
+            i = end + 1
+    return calls, out
+
+
 # ── OLLAMA provider ───────────────────────────────────────────────────────────
 
 class OllamaProvider:
@@ -76,11 +153,21 @@ class OllamaProvider:
         self._model = cfg.LLM_MODEL
         self._client = httpx.AsyncClient(
             base_url=self._base_url,
-            timeout=120.0,
+            timeout=cfg.LLM_TIMEOUT_SECONDS,
         )
         log.bind(func="OllamaProvider").info(
             f"OLLAMA provider ready: {self._base_url}  model={self._model}"
         )
+
+    def _options(self) -> dict[str, Any]:
+        """Sampling/context options — shared by every call path so streaming and
+        non-streaming can't drift (streaming previously sent none, silently running
+        at Ollama's defaults: temp 0.8 and num_ctx 4096)."""
+        return {
+            "temperature": cfg.LLM_TEMPERATURE,
+            "num_predict": cfg.LLM_MAX_TOKENS,
+            "num_ctx": cfg.LLM_NUM_CTX,
+        }
 
     async def complete(
         self,
@@ -95,17 +182,34 @@ class OllamaProvider:
             "model": self._model,
             "messages": full_messages,
             "stream": False,
-            "options": {
-                "temperature": cfg.LLM_TEMPERATURE,
-                "num_predict": cfg.LLM_MAX_TOKENS,
-            },
+            "options": self._options(),
         }
         if tools:
             payload["tools"] = tools  # Already in OpenAI format from tool_registry
 
-        resp = await self._client.post("/api/chat", json=payload)
-        resp.raise_for_status()
-        data = resp.json()
+        start = time.perf_counter()
+        try:
+            resp = await self._client.post("/api/chat", json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+        except httpx.HTTPStatusError as exc:
+            M.llm_calls_total.labels("ollama", self._model, "error").inc()
+            # OLLAMA puts the real reason in the response body — surface it.
+            log.error(
+                f"OLLAMA {exc.response.status_code} on /api/chat: {exc.response.text[:800]} | "
+                f"last msg roles={[m.get('role') for m in full_messages[-4:]]}"
+            )
+            raise
+        except Exception:
+            M.llm_calls_total.labels("ollama", self._model, "error").inc()
+            raise
+        finally:
+            M.llm_duration.labels("ollama", self._model).observe(time.perf_counter() - start)
+        M.llm_calls_total.labels("ollama", self._model, "success").inc()
+        if data.get("prompt_eval_count"):
+            M.llm_tokens_total.labels("ollama", self._model, "input").inc(data["prompt_eval_count"])
+        if data.get("eval_count"):
+            M.llm_tokens_total.labels("ollama", self._model, "output").inc(data["eval_count"])
 
         msg = data.get("message", {})
         text = msg.get("content") or ""
@@ -123,6 +227,13 @@ class OllamaProvider:
                 )
             )
 
+        # Fallback: smaller models (llama3.1 8B) sometimes emit the tool call as JSON in
+        # the content instead of a structured tool_calls entry. Recover it and strip it
+        # from the visible answer so raw JSON never leaks to the user.
+        if not tool_calls and text:
+            recovered, text = _extract_text_tool_calls(text)
+            tool_calls.extend(recovered)
+
         usage: dict[str, int] = {}
         if "prompt_eval_count" in data:
             usage["input_tokens"] = data["prompt_eval_count"]
@@ -137,6 +248,17 @@ class OllamaProvider:
             usage=usage,
         )
 
+    async def health(self) -> dict[str, Any]:
+        """Probe the Ollama runtime (lists local models). UP if it responds."""
+        try:
+            resp = await self._client.get("/api/tags", timeout=5.0)
+            resp.raise_for_status()
+            models = [m.get("name") for m in resp.json().get("models", [])]
+            return {"status": "UP", "provider": "ollama", "model": self._model,
+                    "model_available": self._model in models or any(str(self._model).split(":")[0] in str(x) for x in models)}
+        except Exception as exc:  # noqa: BLE001
+            return {"status": "DOWN", "provider": "ollama", "model": self._model, "error": str(exc)}
+
     async def stream(
         self,
         messages: list[dict[str, Any]],
@@ -148,6 +270,7 @@ class OllamaProvider:
             "model": self._model,
             "messages": full_messages,
             "stream": True,
+            "options": self._options(),
         }
 
         async with self._client.stream("POST", "/api/chat", json=payload) as resp:
@@ -162,6 +285,57 @@ class OllamaProvider:
                         yield content
                 except json.JSONDecodeError:
                     pass
+
+    async def stream_chat(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]],
+        system: str,
+    ) -> AsyncIterator[tuple[str, Any]]:
+        """
+        Streaming chat that also surfaces tool calls, for the agentic loop.
+        Yields ("delta", text) for content tokens, then ("tool_calls", [ToolCall-dict, …])
+        if the model called tools, and ("done", finish_reason) at the end.
+        """
+        full_messages = [{"role": "system", "content": system}] + messages
+        payload: dict[str, Any] = {
+            "model": self._model,
+            "messages": full_messages,
+            "stream": True,
+            "options": self._options(),
+        }
+        if tools:
+            payload["tools"] = tools
+
+        async with self._client.stream("POST", "/api/chat", json=payload) as resp:
+            resp.raise_for_status()
+            async for line in resp.aiter_lines():
+                if not line:
+                    continue
+                try:
+                    chunk = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                msg = chunk.get("message", {})
+                if msg.get("content"):
+                    yield ("delta", msg["content"])
+                if msg.get("tool_calls"):
+                    calls = []
+                    for tc in msg["tool_calls"]:
+                        fn = tc.get("function", {})
+                        args = fn.get("arguments", {})
+                        if isinstance(args, str):
+                            try:
+                                args = json.loads(args)
+                            except json.JSONDecodeError:
+                                args = {}
+                        calls.append(
+                            {"id": tc.get("id") or f"tc_{fn.get('name', '')}",
+                             "name": fn.get("name", ""), "input": args or {}}
+                        )
+                    yield ("tool_calls", calls)
+                if chunk.get("done"):
+                    yield ("done", chunk.get("done_reason", "stop"))
 
 
 # ── Singleton ─────────────────────────────────────────────────────────────────

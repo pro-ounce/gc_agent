@@ -10,8 +10,10 @@ from __future__ import annotations
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
+from app.commons.config import cfg
 from app.commons.flags import flags
 from app.commons.logger import get_logger, set_request_context
+from app.rbac.gateway_auth import authenticate_gateway
 from app.rbac.jwt_handler import JWTError, decode_token
 from app.rbac.models import APIKey, User
 from app.rbac.permissions import get_permissions_for_roles
@@ -19,7 +21,13 @@ from app.rbac.permissions import get_permissions_for_roles
 log = get_logger(__name__)
 
 _PUBLIC_PATHS: frozenset[str] = frozenset(
-    {"/health", "/api/health", "/docs", "/openapi.json", "/redoc"}
+    {
+        "/health", "/api/health",
+        "/health/live", "/api/health/live",
+        "/health/ready", "/api/health/ready",
+        "/metrics",
+        "/docs", "/openapi.json", "/redoc",
+    }
 )
 
 
@@ -31,7 +39,11 @@ class RBACMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         path = request.url.path
-        if path in _PUBLIC_PATHS or path.startswith("/assets"):
+        if (
+            path in _PUBLIC_PATHS
+            or path.startswith("/assets")
+            or path.startswith(cfg.MANAGEMENT_BASE_PATH)   # /actuator/* — actuator, guarded by IP allow-list
+        ):
             return await call_next(request)
 
         user, method = await self._authenticate(request)
@@ -52,7 +64,14 @@ class RBACMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
     async def _authenticate(self, request: Request) -> tuple[User | None, str]:
-        # 1. JWT Bearer
+        # 0. Platform gateway-vouched auth — verify the gc gateway's X-INT-TKN.
+        #    Primary path when the agent runs behind the gateway (PLATFORM_AUTH_MODE=gateway).
+        if cfg.PLATFORM_AUTH_MODE.lower() == "gateway":
+            user, method = authenticate_gateway(request)
+            if user is not None:
+                return user, method
+
+        # 1. JWT Bearer (standalone login)
         auth_header = request.headers.get("Authorization", "")
         if auth_header.startswith("Bearer "):
             token = auth_header[7:]

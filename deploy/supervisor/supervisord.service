@@ -1,0 +1,22 @@
+[Unit]
+# systemd unit that runs a pip-installed supervisord (no EPEL package needed).
+# Install to: /etc/systemd/system/supervisord.service
+Description=Supervisor process control system
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# Foreground (-n) so systemd tracks the process directly.
+ExecStart=/apps/supervisor/bin/supervisord -n -c /etc/supervisord.conf
+ExecReload=/apps/supervisor/bin/supervisorctl -c /etc/supervisord.conf reload
+ExecStop=/apps/supervisor/bin/supervisorctl -c /etc/supervisord.conf shutdown
+# Auto-create /run/supervisor (socket) and /var/log/supervisor on start.
+RuntimeDirectory=supervisor
+RuntimeDirectoryMode=0755
+LogsDirectory=supervisor
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

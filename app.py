@@ -10,7 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 
-JAVA_MCP_BASE_URL = os.getenv("JAVA_MCP_BASE_URL", "http://prj241001-r8.proounce.com/mcp-service/mcp").rstrip("/")
+JAVA_MCP_BASE_URL = os.getenv("JAVA_MCP_BASE_URL", "http://localhost:19170/mcp-service/mcp").rstrip("/")
 OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434").rstrip("/")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1")
 ROOT_PATH = os.getenv("ROOT_PATH", "")

@@ -55,7 +55,7 @@ class ChatResponse(BaseModel):
 
 
 class StreamChunk(BaseModel):
-    type: Literal["delta", "tool_use", "done", "error"]
+    type: Literal["delta", "tool_use", "confirm_required", "done", "error"]
     session_id: str
     content: str = ""
     pending_action: PendingAction | None = None

@@ -15,6 +15,8 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
+from app.commons import metrics as M
+from app.commons.config import cfg
 from app.commons.flags import flags
 from app.commons.logger import get_logger
 from app.models.chat import (
@@ -33,9 +35,18 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 
 def _request_headers(request: Request) -> dict[str, str]:
-    """Pass-through selected headers to MCP tool execution."""
+    """
+    Pass-through headers to MCP tool execution. Includes the gc gateway's internal
+    token (X-INT-TKN) and role/tracing context so MCP can act on behalf of the user.
+    """
+    forward = (
+        cfg.GC_INTERNAL_HEADER,  # X-INT-TKN — gateway internal token (gateway mode)
+        cfg.GC_ROLE_HEADER,      # X-AR-KEY  — role
+        "Authorization", "X-API-KEY", "X-Forwarded-For",
+        "X-TRACE-ID", "X-Time-Zone", "X-Date-Time",
+    )
     headers: dict[str, str] = {}
-    for h in ("Authorization", "X-API-KEY", "X-Forwarded-For"):
+    for h in forward:
         if h in request.headers:
             headers[h] = request.headers[h]
     return headers
@@ -60,14 +71,17 @@ async def chat(
     ).info(f"Chat request: session={body.session_id}")
 
     try:
-        return await chat_service.chat(
+        result = await chat_service.chat(
             session_id=body.session_id,
             user_message=body.message,
             user_id=user.id,
             system_prompt=body.system_prompt,
             request_headers=_request_headers(request),
         )
+        M.chat_requests_total.labels("sync", "success").inc()
+        return result
     except Exception as exc:
+        M.chat_requests_total.labels("sync", "error").inc()
         log.exception(f"Chat error: {exc}")
         raise HTTPException(status_code=500, detail=f"Chat failed: {exc}")
 

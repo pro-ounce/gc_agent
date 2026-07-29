@@ -19,6 +19,15 @@ def _key(session_id: str) -> str:
     return f"{_PREFIX}{session_id}"
 
 
+def count_sessions() -> int:
+    """Approximate active-session count (for metrics)."""
+    from app.connections import redis_client
+    try:
+        return len(redis_client.keys(f"{_PREFIX}*"))
+    except Exception:
+        return 0
+
+
 class SessionService:
 
     def get(self, session_id: str) -> Session | None:

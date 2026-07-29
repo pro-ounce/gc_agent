@@ -67,6 +67,8 @@ def create_app() -> FastAPI:
         ),
         docs_url="/docs" if not cfg.is_production() else None,
         redoc_url="/redoc" if not cfg.is_production() else None,
+        # Path prefix when served behind the gc gateway rewrite (e.g. /ai-agent-service).
+        root_path=cfg.ROOT_PATH or "",
         lifespan=lifespan,
     )
 
@@ -81,7 +83,7 @@ def create_app() -> FastAPI:
         allow_origins=cfg.CORS_ORIGINS,
         allow_credentials=True,
         allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "X-API-KEY", "X-Request-ID", "X-Session-ID", "Content-Type"],
+        allow_headers=["Authorization", "X-API-KEY", "X-INT-TKN", "X-AR-KEY", "X-Request-ID", "X-Session-ID", "Content-Type"],
         expose_headers=["X-Request-ID"],
     )
 
@@ -100,12 +102,14 @@ def create_app() -> FastAPI:
     from app.routers.tools import router as tools_router
     from app.routers.prompts import router as prompts_router
     from app.routers.sessions import router as sessions_router
+    from app.routers.platform import router as platform_router
 
     app.include_router(health_router)
     app.include_router(chat_router)
     app.include_router(tools_router)
     app.include_router(prompts_router)
     app.include_router(sessions_router)
+    app.include_router(platform_router)  # /ai-service/{agent}/chat — GC platform-facing
 
     if flags.rbac_enabled:
         from app.routers.auth import router as auth_router

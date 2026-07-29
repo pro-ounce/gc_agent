@@ -66,6 +66,22 @@ class _InMemoryRedis:
             if not self._is_expired(k) and fnmatch.fnmatch(k, pattern)
         ]
 
+    # list ops (used by the capped audit log)
+    def lpush(self, key: str, value: Any) -> int:
+        arr, _ = self._store.get(key, ([], None))
+        if not isinstance(arr, list):
+            arr = []
+        arr.insert(0, value)
+        self._store[key] = (arr, None)
+        return len(arr)
+
+    def ltrim(self, key: str, start: int, stop: int) -> bool:
+        arr, exp = self._store.get(key, ([], None))
+        if isinstance(arr, list):
+            end = None if stop == -1 else stop + 1
+            self._store[key] = (arr[start:end], exp)
+        return True
+
     def ping(self) -> bool:
         return True
 
@@ -73,27 +89,226 @@ class _InMemoryRedis:
         pass
 
 
-# ── Redis client ──────────────────────────────────────────────────────────────
+# ── OpenSearch store (Redis-compatible KV/list backend) ────────────────────────
 
-def _make_redis() -> _redis.Redis | _InMemoryRedis:
-    if cfg.is_testing() or not cfg.REDIS_URL:
-        log.info("Using in-memory Redis (test/fallback mode)")
-        return _InMemoryRedis()  # type: ignore[return-value]
+class _OpenSearchStore:
+    """
+    Redis-compatible KV+list store backed by OpenSearch.
+
+    Each key is a document (_id = key) in one index:
+        { "value": <str>, "expires_at": <epoch int|None>, "kind": "kv"|"list" }
+
+    GET-by-id is realtime (works immediately after a write); keys()/list uses search,
+    which is near-real-time (~1s refresh) — fine for the agent. TTL is enforced lazily
+    (expired docs are skipped and deleted on access); add an ISM policy for hard cleanup.
+    """
+
+    def __init__(self, client: Any, index: str) -> None:
+        self._c = client
+        self._index = index
+        self._ensure_index()
+
+    def _ensure_index(self) -> None:
+        try:
+            if not self._c.indices.exists(index=self._index):
+                self._c.indices.create(index=self._index, body={
+                    "mappings": {"properties": {
+                        "value": {"type": "text", "index": False},
+                        "expires_at": {"type": "long"},
+                        "kind": {"type": "keyword"},
+                    }}
+                })
+        except Exception as exc:  # racing create / perms — log and continue
+            log.warning(f"OpenSearch ensure-index '{self._index}' failed: {exc}")
+
+    @staticmethod
+    def _now() -> float:
+        return time.time()
+
+    def _get_src(self, key: str) -> dict | None:
+        try:
+            resp = self._c.get(index=self._index, id=key)  # realtime
+        except Exception:
+            return None
+        src = resp.get("_source") if isinstance(resp, dict) else None
+        if not src:
+            return None
+        exp = src.get("expires_at")
+        if exp is not None and self._now() > exp:
+            self.delete(key)
+            return None
+        return src
+
+    def get(self, key: str) -> bytes | None:
+        src = self._get_src(key)
+        if src is None:
+            return None
+        val = src.get("value")
+        if val is None:
+            return None
+        return val.encode() if isinstance(val, str) else val
+
+    def set(self, key: str, value: Any, ex: int | None = None) -> None:
+        body = {
+            "value": value if isinstance(value, str) else str(value),
+            "expires_at": int(self._now() + ex) if ex else None,
+            "kind": "kv",
+        }
+        self._c.index(index=self._index, id=key, body=body)
+
+    def delete(self, *keys: str) -> int:
+        removed = 0
+        for k in keys:
+            try:
+                self._c.delete(index=self._index, id=k)
+                removed += 1
+            except Exception:
+                pass
+        return removed
+
+    def exists(self, key: str) -> int:
+        return 1 if self._get_src(key) is not None else 0
+
+    def expire(self, key: str, seconds: int) -> bool:
+        try:
+            self._c.update(index=self._index, id=key,
+                           body={"doc": {"expires_at": int(self._now() + seconds)}})
+            return True
+        except Exception:
+            return False
+
+    def keys(self, pattern: str = "*") -> list[bytes]:
+        import fnmatch
+        try:
+            resp = self._c.search(index=self._index, body={
+                "query": {"match_all": {}}, "_source": ["expires_at"], "size": 10000,
+            })
+        except Exception:
+            return []
+        now = self._now()
+        out: list[bytes] = []
+        for hit in resp.get("hits", {}).get("hits", []):
+            kid = hit.get("_id", "")
+            exp = (hit.get("_source") or {}).get("expires_at")
+            if exp is not None and now > exp:
+                continue
+            if fnmatch.fnmatch(kid, pattern):
+                out.append(kid.encode())
+        return out
+
+    # ── list ops (audit log) — stored as a JSON array under the key ────────────
+    def _get_list(self, key: str) -> list:
+        src = self._get_src(key)
+        if not src:
+            return []
+        try:
+            arr = json.loads(src.get("value") or "[]")
+            return arr if isinstance(arr, list) else []
+        except Exception:
+            return []
+
+    def lpush(self, key: str, value: Any) -> int:
+        arr = self._get_list(key)
+        arr.insert(0, value)
+        self._c.index(index=self._index, id=key,
+                      body={"value": json.dumps(arr), "expires_at": None, "kind": "list"})
+        return len(arr)
+
+    def ltrim(self, key: str, start: int, stop: int) -> bool:
+        arr = self._get_list(key)
+        end = None if stop == -1 else stop + 1
+        arr = arr[start:end]
+        self._c.index(index=self._index, id=key,
+                      body={"value": json.dumps(arr), "expires_at": None, "kind": "list"})
+        return True
+
+    def ping(self) -> bool:
+        try:
+            return bool(self._c.ping())
+        except Exception:
+            return False
+
+    def close(self) -> None:
+        try:
+            self._c.close()
+        except Exception:
+            pass
+
+
+# ── Store selection (opensearch | redis | memory) ──────────────────────────────
+
+def _make_store():
+    if cfg.is_testing():
+        log.info("Using in-memory store (test mode)")
+        return _InMemoryRedis()
+
+    backend = (cfg.STORE_BACKEND or "opensearch").lower()
+
+    if backend == "memory":
+        log.info("Using in-memory store (STORE_BACKEND=memory)")
+        return _InMemoryRedis()
+
+    if backend == "redis":
+        try:
+            client = _redis.from_url(cfg.REDIS_URL, socket_connect_timeout=cfg.REDIS_TIMEOUT,
+                                     decode_responses=False)
+            client.ping()
+            log.bind(func="connections").info(f"Redis connected: {cfg.REDIS_URL}")
+            return client
+        except Exception as exc:
+            log.warning(f"Redis unavailable ({exc}), falling back to in-memory store")
+            return _InMemoryRedis()
+
+    # default: OpenSearch
     try:
-        client = _redis.from_url(
-            cfg.REDIS_URL,
-            socket_connect_timeout=cfg.REDIS_TIMEOUT,
-            decode_responses=False,
+        from opensearchpy import OpenSearch
+        auth = None
+        if cfg.OPENSEARCH_USERNAME:
+            auth = (cfg.OPENSEARCH_USERNAME, cfg.OPENSEARCH_PASSWORD or "")
+        client = OpenSearch(
+            hosts=[cfg.OPENSEARCH_URL],
+            http_auth=auth,
+            use_ssl=cfg.OPENSEARCH_URL.lower().startswith("https"),
+            verify_certs=cfg.OPENSEARCH_VERIFY_CERTS,
+            ssl_show_warn=False,
+            timeout=cfg.OPENSEARCH_TIMEOUT,
+            max_retries=0,          # fail fast if the cluster is unreachable
+            retry_on_timeout=False,
         )
-        client.ping()
-        log.bind(func="connections").info(f"Redis connected: {cfg.REDIS_URL}")
-        return client
+        import logging as _logging
+        _logging.getLogger("opensearch").setLevel(_logging.ERROR)  # quiet retry tracebacks
+        if not client.ping():
+            raise RuntimeError("ping returned False")
+        store = _OpenSearchStore(client, cfg.OPENSEARCH_INDEX)
+        log.bind(func="connections").info(
+            f"OpenSearch store connected: {cfg.OPENSEARCH_URL} index={cfg.OPENSEARCH_INDEX}"
+        )
+        return store
     except Exception as exc:
-        log.warning(f"Redis unavailable ({exc}), falling back to in-memory store")
-        return _InMemoryRedis()  # type: ignore[return-value]
+        log.warning(f"OpenSearch unavailable ({exc}), falling back to in-memory store")
+        return _InMemoryRedis()
 
 
-redis_client: _redis.Redis | _InMemoryRedis = _make_redis()
+# `redis_client` name kept for call-site compatibility — it is the selected store.
+redis_client = _make_store()
+
+
+def store_backend_name() -> str:
+    cls = type(redis_client).__name__
+    return {
+        "_OpenSearchStore": "opensearch",
+        "_InMemoryRedis": "memory",
+        "Redis": "redis",
+    }.get(cls, cls)
+
+
+def store_health() -> dict[str, Any]:
+    """Backend name + reachability, for health/readiness probes."""
+    try:
+        up = bool(redis_client.ping())
+    except Exception as exc:  # noqa: BLE001
+        return {"backend": store_backend_name(), "status": "DOWN", "error": str(exc)}
+    return {"backend": store_backend_name(), "status": "UP" if up else "DOWN"}
 
 
 # ── Typed Redis helpers ───────────────────────────────────────────────────────

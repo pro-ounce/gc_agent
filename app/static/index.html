@@ -154,6 +154,7 @@ html, body { height: 100%; overflow: hidden; font-family: var(--font); backgroun
   gap: 6px;
   font-size: 12px;
   color: var(--txt-secondary);
+  cursor: default;
 }
 #health-dot {
   width: 8px; height: 8px;
@@ -164,6 +165,20 @@ html, body { height: 100%; overflow: hidden; font-family: var(--font); backgroun
 #health-dot.up     { background: var(--risk-low); box-shadow: 0 0 6px var(--risk-low); }
 #health-dot.down   { background: var(--risk-high); }
 #health-dot.degraded { background: var(--risk-medium); }
+
+#mcp-error {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: rgba(239,68,68,.08);
+  border: 1px solid rgba(239,68,68,.25);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  color: #fca5a5;
+  line-height: 1.4;
+  display: none;
+  word-break: break-all;
+}
+#mcp-error.visible { display: block; }
 
 /* ── Main ───────────────────────────────────────────────────────────── */
 #main {
@@ -536,6 +551,7 @@ html, body { height: 100%; overflow: hidden; font-family: var(--font); backgroun
         <div id="health-dot"></div>
         <span id="health-text">Connecting…</span>
       </div>
+      <div id="mcp-error"></div>
     </div>
   </aside>
 
@@ -595,7 +611,10 @@ html, body { height: 100%; overflow: hidden; font-family: var(--font); backgroun
     <div id="tools-panel-inner">
       <div id="tools-panel-header">
         <span>🔧 Available Tools</span>
-        <button class="hdr-btn" onclick="toggleTools()">✕</button>
+        <div style="display:flex;gap:6px">
+          <button class="hdr-btn" onclick="loadTools(true)" title="Refresh tools">↺</button>
+          <button class="hdr-btn" onclick="toggleTools()">✕</button>
+        </div>
       </div>
       <div id="tools-list"><p style="padding:16px;color:var(--txt-muted);font-size:13px">Loading…</p></div>
     </div>
@@ -924,17 +943,30 @@ function toggleTools() {
   document.getElementById('tools-panel').classList.toggle('hidden', !toolsPanelOpen);
 }
 
-async function loadTools() {
+async function loadTools(forceRefresh = false) {
+  const el = document.getElementById('tools-list');
+  el.innerHTML = '<p style="padding:16px;color:var(--txt-muted);font-size:13px">Loading…</p>';
   try {
-    const data = await api('GET', '/api/tools');
+    const url = forceRefresh ? '/api/tools?refresh=true' : '/api/tools';
+    const data = await api('GET', url);
     const tools = data.tools || [];
 
-    // Update count badge
     document.getElementById('tools-count').textContent = `Tools (${tools.length})`;
 
-    const el = document.getElementById('tools-list');
     if (!tools.length) {
-      el.innerHTML = '<p style="padding:16px;color:var(--txt-muted);font-size:13px">No tools available</p>';
+      const errMsg = data.error
+        ? `<p style="font-size:11px;color:#fca5a5;margin-bottom:4px;word-break:break-all">${esc(data.error)}</p>`
+        : '';
+      const urlMsg = data.mcp_url
+        ? `<p style="font-size:11px;color:var(--txt-muted);margin-bottom:12px">${esc(data.mcp_url)}</p>`
+        : '';
+      el.innerHTML = `
+        <div style="padding:16px;text-align:center">
+          <div style="font-size:28px;margin-bottom:8px;opacity:.4">🔌</div>
+          <p style="font-size:13px;color:var(--txt-secondary);margin-bottom:6px">No tools loaded.</p>
+          ${errMsg}${urlMsg}
+          <button class="hdr-btn" onclick="loadTools(true)" style="margin:auto">↺ Retry</button>
+        </div>`;
       return;
     }
 
@@ -952,8 +984,14 @@ async function loadTools() {
           </div>
         </div>`;
     }).join('');
-  } catch {
+  } catch (e) {
     document.getElementById('tools-count').textContent = 'Tools';
+    el.innerHTML = `
+      <div style="padding:16px;text-align:center">
+        <div style="font-size:28px;margin-bottom:8px;opacity:.4">⚠️</div>
+        <p style="font-size:12px;color:#fca5a5;margin-bottom:12px">${esc(e.message)}</p>
+        <button class="hdr-btn" onclick="loadTools(true)" style="margin:auto">↺ Retry</button>
+      </div>`;
   }
 }
 
@@ -965,26 +1003,35 @@ function cleanDesc(desc) {
    Health
    ═══════════════════════════════════════════════════════════════════ */
 async function checkHealth() {
+  const dot   = document.getElementById('health-dot');
+  const text  = document.getElementById('health-text');
+  const errEl = document.getElementById('mcp-error');
   try {
     const data = await api('GET', '/health');
     const st = data.status?.toLowerCase();
-    const dot  = document.getElementById('health-dot');
-    const text = document.getElementById('health-text');
     dot.className = '';
+    errEl.className = '';
     if (st === 'up' || st === 'healthy') {
       dot.classList.add('up');
       text.textContent = `MCP · ${data.mcp?.tools ?? '?'} tools`;
     } else if (st === 'degraded') {
       dot.classList.add('degraded');
       text.textContent = 'MCP degraded';
+      if (data.mcp?.error) {
+        errEl.textContent = data.mcp.error;
+        errEl.classList.add('visible');
+      }
     } else {
       dot.classList.add('down');
       text.textContent = 'MCP offline';
+      if (data.mcp?.error) {
+        errEl.textContent = data.mcp.error;
+        errEl.classList.add('visible');
+      }
     }
-  } catch {
-    const dot = document.getElementById('health-dot');
+  } catch (e) {
     dot.className = 'down';
-    document.getElementById('health-text').textContent = 'Cannot connect';
+    text.textContent = 'Agent unreachable';
   }
 }
 

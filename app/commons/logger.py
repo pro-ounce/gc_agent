@@ -20,18 +20,25 @@ from app.commons.config import cfg
 _request_id_ctx: ContextVar[str] = ContextVar("request_id", default="")
 _session_id_ctx: ContextVar[str] = ContextVar("session_id", default="")
 _user_id_ctx: ContextVar[str] = ContextVar("user_id", default="")
+_trace_id_ctx: ContextVar[str] = ContextVar("trace_id", default="")
 
 
 def set_request_context(
     request_id: str | None = None,
     session_id: str = "",
     user_id: str = "",
+    trace_id: str = "",
 ) -> str:
     rid = request_id or str(uuid.uuid4())
     _request_id_ctx.set(rid)
     _session_id_ctx.set(session_id)
     _user_id_ctx.set(user_id)
+    _trace_id_ctx.set(trace_id)
     return rid
+
+
+def get_trace_id() -> str:
+    return _trace_id_ctx.get()
 
 
 def get_request_id() -> str:
@@ -71,6 +78,9 @@ class _ContextFormatter(jsonlogger.JsonFormatter):
         uid = _user_id_ctx.get()
         if uid:
             log_record["user_id"] = uid
+        tid = _trace_id_ctx.get()
+        if tid:
+            log_record["trace_id"] = tid
 
 
 # ── Logger factory ─────────────────────────────────────────────────────────────
