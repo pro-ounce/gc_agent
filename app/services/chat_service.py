@@ -19,7 +19,7 @@ from app.commons.config import cfg
 from app.commons.flags import flags
 from app.commons.logger import get_logger
 from app.mcp.prompt_registry import prompt_registry
-from app.mcp.tool_registry import tool_registry
+from app.mcp.tool_registry import is_mutation, tool_registry
 from app.models.chat import ChatResponse, StreamChunk
 from app.models.mcp import PendingAction
 from app.models.session import Session
@@ -244,7 +244,7 @@ class ChatService:
             for tc in tool_calls:
                 if (
                     flags.tool_risk_confirmation
-                    and tool_registry.is_mutation(tc["name"])
+                    and is_mutation(tc["name"])
                     and not session.metadata.get("bypass_confirmation")
                 ):
                     pending_tc = tc
