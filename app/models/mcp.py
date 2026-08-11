@@ -22,7 +22,7 @@ class ToolParameter(BaseModel):
 class Tool(BaseModel):
     name: str
     description: str = ""
-    risk_level: str = "MEDIUM"          # LOW | MEDIUM | HIGH
+    risk_level: str = "MEDIUM"          # LOW | MEDIUM | HIGH | CRITICAL
     requires_confirmation: bool = False
     parameters: list[ToolParameter] = []
     input_schema: dict[str, Any] = Field(default_factory=dict)
@@ -42,12 +42,17 @@ class Tool(BaseModel):
         by the SwaggerLoaderService.
         """
         desc = payload.get("description", "")
-        risk = _extract_risk(desc)
-        # Server embeds "Requires user confirmation before execution." in description
-        confirm = (
-            "requires user confirmation" in desc.lower()
-            or _needs_confirmation(payload, risk)
-        )
+        # Prefer MCP's STRUCTURED metadata — SwaggerLoaderService now emits `risk` and
+        # `requiresConfirmation` as fields on the tool. Fall back to parsing the description
+        # text (older MCP builds embed "Risk level: X" / "Requires user confirmation").
+        risk = str(payload.get("risk") or _extract_risk(desc) or "MEDIUM").upper()
+        if "requiresConfirmation" in payload:
+            confirm = bool(payload.get("requiresConfirmation"))
+        else:
+            confirm = (
+                "requires user confirmation" in desc.lower()
+                or _needs_confirmation(payload, risk)
+            )
         # Parameters schema uses "parameters" key (not "inputSchema")
         param_schema = payload.get("parameters") or payload.get("inputSchema") or {}
         return cls(
@@ -97,7 +102,7 @@ class PendingAction(BaseModel):
 
 import re
 
-_RISK_RE = re.compile(r"Risk\s+level[:\s]+(LOW|MEDIUM|HIGH)", re.IGNORECASE)
+_RISK_RE = re.compile(r"Risk\s+level[:\s]+(LOW|MEDIUM|HIGH|CRITICAL)", re.IGNORECASE)
 _CONFIRM_KEYWORDS = frozenset(
     {"delete", "remove", "update", "modify", "create", "write", "execute", "deploy", "reset"}
 )

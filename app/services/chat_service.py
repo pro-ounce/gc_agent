@@ -238,16 +238,24 @@ class ChatService:
                 yield StreamChunk(type="done", session_id=session_id, content=text, finish_reason="stop")
                 return
 
-            # Run read-only tools inline; STOP at the first mutation and ask to confirm.
+            # Run tools inline; STOP at the first one that needs confirmation.
             executed: list[tuple[dict[str, Any], str]] = []
             pending_tc: dict[str, Any] | None = None
+            pending_tool = None
             for tc in tool_calls:
+                tool = await tool_registry.get_tool(tc["name"])
+                # MCP declares per-tool risk → requires_confirmation (HIGH/CRITICAL). The
+                # name-based is_mutation heuristic is only a fallback when metadata is absent.
+                needs_confirm = (
+                    tool.requires_confirmation if tool is not None else is_mutation(tc["name"])
+                )
                 if (
                     flags.tool_risk_confirmation
-                    and is_mutation(tc["name"])
+                    and needs_confirm
                     and not session.metadata.get("bypass_confirmation")
                 ):
                     pending_tc = tc
+                    pending_tool = tool
                     break
                 yield StreamChunk(type="tool_use", session_id=session_id, content=f"Running {tc['name']}…")
                 result = await tool_registry.execute(tc["name"], tc["input"], request_headers)
@@ -270,12 +278,13 @@ class ChatService:
                 session.add_tool_result(tc["id"], tc["name"], output)
 
             if pending_tc is not None:
+                risk = (pending_tool.risk_level if pending_tool else "HIGH").upper()
                 pending = PendingAction(
                     session_id=session_id,
                     tool_name=pending_tc["name"],
                     tool_args=pending_tc["input"],
-                    risk_level="HIGH",
-                    description=f"Runs '{pending_tc['name']}', which changes data. Confirm to proceed.",
+                    risk_level=risk,
+                    description=f"Runs '{pending_tc['name']}' (risk: {risk}). Confirm to proceed.",
                 )
                 session.pending_action_id = pending.id
                 stored = pending.model_dump()
@@ -285,7 +294,8 @@ class ChatService:
                 yield StreamChunk(
                     type="confirm_required",
                     session_id=session_id,
-                    content=f"⚠️ This will run **{pending_tc['name']}** with {pending_tc['input']}. Confirm to proceed.",
+                    content=f"⚠️ This will run **{pending_tc['name']}** (risk: {risk}) with "
+                    f"{pending_tc['input']}. Confirm to proceed.",
                     pending_action=pending,
                 )
                 return
