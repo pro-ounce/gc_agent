@@ -28,6 +28,21 @@ from app.services.session_service import session_service
 
 log = get_logger(__name__)
 
+import re
+
+# Matches a turn that only ANNOUNCES a tool call ("I will fetch…", "Let me look up…")
+# without emitting one — qwen sometimes does this and dead-ends the turn. We nudge once.
+_INTENT_RE = re.compile(
+    r"\b(i['’]?ll|i will|i am going to|i['’]?m going to|let me|let us|first,? (?:let|i))\b"
+    r"[^.]*\b(fetch|retrieve|look up|look\-up|get|obtain|find|call|use|check|query)\b",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_unfulfilled_intent(text: str) -> bool:
+    t = (text or "").strip()
+    return bool(t) and _INTENT_RE.search(t) is not None
+
 
 class ChatService:
     """Stateless orchestrator — all state lives in the Session object (Redis)."""
@@ -209,6 +224,7 @@ class ChatService:
         from app.services.llm_service import _extract_text_tool_calls
 
         session_id = session.session_id
+        nudged = False
         for _ in range(cfg.LLM_MAX_ITERATIONS):
             messages = session.to_llm_messages()
             text = ""
@@ -233,6 +249,17 @@ class ChatService:
                     text = cleaned
 
             if not tool_calls:
+                # Model announced a tool call ("I will fetch…") but didn't emit one → nudge it
+                # ONCE to actually make the call instead of dead-ending the turn.
+                if not nudged and _looks_like_unfulfilled_intent(text):
+                    nudged = True
+                    session.add_assistant(text)
+                    session.add_user(
+                        "Proceed now: call the appropriate tool to get that data, then answer. "
+                        "Do not just restate that you will."
+                    )
+                    session_service.save(session)
+                    continue
                 session.add_assistant(text)
                 session_service.save(session)
                 yield StreamChunk(type="done", session_id=session_id, content=text, finish_reason="stop")
