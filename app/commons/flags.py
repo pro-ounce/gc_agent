@@ -34,6 +34,12 @@ class FeatureFlags:
     chatbot_read_only: bool = field(
         default_factory=lambda: env_bool("CHATBOT_READ_ONLY", True)
     )
+    # Strict grounding: when ON, the agent reports ONLY facts the tools returned and adds
+    # no interpretation/embellishment (e.g. no "locked due to failed logins" notes). Default
+    # OFF — light interpretation is useful in some cases; flip on when accuracy must be exact.
+    strict_grounding: bool = field(
+        default_factory=lambda: env_bool("AGENT_STRICT_GROUNDING", False)
+    )
 
     # Storage
     redis_enabled: bool = field(default_factory=lambda: env_bool("REDIS_ENABLED", True))

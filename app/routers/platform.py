@@ -19,7 +19,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from app.agents.registry import get_agent, list_agents
+from app.agents.registry import STRICT_GROUNDING_INSTRUCTION, get_agent, list_agents
 from app.commons.config import cfg
 from app.commons.flags import flags
 from app.commons.logger import get_logger
@@ -55,7 +55,9 @@ def _resolve_app_code(scope: str, app_code: str | None) -> str | None:
 
 
 def _ground(system_prompt: str, context: str | None, scope: str, app_code: str | None) -> str:
-    """Prepend user-supplied context (+ the app scope, if any) to the agent's system prompt."""
+    """Assemble the final system prompt: base + optional strict-grounding rule + context."""
+    if flags.strict_grounding:
+        system_prompt = f"{system_prompt}{STRICT_GROUNDING_INSTRUCTION}"
     grounding = (context or "").strip()
     if scope == "APPLICATION" and app_code:
         grounding = f"{grounding}\nApplication scope: {app_code}".strip()

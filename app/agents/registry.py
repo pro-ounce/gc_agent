@@ -53,6 +53,14 @@ _CHATBOT = AgentSpec(
     tool_prefixes=None,             # chatbot: all discovered tools
 )
 
+# Appended to the system prompt when flags.strict_grounding is on (AGENT_STRICT_GROUNDING).
+STRICT_GROUNDING_INSTRUCTION = (
+    "\n\nGROUNDING (strict): Report ONLY facts returned by the tools. Do not infer, assume, "
+    "or add interpretive notes beyond the tool data. If a field is empty or missing, say it is "
+    "not set — never speculate about why (e.g. do not claim an account is 'locked' unless a tool "
+    "field says so)."
+)
+
 # Future agents drop in here, e.g.:
 #   AgentSpec(key="document", name="Document Helper",
 #             system_prompt="…", tool_prefixes=("reporting_", "document_"))
