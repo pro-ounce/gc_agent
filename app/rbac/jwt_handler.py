@@ -46,7 +46,7 @@ def create_refresh_token(user_id: str) -> str:
 
 def decode_token(token: str) -> dict[str, Any]:
     try:
-        return jwt.decode(token, cfg.JWT_SECRET, algorithms=[_ALGORITHM])
+        return jwt.decode(token, cfg.JWT_SECRET, algorithms=_DECODE_ALGORITHMS)
     except jwt.ExpiredSignatureError:
         raise JWTError("Token has expired")
     except jwt.InvalidTokenError as exc:

@@ -53,11 +53,15 @@ def authenticate_gateway(request: Request) -> tuple[User | None, str]:
     """
     header = cfg.GC_INTERNAL_HEADER
     token = request.headers.get(header) or request.headers.get(header.lower())
+    # Fallback: some gateway routes carry the vouching token in Authorization: Bearer
+    # rather than X-INT-TKN. Try that before giving up.
     if not token:
-        # Surface WHY gateway auth is skipped: the internal-token header isn't present.
-        # Logging the header names (not values) helps spot a name/forwarding mismatch.
+        authz = request.headers.get("authorization") or request.headers.get("Authorization")
+        if authz and authz.lower().startswith("bearer "):
+            token = authz[7:].strip()
+    if not token:
         log.info(
-            f"gateway auth: no {header!r} header on request "
+            f"gateway auth: no {header!r} / Bearer token on request "
             f"(headers present: {sorted(request.headers.keys())})"
         )
         return None, ""
@@ -65,7 +69,9 @@ def authenticate_gateway(request: Request) -> tuple[User | None, str]:
     try:
         claims = decode_internal_token(token)
     except JWTError as exc:
-        log.warning(f"gateway auth: internal-token verification failed: {exc}")
+        # If this is a user JWT signed with a different key, the reason (e.g. signature
+        # failed) tells us the gateway is forwarding a user token, not the internal one.
+        log.warning(f"gateway auth: token verification failed: {exc}")
         return None, ""
 
     ttype = claims.get(_TYPE_CLAIM)
