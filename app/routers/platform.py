@@ -54,10 +54,34 @@ def _resolve_app_code(scope: str, app_code: str | None) -> str | None:
     return app_code if scope == "APPLICATION" else None
 
 
-def _ground(system_prompt: str, context: str | None, scope: str, app_code: str | None) -> str:
-    """Assemble the final system prompt: base + optional strict-grounding rule + context."""
+def _user_context(user: "User | None") -> str:
+    """Tell the model who is asking, so 'me/my' self-references resolve to the real
+    user (requires AUTH_ENABLED=true, else the user is anonymous and we say nothing)."""
+    if user is None:
+        return ""
+    uid = str(getattr(user, "id", "") or "")
+    uname = getattr(user, "username", None)
+    if not uname or uid in ("", "anonymous") or uname == "anonymous":
+        return ""
+    return (
+        f"\n\nThe current user (the person you are talking to) is username={uname!r}, "
+        f"userId={uid!r}. When they refer to themselves ('me', 'my', 'I'), use these values "
+        f"as tool parameters — e.g. pass userName={uname!r} to a by-username lookup, or "
+        f"userId={uid!r} to a by-id lookup. Never ask them for their own username or id."
+    )
+
+
+def _ground(
+    system_prompt: str,
+    context: str | None,
+    scope: str,
+    app_code: str | None,
+    user: "User | None" = None,
+) -> str:
+    """Assemble the final system prompt: base + strict-grounding + current-user + context."""
     if flags.strict_grounding:
         system_prompt = f"{system_prompt}{STRICT_GROUNDING_INSTRUCTION}"
+    system_prompt = f"{system_prompt}{_user_context(user)}"
     grounding = (context or "").strip()
     if scope == "APPLICATION" and app_code:
         grounding = f"{grounding}\nApplication scope: {app_code}".strip()
@@ -98,7 +122,7 @@ async def agent_reply(
 
     scope = (body.scope or "GLOBAL").upper()
     app_code = _resolve_app_code(scope, body.appCode)
-    system_prompt = _ground(spec.system_prompt, body.context, scope, app_code)
+    system_prompt = _ground(spec.system_prompt, body.context, scope, app_code, user)
 
     log.bind(
         func="agent_reply", agent=agent, session_id=session_id, user_id=user.id,
@@ -147,7 +171,7 @@ async def agent_reply_stream(
     session_id = body.sessionId or f"{agent}:{user.id}"
     scope = (body.scope or "GLOBAL").upper()
     app_code = _resolve_app_code(scope, body.appCode)
-    system_prompt = _ground(spec.system_prompt, body.context, scope, app_code) if spec else ""
+    system_prompt = _ground(spec.system_prompt, body.context, scope, app_code, user) if spec else ""
 
     async def gen():
         if spec is None:
