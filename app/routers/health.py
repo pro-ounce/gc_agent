@@ -17,6 +17,10 @@ loopback allow-list (ACTUATOR_ALLOWED_IPS), mirroring app.security.actuator.allo
 """
 from __future__ import annotations
 
+import os
+import sys
+import time
+
 from fastapi import APIRouter, HTTPException, Request, Response
 
 from app.commons import metrics as M
@@ -24,8 +28,12 @@ from app.commons.config import cfg
 from app.commons.flags import flags
 from app.connections import store_health
 from app.mcp.client import mcp_client
+from app.mcp.tool_registry import tool_registry
 from app.services.llm_service import llm
 from app.services.session_service import count_sessions
+
+# Process start — used for uptime in /info.
+_START_TS = time.time()
 
 router = APIRouter(tags=["actuator"])
 actuator = APIRouter(prefix=cfg.MANAGEMENT_BASE_PATH, tags=["actuator"])
@@ -100,13 +108,48 @@ async def actuator_readiness(request: Request, response: Response) -> dict:
             "components": {"store": comps["store"], "mcp": comps["mcp"]}}
 
 
-@actuator.get("/info", summary="App / build info")
+@actuator.get("/info", summary="App / build / runtime info")
 async def actuator_info(request: Request) -> dict:
     _guard(request)
+    try:
+        tools_loaded = len(tool_registry._cache or [])
+    except Exception:  # noqa: BLE001
+        tools_loaded = None
+    try:
+        sessions = count_sessions()
+    except Exception:  # noqa: BLE001
+        sessions = None
     return {
-        "app": {"name": cfg.APP_NAME, "version": cfg.APP_VERSION},
-        "build": {"env": cfg.ENV, "llm_provider": cfg.LLM_PROVIDER,
-                  "store": store_health().get("backend"), "auth_mode": cfg.PLATFORM_AUTH_MODE},
+        "app": {"name": cfg.APP_NAME, "version": cfg.APP_VERSION, "env": cfg.ENV},
+        # Build metadata is injected at deploy time (env or a build_info file). rsync
+        # deploys carry no .git, so these are env-sourced with 'unknown' fallbacks.
+        "build": {
+            "commit": os.getenv("BUILD_COMMIT") or os.getenv("GIT_COMMIT") or "unknown",
+            "time": os.getenv("BUILD_TIME") or "unknown",
+            "python": sys.version.split()[0],
+        },
+        "runtime": {
+            "uptime_seconds": round(time.time() - _START_TS, 1),
+            "llm": {
+                "provider": cfg.LLM_PROVIDER,
+                "model": cfg.LLM_MODEL,
+                "num_ctx": cfg.LLM_NUM_CTX,
+                "max_tokens": cfg.LLM_MAX_TOKENS,
+            },
+            "embed_model": cfg.EMBED_MODEL,
+            "store_backend": store_health().get("backend"),
+            "auth_mode": cfg.PLATFORM_AUTH_MODE,
+            "tools_loaded": tools_loaded,
+            "sessions": sessions,
+        },
+        "features": {
+            "auth_enabled": flags.auth_enabled,
+            "streaming_enabled": flags.streaming_enabled,
+            "tool_rag_enabled": flags.tool_rag_enabled,
+            "tool_risk_confirmation": flags.tool_risk_confirmation,
+            "chatbot_read_only": flags.chatbot_read_only,
+            "strict_grounding": flags.strict_grounding,
+        },
     }
 
 
