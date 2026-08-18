@@ -54,6 +54,12 @@ def authenticate_gateway(request: Request) -> tuple[User | None, str]:
     header = cfg.GC_INTERNAL_HEADER
     token = request.headers.get(header) or request.headers.get(header.lower())
     if not token:
+        # Surface WHY gateway auth is skipped: the internal-token header isn't present.
+        # Logging the header names (not values) helps spot a name/forwarding mismatch.
+        log.info(
+            f"gateway auth: no {header!r} header on request "
+            f"(headers present: {sorted(request.headers.keys())})"
+        )
         return None, ""
 
     try:

@@ -204,6 +204,11 @@ class AppConfig:
     GC_JWT_ALGORITHM: str = env_str("GC_JWT_ALGORITHM", "HS512") or "HS512"
     GC_INTERNAL_ISSUER: str = env_str("GC_INTERNAL_ISSUER", "GC_INTERNAL") or "GC_INTERNAL"
     GC_INTERNAL_AUDIENCE: str = env_str("GC_INTERNAL_AUDIENCE", "GC_INTERNAL_API") or "GC_INTERNAL_API"
+    # Verify issuer/audience on the internal token? Default OFF — the gateway signs with the
+    # shared secret (the real trust anchor) but does not consistently set aud, so requiring it
+    # rejects valid tokens. Enable once the gateway's claims are confirmed.
+    GC_VERIFY_ISSUER: bool = env_bool("GC_VERIFY_ISSUER", False)
+    GC_VERIFY_AUDIENCE: bool = env_bool("GC_VERIFY_AUDIENCE", False)
     GC_INTERNAL_HEADER: str = env_str("GC_INTERNAL_HEADER", "X-INT-TKN") or "X-INT-TKN"
     GC_ROLE_HEADER: str = env_str("GC_ROLE_HEADER", "X-AR-KEY") or "X-AR-KEY"
     GC_JWT_LEEWAY: int = env_int("GC_JWT_LEEWAY", 30) or 30

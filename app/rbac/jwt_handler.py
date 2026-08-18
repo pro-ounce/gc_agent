@@ -16,6 +16,10 @@ from app.commons.logger import get_logger
 log = get_logger(__name__)
 
 _ALGORITHM = cfg.JWT_ALGORITHM
+# Accept both HMAC variants on decode: the platform signs user JWTs with HS512, while
+# the agent's own standalone tokens use JWT_ALGORITHM (default HS256). Same shared
+# secret, so allowing both is safe — no symmetric/asymmetric confusion risk.
+_DECODE_ALGORITHMS = sorted({cfg.JWT_ALGORITHM, "HS256", "HS512"})
 
 
 class JWTError(Exception):
@@ -60,14 +64,28 @@ def decode_internal_token(token: str) -> dict[str, Any]:
     secret = cfg.GC_JWT_SECRET
     if not secret:
         raise JWTError("GC_JWT_SECRET is not configured (required for PLATFORM_AUTH_MODE=gateway)")
+    # The HMAC signature (shared gateway secret) is the trust anchor — only the gateway
+    # can produce a validly-signed token. issuer/audience are secondary and not every
+    # gateway build sets them (notably no `aud`), so verify them only when explicitly
+    # enabled; otherwise a correctly-signed token is wrongly rejected.
+    kwargs: dict[str, Any] = {}
+    options: dict[str, bool] = {}
+    if cfg.GC_VERIFY_ISSUER and cfg.GC_INTERNAL_ISSUER:
+        kwargs["issuer"] = cfg.GC_INTERNAL_ISSUER
+    else:
+        options["verify_iss"] = False
+    if cfg.GC_VERIFY_AUDIENCE and cfg.GC_INTERNAL_AUDIENCE:
+        kwargs["audience"] = cfg.GC_INTERNAL_AUDIENCE
+    else:
+        options["verify_aud"] = False
     try:
         return jwt.decode(
             token,
             secret,
             algorithms=[cfg.GC_JWT_ALGORITHM],
-            issuer=cfg.GC_INTERNAL_ISSUER,
-            audience=cfg.GC_INTERNAL_AUDIENCE,
             leeway=cfg.GC_JWT_LEEWAY,
+            options=options,
+            **kwargs,
         )
     except jwt.ExpiredSignatureError:
         raise JWTError("Internal token has expired")
