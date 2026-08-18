@@ -89,3 +89,69 @@ def set_dependency(name: str, up: bool) -> None:
 
 def render() -> tuple[bytes, str]:
     return generate_latest(registry), CONTENT_TYPE_LATEST
+
+
+def summary() -> dict:
+    """Live counters/histograms as a compact JSON snapshot (totals + per-outcome
+    breakdowns + average latencies), for /actuator/info. Reads the same registry
+    Prometheus scrapes, so the numbers match /actuator/prometheus."""
+    totals: dict[str, float] = {}
+    breakdown: dict[tuple[str, str], dict[str, float]] = {}
+    hist: dict[str, dict[str, float]] = {}
+
+    for metric in registry.collect():
+        for s in metric.samples:
+            n = s.name
+            if n.endswith("_total"):
+                base = n[:-6]
+                totals[base] = totals.get(base, 0.0) + s.value
+                for lk in ("outcome", "direction", "mode"):
+                    if lk in s.labels:
+                        d = breakdown.setdefault((base, lk), {})
+                        d[s.labels[lk]] = d.get(s.labels[lk], 0.0) + s.value
+            elif n.endswith("_count"):
+                hist.setdefault(n[:-6], {"count": 0.0, "sum": 0.0})["count"] += s.value
+            elif n.endswith("_sum"):
+                hist.setdefault(n[:-4], {"count": 0.0, "sum": 0.0})["sum"] += s.value
+
+    def _total(base: str) -> int:
+        return int(totals.get(base, 0.0))
+
+    def _by(base: str, label: str) -> dict[str, int]:
+        return {k: int(v) for k, v in breakdown.get((base, label), {}).items()}
+
+    def _avg_ms(base: str) -> float | None:
+        h = hist.get(base)
+        return round((h["sum"] / h["count"]) * 1000, 1) if h and h["count"] else None
+
+    def _avg(base: str) -> float | None:
+        h = hist.get(base)
+        return round(h["sum"] / h["count"], 2) if h and h["count"] else None
+
+    return {
+        "http": {
+            "requests": int(hist.get("http_server_requests_seconds", {}).get("count", 0)),
+            "avg_ms": _avg_ms("http_server_requests_seconds"),
+        },
+        "llm": {
+            "calls": _total("agent_llm_calls"),
+            "by_outcome": _by("agent_llm_calls", "outcome"),
+            "tokens": _by("agent_llm_tokens", "direction"),
+            "avg_ms": _avg_ms("agent_llm_request_duration_seconds"),
+        },
+        "tools": {
+            "executions": _total("agent_tool_executions"),
+            "by_outcome": _by("agent_tool_executions", "outcome"),
+            "avg_ms": _avg_ms("agent_tool_execution_duration_seconds"),
+        },
+        "mcp": {
+            "requests": _total("agent_mcp_requests"),
+            "by_outcome": _by("agent_mcp_requests", "outcome"),
+            "avg_ms": _avg_ms("agent_mcp_request_duration_seconds"),
+        },
+        "chat": {
+            "requests": _total("agent_chat_requests"),
+            "by_outcome": _by("agent_chat_requests", "outcome"),
+            "avg_loop_iterations": _avg("agent_chat_loop_iterations"),
+        },
+    }

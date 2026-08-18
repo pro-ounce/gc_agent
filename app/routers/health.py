@@ -150,6 +150,7 @@ async def actuator_info(request: Request) -> dict:
             "chatbot_read_only": flags.chatbot_read_only,
             "strict_grounding": flags.strict_grounding,
         },
+        "metrics": M.summary(),
     }
 
 
