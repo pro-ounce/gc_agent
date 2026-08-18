@@ -91,3 +91,23 @@ def decode_internal_token(token: str) -> dict[str, Any]:
         raise JWTError("Internal token has expired")
     except jwt.InvalidTokenError as exc:
         raise JWTError(f"Invalid internal token: {exc}")
+
+
+def decode_user_token(token: str) -> dict[str, Any]:
+    """Verify a platform USER JWT (iss=GC360) that the gateway forwards in Authorization,
+    using the separate user signing key (GC_USER_JWT_SECRET). Signature-first."""
+    secret = cfg.GC_USER_JWT_SECRET
+    if not secret:
+        raise JWTError("GC_USER_JWT_SECRET is not configured")
+    try:
+        return jwt.decode(
+            token,
+            secret,
+            algorithms=_DECODE_ALGORITHMS,
+            leeway=cfg.GC_JWT_LEEWAY,
+            options={"verify_aud": False, "verify_iss": False},
+        )
+    except jwt.ExpiredSignatureError:
+        raise JWTError("User token has expired")
+    except jwt.InvalidTokenError as exc:
+        raise JWTError(f"Invalid user token: {exc}")

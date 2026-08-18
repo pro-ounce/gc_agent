@@ -17,11 +17,12 @@ sealed copy of the HMAC key (GC_JWT_SECRET) to verify this one token.
 """
 from __future__ import annotations
 
+import jwt
 from fastapi import Request
 
 from app.commons.config import cfg
 from app.commons.logger import get_logger
-from app.rbac.jwt_handler import JWTError, decode_internal_token
+from app.rbac.jwt_handler import JWTError, decode_internal_token, decode_user_token
 from app.rbac.models import User
 
 log = get_logger(__name__)
@@ -66,27 +67,43 @@ def authenticate_gateway(request: Request) -> tuple[User | None, str]:
         )
         return None, ""
 
+    # 1. Internal token (X-INT-TKN style: carries X_TP, signed with the internal key).
     try:
         claims = decode_internal_token(token)
+        ttype = claims.get(_TYPE_CLAIM)
+        if ttype in (_TYPE_USER, _TYPE_SVC):
+            is_service = ttype == _TYPE_SVC
+            user_id = str(claims.get("sub", "0"))
+            username = str(
+                claims.get("uname", "")
+                or (f"service:{claims.get('X_SVC', 'gc')}" if is_service else user_id)
+            )
+            return (
+                User(id=user_id, username=username,
+                     roles=_map_roles(claims.get("authorities"), is_service), is_active=True),
+                "gateway",
+            )
+    except JWTError:
+        pass  # not the internal token → try the user JWT below
+
+    # 2. User JWT (iss=GC360) the gateway forwards, verified with the user signing key.
+    try:
+        claims = decode_user_token(token)
+        user_id = str(claims.get("sub", "0"))
+        username = str(claims.get("uname", "") or user_id)
+        return (
+            User(id=user_id, username=username,
+                 roles=_map_roles(claims.get("authorities"), False), is_active=True),
+            "gateway-user",
+        )
     except JWTError as exc:
-        # If this is a user JWT signed with a different key, the reason (e.g. signature
-        # failed) tells us the gateway is forwarding a user token, not the internal one.
-        log.warning(f"gateway auth: token verification failed: {exc}")
+        # Both keys failed. Log the token's UNVERIFIED alg/issuer (never the signature)
+        # so we know which key it actually needs.
+        try:
+            hdr = jwt.get_unverified_header(token)
+            unv = jwt.decode(token, options={"verify_signature": False})
+            hint = f"alg={hdr.get('alg')} iss={unv.get('iss')!r} has_uname={'uname' in unv}"
+        except Exception:  # noqa: BLE001
+            hint = "unparseable token"
+        log.warning(f"gateway auth: token verification failed ({exc}); token is [{hint}]")
         return None, ""
-
-    ttype = claims.get(_TYPE_CLAIM)
-    if ttype not in (_TYPE_USER, _TYPE_SVC):
-        log.warning(f"gateway auth: unexpected internal token type '{ttype}'")
-        return None, ""
-
-    is_service = ttype == _TYPE_SVC
-    user_id = str(claims.get("sub", "0"))
-    username = str(claims.get("uname", "") or (f"service:{claims.get('X_SVC', 'gc')}" if is_service else user_id))
-
-    user = User(
-        id=user_id,
-        username=username,
-        roles=_map_roles(claims.get("authorities"), is_service),
-        is_active=True,
-    )
-    return user, "gateway"

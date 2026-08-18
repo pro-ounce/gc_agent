@@ -202,6 +202,11 @@ class AppConfig:
     # at startup via JASYPT_ENCRYPTOR_PASSWORD; the cleartext key is never stored on disk.
     GC_JWT_SECRET: str | None = _secret("GC_JWT_SECRET")
     GC_JWT_ALGORITHM: str = env_str("GC_JWT_ALGORITHM", "HS512") or "HS512"
+    # Platform USER JWT signing key (the DB JWT_SECRET, category G / code JWT). The gateway
+    # forwards the user's JWT (iss=GC360) in Authorization; this key verifies it. Separate
+    # from the internal key above. Accepts ENC(...) (same jasypt password).
+    GC_USER_JWT_SECRET: str | None = _secret("GC_USER_JWT_SECRET")
+    GC_USER_JWT_ISSUER: str = env_str("GC_USER_JWT_ISSUER", "GC360") or "GC360"
     GC_INTERNAL_ISSUER: str = env_str("GC_INTERNAL_ISSUER", "GC_INTERNAL") or "GC_INTERNAL"
     GC_INTERNAL_AUDIENCE: str = env_str("GC_INTERNAL_AUDIENCE", "GC_INTERNAL_API") or "GC_INTERNAL_API"
     # Verify issuer/audience on the internal token? Default OFF — the gateway signs with the
