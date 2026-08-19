@@ -23,6 +23,10 @@ from prometheus_client import (
 )
 from prometheus_client import GCCollector, PlatformCollector, ProcessCollector
 
+from app.commons.logger import get_logger
+
+_tlog = get_logger("app.metrics.turn")
+
 registry = CollectorRegistry(auto_describe=True)
 
 # process / runtime / platform metrics (cpu, memory, fds, gc, python version)
@@ -71,6 +75,95 @@ chat_loop_iterations = Histogram("agent_chat_loop_iterations", "Agentic loop ite
 # ── Store / dependencies (gauges refreshed at scrape / health) ─────────────────────
 active_sessions = Gauge("agent_active_sessions", "Active sessions (approx)", registry=registry)
 dependency_up = Gauge("agent_dependency_up", "Dependency reachable (1=up,0=down)", ["dependency"], registry=registry)
+
+# ── End-to-end turn metrics (one chatbot turn: prompt → answer) ─────────────────────
+turn_duration = Histogram(
+    "agent_turn_duration_seconds", "Full chatbot turn latency (prompt→answer)",
+    ["agent", "outcome"], buckets=_LAT, registry=registry,
+)
+turn_phase = Histogram(
+    "agent_turn_phase_seconds", "Per-phase latency within a turn (retrieval|llm|tools)",
+    ["agent", "phase"], buckets=_LAT, registry=registry,
+)
+turn_tools = Histogram(
+    "agent_turn_tools", "Tools executed per turn", ["agent"],
+    buckets=(0, 1, 2, 3, 4, 5, 8, 10, 15), registry=registry,
+)
+
+
+class TurnMetrics:
+    """Accumulates the end-to-end breakdown of ONE chatbot turn — retrieval / LLM /
+    tool time, iterations, tools called, tokens — and on finish() emits a single
+    `turn_summary` log line (correlatable by request_id) plus Prometheus histograms.
+    LLM time uses Ollama's own reported duration (excludes client backpressure);
+    retrieval/tools are wall-clock around discrete awaits."""
+
+    def __init__(self, agent: str = "chatbot", session_id: str = "", user_id: str = "",
+                 request_id: str | None = None) -> None:
+        self.agent = agent
+        self.session_id = session_id
+        self.user_id = user_id
+        self.request_id = request_id
+        self._t0 = time.perf_counter()
+        self.retrieval_s = 0.0
+        self.llm_s = 0.0
+        self.tools_s = 0.0
+        self.iterations = 0
+        self.tools_used: list[str] = []
+        self.prompt_tokens = 0
+        self.completion_tokens = 0
+        self._done = False
+
+    @contextmanager
+    def phase(self, name: str):
+        """Wall-clock timer for a discrete-await phase ('retrieval' | 'tools')."""
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            dt = time.perf_counter() - start
+            if name == "retrieval":
+                self.retrieval_s += dt
+            elif name == "tools":
+                self.tools_s += dt
+            elif name == "llm":
+                self.llm_s += dt
+
+    def add_llm(self, seconds: float, prompt: int = 0, completion: int = 0) -> None:
+        self.llm_s += max(0.0, seconds or 0.0)
+        self.prompt_tokens += int(prompt or 0)
+        self.completion_tokens += int(completion or 0)
+
+    def tool(self, name: str) -> None:
+        self.tools_used.append(name)
+
+    def finish(self, outcome: str = "stop") -> None:
+        if self._done:
+            return
+        self._done = True
+        total = time.perf_counter() - self._t0
+        turn_duration.labels(self.agent, outcome).observe(total)
+        turn_phase.labels(self.agent, "retrieval").observe(self.retrieval_s)
+        turn_phase.labels(self.agent, "llm").observe(self.llm_s)
+        turn_phase.labels(self.agent, "tools").observe(self.tools_s)
+        turn_tools.labels(self.agent).observe(len(self.tools_used))
+        # Feed the aggregate chat counters (streaming turns weren't counted otherwise).
+        chat_requests_total.labels("stream", "error" if outcome == "error" else "success").inc()
+        chat_loop_iterations.observe(self.iterations)
+        _tlog.bind(
+            event="turn_summary", agent=self.agent, session_id=self.session_id,
+            user_id=self.user_id, request_id=self.request_id, outcome=outcome,
+            total_ms=round(total * 1000, 1), retrieval_ms=round(self.retrieval_s * 1000, 1),
+            llm_ms=round(self.llm_s * 1000, 1), tools_ms=round(self.tools_s * 1000, 1),
+            iterations=self.iterations, tools_used=self.tools_used,
+            prompt_tokens=self.prompt_tokens, completion_tokens=self.completion_tokens,
+        ).info(
+            f"turn done: {round(total * 1000)}ms "
+            f"[retrieval={round(self.retrieval_s * 1000)} llm={round(self.llm_s * 1000)} "
+            f"tools={round(self.tools_s * 1000)}] iters={self.iterations} "
+            f"tools={self.tools_used} tokens={self.prompt_tokens}/{self.completion_tokens} "
+            f"outcome={outcome}"
+        )
 
 
 @contextmanager
@@ -153,5 +246,14 @@ def summary() -> dict:
             "requests": _total("agent_chat_requests"),
             "by_outcome": _by("agent_chat_requests", "outcome"),
             "avg_loop_iterations": _avg("agent_chat_loop_iterations"),
+        },
+        # End-to-end per-turn: total latency + where it goes (retrieval/llm/tools).
+        # Per-phase averages merge phases here (labels flattened) — for the split by
+        # phase use /actuator/prometheus (agent_turn_phase_seconds{phase=...}) or the
+        # per-turn `turn_summary` log line.
+        "turn": {
+            "count": int(hist.get("agent_turn_duration_seconds", {}).get("count", 0)),
+            "avg_ms": _avg_ms("agent_turn_duration_seconds"),
+            "avg_tools": _avg("agent_turn_tools"),
         },
     }

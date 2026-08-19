@@ -335,6 +335,15 @@ class OllamaProvider:
                         )
                     yield ("tool_calls", calls)
                 if chunk.get("done"):
+                    # Ollama reports token counts + durations (ns) on the final chunk.
+                    yield (
+                        "usage",
+                        {
+                            "prompt_tokens": chunk.get("prompt_eval_count", 0),
+                            "completion_tokens": chunk.get("eval_count", 0),
+                            "llm_seconds": (chunk.get("total_duration", 0) or 0) / 1e9,
+                        },
+                    )
                     yield ("done", chunk.get("done_reason", "stop"))
 
 

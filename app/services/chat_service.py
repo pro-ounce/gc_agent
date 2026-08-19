@@ -12,9 +12,11 @@ Both blocking and streaming chat modes are supported.
 """
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any, AsyncIterator
 
+from app.commons import metrics as M
 from app.commons.config import cfg
 from app.commons.flags import flags
 from app.commons.logger import get_logger
@@ -170,13 +172,19 @@ class ChatService:
         emits a 'confirm_required' chunk carrying the pending action and pauses.
         The caller resumes via confirm_stream() once the user approves/declines.
         """
+        turn = M.TurnMetrics(
+            agent=session_id.split(":", 1)[0] or "chatbot",
+            session_id=session_id,
+            user_id=str(user_id or ""),
+        )
         session = session_service.get_or_create(session_id, user_id)
         session.add_user(user_message)
         session.metadata["last_user_message"] = user_message
         session_service.save(session)
         system = system_prompt or cfg.AGENT_SYSTEM_PROMPT
-        tools = await tool_registry.select_tools(user_message, request_headers)
-        async for chunk in self._stream_loop(session, tools, system, request_headers):
+        with turn.phase("retrieval"):
+            tools = await tool_registry.select_tools(user_message, request_headers)
+        async for chunk in self._stream_loop(session, tools, system, request_headers, turn):
             yield chunk
 
     async def confirm_stream(
@@ -188,6 +196,7 @@ class ChatService:
     ) -> AsyncIterator[StreamChunk]:
         """Resume a stream paused on 'confirm_required': run (or skip) the pending
         mutating tool, record the result, then stream the model's continuation."""
+        turn = M.TurnMetrics(agent=session_id.split(":", 1)[0] or "chatbot", session_id=session_id)
         session = session_service.get_or_create(session_id)
         pending_raw = (session.metadata.get("pending_actions") or {}).get(action_id)
         if not pending_raw:
@@ -203,14 +212,17 @@ class ChatService:
             session.add_tool_result(tc_id, tool_name, "User declined to run this action.")
         else:
             yield StreamChunk(type="tool_use", session_id=session_id, content=f"Running {tool_name}…")
-            result = await tool_registry.execute(tool_name, tool_args, request_headers)
+            with turn.phase("tools"):
+                result = await tool_registry.execute(tool_name, tool_args, request_headers)
+            turn.tool(tool_name)
             output = str(result.output) if result.success else f"Error: {result.error}"
             session.add_tool_result(tc_id, tool_name, output)
         session_service.save(session)
 
         last_user = session.metadata.get("last_user_message", "")
-        tools = await tool_registry.select_tools(last_user, request_headers)
-        async for chunk in self._stream_loop(session, tools, cfg.AGENT_SYSTEM_PROMPT, request_headers):
+        with turn.phase("retrieval"):
+            tools = await tool_registry.select_tools(last_user, request_headers)
+        async for chunk in self._stream_loop(session, tools, cfg.AGENT_SYSTEM_PROMPT, request_headers, turn):
             yield chunk
 
     async def _stream_loop(
@@ -219,6 +231,7 @@ class ChatService:
         tools: list[dict[str, Any]],
         system: str,
         request_headers: dict[str, str] | None,
+        turn: "M.TurnMetrics | None" = None,
     ) -> AsyncIterator[StreamChunk]:
         """Shared agentic loop for reply_stream / confirm_stream."""
         from app.services.llm_service import _extract_text_tool_calls
@@ -226,6 +239,8 @@ class ChatService:
         session_id = session.session_id
         nudged = False
         for _ in range(cfg.LLM_MAX_ITERATIONS):
+            if turn:
+                turn.iterations += 1
             messages = session.to_llm_messages()
             text = ""
             tool_calls: list[dict[str, Any]] = []
@@ -236,8 +251,24 @@ class ChatService:
                         yield StreamChunk(type="delta", session_id=session_id, content=payload)
                     elif kind == "tool_calls":
                         tool_calls = payload
+                    elif kind == "usage":
+                        secs = payload.get("llm_seconds", 0.0) or 0.0
+                        pt = int(payload.get("prompt_tokens", 0) or 0)
+                        ct = int(payload.get("completion_tokens", 0) or 0)
+                        # Aggregate LLM metrics — streaming calls weren't counted before.
+                        M.llm_calls_total.labels(cfg.LLM_PROVIDER, cfg.LLM_MODEL, "success").inc()
+                        if secs:
+                            M.llm_duration.labels(cfg.LLM_PROVIDER, cfg.LLM_MODEL).observe(secs)
+                        if pt:
+                            M.llm_tokens_total.labels(cfg.LLM_PROVIDER, cfg.LLM_MODEL, "input").inc(pt)
+                        if ct:
+                            M.llm_tokens_total.labels(cfg.LLM_PROVIDER, cfg.LLM_MODEL, "output").inc(ct)
+                        if turn:
+                            turn.add_llm(secs, pt, ct)
             except Exception as exc:  # noqa: BLE001
                 log.exception(f"reply_stream error: {exc}")
+                if turn:
+                    turn.finish("error")
                 yield StreamChunk(type="error", session_id=session_id, error=str(exc))
                 return
 
@@ -262,6 +293,8 @@ class ChatService:
                     continue
                 session.add_assistant(text)
                 session_service.save(session)
+                if turn:
+                    turn.finish("stop")
                 yield StreamChunk(type="done", session_id=session_id, content=text, finish_reason="stop")
                 return
 
@@ -285,7 +318,11 @@ class ChatService:
                     pending_tool = tool
                     break
                 yield StreamChunk(type="tool_use", session_id=session_id, content=f"Running {tc['name']}…")
+                _t_tool = time.perf_counter()
                 result = await tool_registry.execute(tc["name"], tc["input"], request_headers)
+                if turn:
+                    turn.tools_s += time.perf_counter() - _t_tool
+                    turn.tool(tc["name"])
                 output = str(result.output) if result.success else f"Error: {result.error}"
                 executed.append((tc, output))
 
@@ -318,6 +355,8 @@ class ChatService:
                 stored["_tc_id"] = pending_tc["id"]   # tie the confirm back to this tool_call
                 session.metadata.setdefault("pending_actions", {})[pending.id] = stored
                 session_service.save(session)
+                if turn:
+                    turn.finish("confirm_required")
                 yield StreamChunk(
                     type="confirm_required",
                     session_id=session_id,
@@ -329,6 +368,8 @@ class ChatService:
 
             session_service.save(session)
 
+        if turn:
+            turn.finish("max_iterations")
         yield StreamChunk(type="done", session_id=session_id, content="", finish_reason="max_iterations")
 
     # ── Action confirmation ───────────────────────────────────────────────────
