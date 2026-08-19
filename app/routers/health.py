@@ -17,6 +17,7 @@ loopback allow-list (ACTUATOR_ALLOWED_IPS), mirroring app.security.actuator.allo
 """
 from __future__ import annotations
 
+import ipaddress
 import os
 import sys
 import time
@@ -39,13 +40,38 @@ router = APIRouter(tags=["actuator"])
 actuator = APIRouter(prefix=cfg.MANAGEMENT_BASE_PATH, tags=["actuator"])
 
 
+def _ip_allowed(client: str, allowed: list[str]) -> bool:
+    """True if the client IP matches any allow-list entry. Entries may be exact IPs
+    (127.0.0.1, ::1) or CIDR networks (192.168.0.0/24). A malformed entry falls back
+    to an exact string compare so a bad value never silently opens access."""
+    try:
+        ip = ipaddress.ip_address(client)
+    except ValueError:
+        return False
+    for entry in allowed:
+        entry = entry.strip()
+        if not entry:
+            continue
+        try:
+            if "/" in entry:
+                if ip in ipaddress.ip_network(entry, strict=False):
+                    return True
+            elif ip == ipaddress.ip_address(entry):
+                return True
+        except ValueError:
+            if client == entry:
+                return True
+    return False
+
+
 def _guard(request: Request) -> None:
-    """Optional loopback/allow-list guard (mirrors app.security.actuator.allowed-ips)."""
+    """Optional loopback/allow-list guard (mirrors app.security.actuator.allowed-ips).
+    Entries may be exact IPs or CIDR networks — e.g. 127.0.0.1,::1,192.168.0.0/24."""
     allowed = cfg.ACTUATOR_ALLOWED_IPS
     if not allowed:
         return
     client = request.client.host if request.client else ""
-    if client not in allowed:
+    if not _ip_allowed(client, allowed):
         raise HTTPException(status_code=403, detail="actuator access restricted")
 
 
