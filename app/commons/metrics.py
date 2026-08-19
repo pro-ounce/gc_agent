@@ -114,6 +114,20 @@ class TurnMetrics:
         self.completion_tokens = 0
         self._done = False
 
+    def _elapsed_ms(self) -> float:
+        return round((time.perf_counter() - self._t0) * 1000, 1)
+
+    def _step(self, event: str, message: str, **fields) -> None:
+        """Emit ONE concise in-flight log line (critical metric as it happens), tagged
+        `turn_step` and correlatable by request_id. Complements the `turn_summary` line
+        finish() writes at the end — so the log shows the turn WHILE in action, not only
+        once completed."""
+        _tlog.bind(
+            event="turn_step", step=event, agent=self.agent,
+            session_id=self.session_id, user_id=self.user_id, request_id=self.request_id,
+            elapsed_ms=self._elapsed_ms(), **fields,
+        ).info(message)
+
     @contextmanager
     def phase(self, name: str):
         """Wall-clock timer for a discrete-await phase ('retrieval' | 'tools')."""
@@ -128,14 +142,32 @@ class TurnMetrics:
                 self.tools_s += dt
             elif name == "llm":
                 self.llm_s += dt
+            # In-flight timing for the retrieval/tools phases (llm is logged per add_llm).
+            if name in ("retrieval", "tools"):
+                self._step(
+                    name, f"↳ {name} {round(dt * 1000)}ms (turn {round(self._elapsed_ms())}ms)",
+                    phase_ms=round(dt * 1000, 1),
+                )
 
     def add_llm(self, seconds: float, prompt: int = 0, completion: int = 0) -> None:
-        self.llm_s += max(0.0, seconds or 0.0)
+        secs = max(0.0, seconds or 0.0)
+        self.llm_s += secs
         self.prompt_tokens += int(prompt or 0)
         self.completion_tokens += int(completion or 0)
+        self._step(
+            "llm",
+            f"↳ llm call #{self.iterations} {round(secs * 1000)}ms "
+            f"tokens={int(prompt or 0)}/{int(completion or 0)} (turn {round(self._elapsed_ms())}ms)",
+            iteration=self.iterations, call_ms=round(secs * 1000, 1),
+            prompt_tokens=int(prompt or 0), completion_tokens=int(completion or 0),
+        )
 
     def tool(self, name: str) -> None:
         self.tools_used.append(name)
+        self._step(
+            "tool", f"↳ tool #{len(self.tools_used)} {name} (turn {round(self._elapsed_ms())}ms)",
+            tool=name, tool_index=len(self.tools_used),
+        )
 
     def finish(self, outcome: str = "stop") -> None:
         if self._done:
