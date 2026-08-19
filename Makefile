@@ -65,7 +65,7 @@ env: _check-dir
 	@test -f .env.local \
 		&& echo ".env.local already exists — skipping" \
 		|| (cp .env.example .env.local \
-			&& echo "Created .env.local — set ANTHROPIC_API_KEY and MCP_BASE_URL")
+			&& echo "Created .env.local — set OLLAMA_BASE_URL and MCP_BASE_URL")
 
 # ── Run ───────────────────────────────────────────────────────────────────────
 dev: install
@@ -79,7 +79,7 @@ run: install
 TEST_ENV := TESTING=1 ENV=test AUTH_ENABLED=false RBAC_ENABLED=false \
             REDIS_ENABLED=false LOG_LEVEL=WARNING \
             MCP_BASE_URL=http://localhost:19999 \
-            ANTHROPIC_API_KEY=test-key JWT_SECRET=test-secret \
+            JWT_SECRET=test-secret \
             TOOL_RISK_CONFIRMATION=false
 
 test: install

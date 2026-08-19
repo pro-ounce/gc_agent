@@ -21,9 +21,9 @@ services:
       # MCP Spring Boot backend
       MCP_BASE_URL: http://mcp-server:8090
 
-      # LLM — set ANTHROPIC_API_KEY in .env.local
-      LLM_PROVIDER: anthropic
-      LLM_MODEL: claude-3-5-sonnet-20241022
+      # LLM — Ollama (set OLLAMA_BASE_URL in .env.local)
+      LLM_PROVIDER: ollama
+      LLM_MODEL: qwen2.5:32b
 
       # Redis
       REDIS_URL: redis://redis:6379/0
@@ -34,7 +34,7 @@ services:
       JWT_SECRET: dev-jwt-secret-change-in-prod
 
     env_file:
-      - .env.local       # Secrets (ANTHROPIC_API_KEY, MCP_API_KEY)
+      - .env.local       # Secrets (MCP_API_KEY, JWT secrets)
     depends_on:
       redis:
         condition: service_healthy

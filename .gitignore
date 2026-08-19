@@ -48,3 +48,6 @@ logs/
 *.tmp
 .ruff_cache/
 .mypy_cache/
+
+# local agent/editor config
+.claude/

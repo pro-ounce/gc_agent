@@ -1,6 +1,6 @@
 # MCP Agent
 
-Enterprise-grade FastAPI agent & chatbot that bridges Claude (Anthropic) or OLLAMA to a Spring Boot MCP server.
+Enterprise-grade FastAPI agent & chatbot that bridges a self-hosted OLLAMA LLM to a Spring Boot MCP server.
 
 ## Architecture
 
@@ -19,15 +19,15 @@ app/
 ## Quick start
 
 ```bash
-# 1. Clone / open this directory in Claude Code (standalone — not inside RAG)
-cd /Users/six7/Git/gc/agent
+# 1. Clone / open this directory (standalone — not inside RAG)
+cd gc_agent
 
 # 2. Create venv + install deps
 make install
 
 # 3. Copy env template and fill in secrets
 make env          # creates .env.local
-# edit .env.local — set ANTHROPIC_API_KEY and MCP_BASE_URL
+# edit .env.local — set OLLAMA_BASE_URL and MCP_BASE_URL
 
 # 4. Start dev server (hot-reload)
 make dev          # http://localhost:8080  •  docs at /docs
@@ -39,10 +39,9 @@ make dev          # http://localhost:8080  •  docs at /docs
 |---|---|---|
 | `MCP_BASE_URL` | `http://localhost:8090` | Spring Boot MCP server |
 | `MCP_API_KEY` | — | Optional auth header for MCP server |
-| `LLM_PROVIDER` | `anthropic` | `anthropic` or `ollama` |
-| `LLM_MODEL` | `claude-3-5-sonnet-20241022` | Model name |
-| `ANTHROPIC_API_KEY` | — | Required when `LLM_PROVIDER=anthropic` |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Required when `LLM_PROVIDER=ollama` |
+| `LLM_PROVIDER` | `ollama` | LLM backend (`ollama`) |
+| `LLM_MODEL` | `qwen2.5:32b` | Ollama model name |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama server URL |
 | `REDIS_URL` | `redis://localhost:6379/0` | Session storage (in-memory fallback if unavailable) |
 | `AUTH_ENABLED` | `true` | Set `false` to bypass auth in dev |
 | `RBAC_ENABLED` | `true` | Role-based permission checks |

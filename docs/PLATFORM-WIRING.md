@@ -1,8 +1,8 @@
 # AI Agent — Platform Wiring Plan
 
 **Goal:** make the Python **AI Agent** a first-class service in the gc (Compass) platform —
-routed behind the gateway, integrated with gc auth, config-clean, and deployable — Ollama-first,
-Anthropic pluggable for later.
+routed behind the gateway, integrated with gc auth, config-clean, and deployable — running a
+self-hosted Ollama LLM.
 
 **Scope of this doc:** the *platform-wiring* milestone only. MCP tool coverage (exposing all 12
 services, not just administration) and a FE assistant UI are separate, later milestones.
@@ -101,11 +101,10 @@ container orchestration; firewall the agent port to the gateway.
 
 ---
 
-## 5. LLM provider — Ollama-first, Anthropic pluggable
+## 5. LLM provider — self-hosted Ollama
 
-- `LLM_PROVIDER=ollama` (default) — runs fully in-house/air-gapped, no external calls, no cost.
-- Add an `AnthropicProvider` behind the existing `LLM_PROVIDER` flag, **disabled by default**, for
-  later use. No behavior change unless flipped to `anthropic` (which would require outbound access).
+- `LLM_PROVIDER=ollama` — runs fully in-house/air-gapped, no external calls, no cost.
+- The provider is pluggable behind the `LLM_PROVIDER` flag if another backend is ever needed.
 
 ---
 
@@ -115,7 +114,7 @@ container orchestration; firewall the agent port to the gateway.
 - Remove hardcoded `proounce.com` MCP URL default; strong default `JWT_SECRET`.
 - **MCP tool coverage:** only `administration` is exposed today (one `admin_swagger.json`, ~707 tools).
   Exposing the other 11 services (generate `x-mcp`-annotated OpenAPI per service) is the next milestone.
-- Implement/verify the Anthropic provider when needed.
+- Add an alternate LLM provider behind `LLM_PROVIDER` only if a need arises.
 
 ---
 
