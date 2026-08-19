@@ -46,6 +46,33 @@ def _looks_like_unfulfilled_intent(text: str) -> bool:
     return bool(t) and _INTENT_RE.search(t) is not None
 
 
+def _schema_names(tools: list[dict] | None) -> list[str]:
+    """Tool NAMES out of the OpenAI-format schemas select_tools returns."""
+    names: list[str] = []
+    for t in tools or []:
+        fn = t.get("function") if isinstance(t, dict) else None
+        if isinstance(fn, dict) and fn.get("name"):
+            names.append(str(fn["name"]))
+    return names
+
+
+def _log_prompt(session_id: str, user_id: str | None, question: str,
+                tools: list[dict] | None, mode: str) -> None:
+    """Emit ONE correlatable line pairing the end-user's question with the tools RAG
+    retrieved for it — so a turn is diagnosable from the logs (prompt → retrieval →
+    answer) without a client screenshot. Auto-carries request_id/trace_id via the logger
+    context. Gated by LOG_USER_PROMPTS (default on)."""
+    if not flags.log_user_prompts:
+        return
+    q = question or ""
+    names = _schema_names(tools)
+    preview = q if len(q) <= 300 else q[:300] + "…"
+    log.bind(
+        event="chat_prompt", mode=mode, session_id=session_id, user_id=str(user_id or ""),
+        question=q, question_len=len(q), retrieved_tools=names, tool_count=len(names),
+    ).info(f'prompt [{session_id}] "{preview}" → {len(names)} tools retrieved: {names}')
+
+
 class ChatService:
     """Stateless orchestrator — all state lives in the Session object (Redis)."""
 
@@ -66,6 +93,7 @@ class ChatService:
         system = system_prompt or cfg.AGENT_SYSTEM_PROMPT
         # Tool-RAG: pick only tools relevant to this query (falls back to all — see select_tools).
         tools = await tool_registry.select_tools(user_message, request_headers)
+        _log_prompt(session_id, user_id, user_message, tools, mode="sync")
         tool_calls_made: list[str] = []
 
         llm_response: LLMResponse | None = None
@@ -184,6 +212,7 @@ class ChatService:
         system = system_prompt or cfg.AGENT_SYSTEM_PROMPT
         with turn.phase("retrieval"):
             tools = await tool_registry.select_tools(user_message, request_headers)
+        _log_prompt(session_id, user_id, user_message, tools, mode="stream")
         async for chunk in self._stream_loop(session, tools, system, request_headers, turn):
             yield chunk
 

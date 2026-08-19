@@ -175,6 +175,7 @@ async def actuator_info(request: Request) -> dict:
             "tool_risk_confirmation": flags.tool_risk_confirmation,
             "chatbot_read_only": flags.chatbot_read_only,
             "strict_grounding": flags.strict_grounding,
+            "log_user_prompts": flags.log_user_prompts,
         },
         "metrics": M.summary(),
     }

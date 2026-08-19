@@ -48,6 +48,12 @@ class FeatureFlags:
     request_logging_enabled: bool = field(
         default_factory=lambda: env_bool("REQUEST_LOGGING_ENABLED", True)
     )
+    # Log the end-user's actual question + the tools RAG retrieved for it, so a turn can
+    # be diagnosed from the logs alone (correlate prompt → retrieval → answer) instead of
+    # asking the client for a screenshot. Default ON; turn OFF if prompt content is sensitive.
+    log_user_prompts: bool = field(
+        default_factory=lambda: env_bool("LOG_USER_PROMPTS", True)
+    )
     audit_logging_enabled: bool = field(
         default_factory=lambda: env_bool("AUDIT_LOGGING_ENABLED", True)
     )
