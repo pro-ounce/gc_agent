@@ -18,11 +18,18 @@ from app.commons import metrics as M
 from app.commons.config import cfg
 from app.commons.flags import flags
 from app.commons.logger import get_logger
+from app.connections import redis_get_json, redis_set_json
 from app.mcp.client import MCPClientError, mcp_client
 from app.mcp.tool_index import tool_index
 from app.models.mcp import Tool, ToolResult
 
 log = get_logger(__name__)
+
+# Store key (OpenSearch agent-kv) for the last /mcp/tools catalog. Persisting it lets a
+# restart rebuild the registry WITHOUT a live MCP fetch — the tokenless startup/health
+# fetch 401s (MCP guards /mcp/tools), so without this the cache would be empty until the
+# first authenticated chat. The raw MCP payloads round-trip via Tool.from_mcp_payload.
+_CATALOG_KEY = "mcp:tools:catalog"
 
 # Name prefixes that read state (safe for a read-only chatbot). Everything else —
 # _put/_delete/_patch, and _post whose verb isn't a read (activate/deactivate/delete/
@@ -199,6 +206,7 @@ class ToolRegistry:
             raw_tools = await mcp_client.list_tools(request_headers)
             self._cache = [Tool.from_mcp_payload(t) for t in raw_tools]
             self._loaded_at = time.time()
+            self._persist_catalog(raw_tools)
             log.bind(func="tool_registry").info(
                 f"Tool registry refreshed: {len(self._cache)} tools loaded"
             )
@@ -206,8 +214,38 @@ class ToolRegistry:
             await tool_index.reindex(self._cache)
         except MCPClientError as exc:
             log.error(f"Failed to refresh tool registry: {exc}")
+            # The tokenless startup/health fetch 401s against MCP's guarded /mcp/tools →
+            # fall back to the last catalog persisted in the store (OpenSearch) so the
+            # agent still has tools until a later authenticated request refreshes from MCP.
             if not self._cache:
-                self._cache = []
+                self._load_from_store()
+
+    def _persist_catalog(self, raw_tools: list[dict]) -> None:
+        """Save the raw /mcp/tools catalog to the store (OpenSearch). Best-effort /
+        fail-open — a store hiccup must never break a successful MCP refresh."""
+        try:
+            redis_set_json(_CATALOG_KEY, raw_tools)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(f"Tool catalog persist failed (fail-open): {exc}")
+
+    def _load_from_store(self) -> None:
+        """Rebuild the registry from the last catalog persisted in the store. Leaves
+        _loaded_at at 0 so the next authenticated get_tools() still re-fetches from MCP
+        and re-persists a fresh copy."""
+        try:
+            raw_tools = redis_get_json(_CATALOG_KEY)
+        except Exception as exc:  # noqa: BLE001
+            log.warning(f"Tool catalog store read failed: {exc}")
+            return
+        if not raw_tools:
+            log.warning(
+                "No persisted tool catalog in store — registry stays empty until MCP is reachable"
+            )
+            return
+        self._cache = [Tool.from_mcp_payload(t) for t in raw_tools]
+        log.bind(func="tool_registry").info(
+            f"Tool registry loaded {len(self._cache)} tools from store (MCP unavailable)"
+        )
 
 
 # Params injected by the gateway/MCP (auth + tracing context) — the LLM must never
