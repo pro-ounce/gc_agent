@@ -46,6 +46,47 @@ def _looks_like_unfulfilled_intent(text: str) -> bool:
     return bool(t) and _INTENT_RE.search(t) is not None
 
 
+# Markers that signal the model is emitting a tool call AS TEXT (qwen does this instead of a
+# structured tool_call) — a fenced code block, a <tool_call> tag, or a bare {"name": …}. The
+# _extract_text_tool_calls fallback recovers the real call, but the raw JSON (and any
+# fabricated response the model writes after it) must not leak into the streamed UI.
+_TOOL_TEXT_MARKER = re.compile(r"```|<tool_call>|\{\s*\"name\"")
+_MARKER_MAXLEN = 11  # longest marker ("<tool_call>") — hold this many tail chars back
+
+
+class _StreamGate:
+    """Streams assistant text live, but the moment a tool-call-ish marker appears it HOLDS
+    everything from that point. On close(): if the turn produced a tool call, the held text
+    (the JSON + any fabricated response) is dropped; if it was a false alarm, it's flushed.
+    Full text is still accumulated separately by the caller for tool extraction / history."""
+
+    def __init__(self) -> None:
+        self._buf = ""
+        self._gated = False
+
+    def feed(self, delta: str) -> str:
+        self._buf += delta
+        if self._gated:
+            return ""
+        m = _TOOL_TEXT_MARKER.search(self._buf)
+        if m:
+            self._gated = True
+            out, self._buf = self._buf[: m.start()], self._buf[m.start():]
+            return out
+        # No marker yet — stream all but a short tail, in case a marker is forming at the edge.
+        if len(self._buf) > _MARKER_MAXLEN:
+            out, self._buf = self._buf[:-_MARKER_MAXLEN], self._buf[-_MARKER_MAXLEN:]
+            return out
+        return ""
+
+    def close(self, tool_called: bool) -> str:
+        if self._gated and tool_called:
+            self._buf = ""
+            return ""
+        out, self._buf = self._buf, ""
+        return out
+
+
 def _schema_names(tools: list[dict] | None) -> list[str]:
     """Tool NAMES out of the OpenAI-format schemas select_tools returns."""
     names: list[str] = []
@@ -273,11 +314,14 @@ class ChatService:
             messages = session.to_llm_messages()
             text = ""
             tool_calls: list[dict[str, Any]] = []
+            gate = _StreamGate()
             try:
                 async for kind, payload in llm().stream_chat(messages, tools, system):
                     if kind == "delta":
                         text += payload
-                        yield StreamChunk(type="delta", session_id=session_id, content=payload)
+                        visible = gate.feed(payload)
+                        if visible:
+                            yield StreamChunk(type="delta", session_id=session_id, content=visible)
                     elif kind == "tool_calls":
                         tool_calls = payload
                     elif kind == "usage":
@@ -307,6 +351,12 @@ class ChatService:
                 if recovered:
                     tool_calls = [{"id": f"tc_{c.name}", "name": c.name, "input": c.input} for c in recovered]
                     text = cleaned
+
+            # Flush the stream gate: drop held tool-call JSON if a tool was called this turn,
+            # otherwise (false alarm) emit the held text so nothing legitimate is lost.
+            tail = gate.close(bool(tool_calls))
+            if tail:
+                yield StreamChunk(type="delta", session_id=session_id, content=tail)
 
             if not tool_calls:
                 # Model announced a tool call ("I will fetch…") but didn't emit one → nudge it
