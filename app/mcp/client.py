@@ -28,6 +28,7 @@ import httpx
 from app.commons import metrics as M
 from app.commons.config import cfg
 from app.commons.logger import get_logger
+from app.rbac.jwt_handler import mint_service_token
 from app.connections import get_mcp_http_client
 
 log = get_logger(__name__)
@@ -95,10 +96,19 @@ class MCPClient:
             raw = int_tkn.split(" ", 1)[1] if int_tkn.lower().startswith("bearer ") else int_tkn
             headers["Authorization"] = f"Bearer {raw}"
 
-        # Fallback service token only if the caller supplied no gateway/user credential.
+        # Fallback credential only when the caller supplied none — i.e. the agent's own
+        # tokenless calls (startup/health tool discovery). Prefer an explicit
+        # MCP_BEARER_TOKEN override; otherwise mint a short-lived iss=GC360 discovery token
+        # (the shape MCP accepts from chats). Execution during a chat always carries the
+        # caller's token, so this never authenticates a state-changing call.
         has_cred = cfg.GC_INTERNAL_HEADER in headers or "Authorization" in headers
-        if not has_cred and cfg.MCP_BEARER_TOKEN:
-            headers["Authorization"] = f"Bearer {cfg.MCP_BEARER_TOKEN}"
+        if not has_cred:
+            if cfg.MCP_BEARER_TOKEN:
+                headers["Authorization"] = f"Bearer {cfg.MCP_BEARER_TOKEN}"
+            else:
+                minted = mint_service_token()
+                if minted:
+                    headers["Authorization"] = f"Bearer {minted}"
         return headers
 
     # ── Tool endpoints ────────────────────────────────────────────────────────

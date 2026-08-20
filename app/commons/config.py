@@ -207,6 +207,14 @@ class AppConfig:
     # from the internal key above. Accepts ENC(...) (same jasypt password).
     GC_USER_JWT_SECRET: str | None = _secret("GC_USER_JWT_SECRET")
     GC_USER_JWT_ISSUER: str = env_str("GC_USER_JWT_ISSUER", "GC360") or "GC360"
+    # The agent signs its OWN short-lived token (same iss=GC360 user-JWT shape MCP accepts
+    # from the gateway) for tokenless MCP calls — startup/health tool discovery, which carry
+    # no caller token. Real chats forward the caller's token instead. Signed with
+    # GC_USER_JWT_SECRET. Disable to fall back to MCP_BEARER_TOKEN / no credential.
+    GC_MINT_DISCOVERY_TOKEN: bool = env_bool("GC_MINT_DISCOVERY_TOKEN", True)
+    GC_SERVICE_USER_ID: str = env_str("GC_SERVICE_USER_ID", "1") or "1"
+    # Platform usernames are UPPERCASE; keep the minted token's uname in that convention.
+    GC_SERVICE_USERNAME: str = env_str("GC_SERVICE_USERNAME", "GC-AGENT") or "GC-AGENT"
     GC_INTERNAL_ISSUER: str = env_str("GC_INTERNAL_ISSUER", "GC_INTERNAL") or "GC_INTERNAL"
     GC_INTERNAL_AUDIENCE: str = env_str("GC_INTERNAL_AUDIENCE", "GC_INTERNAL_API") or "GC_INTERNAL_API"
     # Verify issuer/audience on the internal token? Default OFF — the gateway signs with the

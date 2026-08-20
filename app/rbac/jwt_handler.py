@@ -34,6 +34,31 @@ def create_access_token(payload: dict[str, Any]) -> str:
     return jwt.encode(data, cfg.JWT_SECRET, algorithm=_ALGORITHM)
 
 
+def mint_service_token(ttl_seconds: int = 300) -> str | None:
+    """Mint a short-lived platform USER JWT (iss=GC360, HS512) signed with the user key
+    (GC_USER_JWT_SECRET) — the SAME shape the gateway forwards during a chat, which MCP
+    already accepts. Used ONLY as the agent's own credential for tokenless MCP calls
+    (startup/health tool discovery); real chats forward the caller's token instead, so this
+    never runs for tool execution. Returns None when disabled or the user key is unset
+    (→ caller falls back to MCP_BEARER_TOKEN / no credential)."""
+    if not cfg.GC_MINT_DISCOVERY_TOKEN or not cfg.GC_USER_JWT_SECRET:
+        return None
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": cfg.GC_SERVICE_USER_ID,
+        "uname": cfg.GC_SERVICE_USERNAME,
+        "iss": cfg.GC_USER_JWT_ISSUER,
+        "authorities": ["ADMIN"],
+        "iat": now,
+        "exp": now + timedelta(seconds=max(30, ttl_seconds)),
+    }
+    try:
+        return jwt.encode(payload, cfg.GC_USER_JWT_SECRET, algorithm=cfg.GC_JWT_ALGORITHM)
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"discovery token mint failed: {exc}")
+        return None
+
+
 def create_refresh_token(user_id: str) -> str:
     data = {
         "sub": user_id,
