@@ -48,7 +48,9 @@ def _detect_pkg(root: pathlib.Path) -> str:
 
 
 def main() -> None:
-    workers = int(os.environ.get("AGENT_WORKERS", "2") or "2")
+    # Accept the AGENT_* names, or fall back to the plain HOST/PORT/WORKERS the supervisor
+    # conf already sets — so switching to this runner needs no env changes.
+    workers = int(os.environ.get("AGENT_WORKERS") or os.environ.get("WORKERS") or "2")
     log_level = os.environ.get("LOG_LEVEL", "info")
 
     # Build the app once, in the factory — not on package import.
@@ -62,8 +64,8 @@ def main() -> None:
     os.environ["PYTHONPATH"] = str(root) + os.pathsep + os.environ.get("PYTHONPATH", "")
     target = f"{_detect_pkg(root)}.main:create_app"
 
-    host = os.environ.get("AGENT_HOST", "").strip()
-    port = os.environ.get("AGENT_PORT", "").strip()
+    host = (os.environ.get("AGENT_HOST") or os.environ.get("HOST") or "").strip()
+    port = (os.environ.get("AGENT_PORT") or os.environ.get("PORT") or "").strip()
     if host and port:
         # TCP mode — what the Spring gateway proxies to (localhost:17024).
         uvicorn.run(target, factory=True, host=host, port=int(port),
