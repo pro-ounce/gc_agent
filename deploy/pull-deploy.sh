@@ -5,7 +5,7 @@
 #
 # Usage:   deploy/pull-deploy.sh [branch]
 # Env:
-#   APP_DIR        app root / git checkout        (default: /apps/agent)
+#   APP_DIR        app root / git checkout        (default: /apps/gc_agent)
 #   BRANCH         branch to deploy               (default: main, or $1)
 #   SERVICE        supervisor program name        (default: ai-agent-service)
 #   SKIP_SNAPSHOT  1 = skip the pre-deploy snapshot (use until the OS snapshot repo is
@@ -13,7 +13,7 @@
 #   SKIP_RESTART   1 = pull only, don't restart
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/apps/agent}"
+APP_DIR="${APP_DIR:-/apps/gc_agent}"
 BRANCH="${1:-${BRANCH:-main}}"
 SERVICE="${SERVICE:-ai-agent-service}"
 PIP="${APP_DIR}/bin/pip"

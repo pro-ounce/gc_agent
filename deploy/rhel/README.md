@@ -14,12 +14,12 @@ section of the /admin console).
 
 | Item | Value |
 |---|---|
-| App root + venv | `/apps/agent` (venv built in-place: `bin/`, `lib/` alongside `app/`) |
+| App root + venv | `/apps/gc_agent` (venv built in-place: `bin/`, `lib/` alongside `app/`) |
 | Python | **3.12.8** via pyenv (`pyenv local 3.12.8`) — matches the repo's `.python-version` |
-| Service user | `gcusr` — owns `/apps/agent` |
-| Venv python | `/apps/agent/bin/python` |
+| Service user | `gcusr` — owns `/apps/gc_agent` |
+| Venv python | `/apps/gc_agent/bin/python` |
 | Port | `8080` (loopback-only unless the gateway is on another host) |
-| Config | `/apps/agent/.env.local` (mode `0600`) |
+| Config | `/apps/gc_agent/.env.local` (mode `0600`) |
 | Logs | `/var/log/gc/ai-agent-service/{stdout,stderr}.log` |
 | Supervisor conf | `/etc/supervisord.d/ai-agent-service.ini` |
 
@@ -44,26 +44,26 @@ cd agent/deploy/rhel
 > pip download supervisor -d wheelhouse      # universal wheel
 > ```
 
-**1b. Ship source + wheelhouse to `/apps/agent`:**
+**1b. Ship source + wheelhouse to `/apps/gc_agent`:**
 
 ```bash
 rsync -av --exclude '.venv' --exclude '.git' --exclude '__pycache__' \
   --exclude '.pytest_cache' \
-  ~/Git/gc/agent/  DEPLOY_USER@RHEL_HOST:/apps/agent/
+  ~/Git/gc/agent/  DEPLOY_USER@RHEL_HOST:/apps/gc_agent/
 scp agent/deploy/rhel/wheelhouse.tar.gz DEPLOY_USER@RHEL_HOST:/tmp/
-ssh DEPLOY_USER@RHEL_HOST 'tar xzf /tmp/wheelhouse.tar.gz -C /apps/agent/'   # → /apps/agent/wheelhouse
+ssh DEPLOY_USER@RHEL_HOST 'tar xzf /tmp/wheelhouse.tar.gz -C /apps/gc_agent/'   # → /apps/gc_agent/wheelhouse
 ```
 
 **1c. On the host, build the venv offline (pyenv 3.12.8, no index):**
 
 ```bash
 pyenv install 3.12.8           # once, if not already installed
-cd /apps/agent
+cd /apps/gc_agent
 pyenv local 3.12.8
-python3 -m venv /apps/agent --prompt="agent"
-source /apps/agent/bin/activate
-pip install --no-index --find-links /apps/agent/wheelhouse --upgrade pip
-pip install --no-index --find-links /apps/agent/wheelhouse -r requirements.txt
+python3 -m venv /apps/gc_agent --prompt="agent"
+source /apps/gc_agent/bin/activate
+pip install --no-index --find-links /apps/gc_agent/wheelhouse --upgrade pip
+pip install --no-index --find-links /apps/gc_agent/wheelhouse -r requirements.txt
 deactivate
 ```
 
@@ -77,8 +77,8 @@ won't work. Instead supervisor is installed **via pip from the offline wheelhous
 into its own venv at `/apps/supervisor`, and **systemd runs supervisord**.
 
 ```bash
-cd /apps/agent/deploy/rhel
-sudo APP_ROOT=/apps/agent SVC_USER=gcusr ./install.sh
+cd /apps/gc_agent/deploy/rhel
+sudo APP_ROOT=/apps/gc_agent SVC_USER=gcusr ./install.sh
 ```
 
 The installer (assumes the app venv + wheelhouse from §1 exist):
@@ -136,7 +136,7 @@ curl -s http://localhost:8080/actuator/prometheus | head
 ```
 
 `autorestart=true` brings the app back on crash; `supervisord` is `systemctl enable`d so
-it survives reboot. To pick up new code: rsync the source, `/apps/agent/bin/pip install -r
+it survives reboot. To pick up new code: rsync the source, `/apps/gc_agent/bin/pip install -r
 requirements.txt` if deps changed, then `supervisorctl restart ai-agent-service`.
 
 ## Notes

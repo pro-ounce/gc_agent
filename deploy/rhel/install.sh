@@ -9,11 +9,11 @@
 # and the wheelhouse is unpacked at $WHEELHOUSE (default $APP_ROOT/wheelhouse).
 #
 # Run as root (or sudo) ON THE RHEL HOST:
-#   sudo APP_ROOT=/apps/agent SVC_USER=gcusr ./install.sh
+#   sudo APP_ROOT=/apps/gc_agent SVC_USER=gcusr ./install.sh
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-APP_ROOT="${APP_ROOT:-/apps/agent}"
+APP_ROOT="${APP_ROOT:-/apps/gc_agent}"
 SVC_USER="${SVC_USER:-gcusr}"
 SUP_VENV="${SUP_VENV:-/apps/supervisor}"                 # dedicated venv for supervisor
 WHEELHOUSE="${WHEELHOUSE:-$APP_ROOT/wheelhouse}"         # offline wheels (see build-wheelhouse.sh)

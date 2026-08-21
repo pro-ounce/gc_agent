@@ -5,13 +5,13 @@
 #
 # Usage:   deploy/chat-test.sh "your message" [session_id]
 # Env:
-#   APP_DIR      app checkout / venv root      (default: /apps/agent)
+#   APP_DIR      app checkout / venv root      (default: /apps/gc_agent)
 #   AGENT_PKG    python package name           (default: auto — app or app_<name>)
 #   AGENT_URL    agent base URL                (default: http://localhost:17024)
 #   AGENT_PATH   chat endpoint                 (default: /api/chat)
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/apps/agent}"
+APP_DIR="${APP_DIR:-/apps/gc_agent}"
 AGENT="${AGENT_URL:-http://localhost:17024}"
 PATH_="${AGENT_PATH:-/api/chat}"
 PY="${APP_DIR}/bin/python"

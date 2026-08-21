@@ -10,7 +10,7 @@
 #   OUT=/tmp/wh ./build-wheelhouse.sh
 #
 # Produces:  ./wheelhouse/  and  ./wheelhouse.tar.gz  → ship the tarball to prod,
-# unpack it to /apps/agent/wheelhouse, then run install.sh (offline).
+# unpack it to /apps/gc_agent/wheelhouse, then run install.sh (offline).
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -36,4 +36,4 @@ python3 -m pip download pip setuptools wheel supervisor -d "$OUT"
 echo "==> Packaging"
 tar czf "$HERE/wheelhouse.tar.gz" -C "$(dirname "$OUT")" "$(basename "$OUT")"
 echo "==> Done: $(find "$OUT" -type f | wc -l) files → $HERE/wheelhouse.tar.gz"
-echo "    Ship it, then on prod:  tar xzf wheelhouse.tar.gz -C /apps/agent/  (→ /apps/agent/wheelhouse)"
+echo "    Ship it, then on prod:  tar xzf wheelhouse.tar.gz -C /apps/gc_agent/  (→ /apps/gc_agent/wheelhouse)"
