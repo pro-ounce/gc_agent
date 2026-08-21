@@ -41,10 +41,16 @@ def _detect_pkg(root: pathlib.Path) -> str:
     override = os.environ.get("AGENT_PKG", "").strip()
     if override:
         return override
-    for child in sorted(root.iterdir()):
-        if child.is_dir() and (child / "main.py").is_file() and (child / "__init__.py").is_file():
-            return child.name
-    return "app"
+    candidates = [
+        c.name for c in sorted(root.iterdir())
+        if c.is_dir() and (c / "main.py").is_file() and (c / "__init__.py").is_file()
+    ]
+    # Prefer the renamed package (app_<name>) over a leftover plain `app` if both are
+    # present during the transition, so the deploy switches cleanly.
+    for name in candidates:
+        if name.startswith("app_"):
+            return name
+    return candidates[0] if candidates else "app"
 
 
 def main() -> None:
