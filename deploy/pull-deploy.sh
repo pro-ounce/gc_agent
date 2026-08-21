@@ -13,7 +13,10 @@
 #   SKIP_RESTART   1 = pull only, don't restart
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/apps/gc_agent}"
+# Self-locating: the checkout root is the parent of this deploy/ dir — so the script works
+# from any deploy folder without assuming a path. Override with APP_DIR if needed.
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="${APP_DIR:-$(dirname "$_SCRIPT_DIR")}"
 BRANCH="${1:-${BRANCH:-main}}"
 SERVICE="${SERVICE:-ai-agent-service}"
 PIP="${APP_DIR}/bin/pip"

@@ -11,7 +11,9 @@
 #   AGENT_PATH   chat endpoint                 (default: /api/chat)
 set -euo pipefail
 
-APP_DIR="${APP_DIR:-/apps/gc_agent}"
+# Self-locating: checkout root = parent of this deploy/ dir (works from any folder).
+_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+APP_DIR="${APP_DIR:-$(dirname "$_SCRIPT_DIR")}"
 AGENT="${AGENT_URL:-http://localhost:17024}"
 PATH_="${AGENT_PATH:-/api/chat}"
 PY="${APP_DIR}/bin/python"
