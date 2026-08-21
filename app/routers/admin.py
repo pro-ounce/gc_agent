@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from app.commons.logger import get_logger
 from app.routers.health import _guard  # reuse the actuator IP allow-list guard
-from app.services import runtime_config
+from app.services import backup_service, runtime_config
 
 log = get_logger(__name__)
 
@@ -55,3 +55,57 @@ async def admin_reset_config(request: Request):
     _guard(request)
     runtime_config.reset()
     return {"params": runtime_config.get_all()}
+
+
+@router.get("/admin/backup", summary="Backup overview — repo, schedule, snapshots, stats")
+async def admin_backup_overview(request: Request):
+    _guard(request)
+    return backup_service.overview()
+
+
+@router.post("/admin/backup", summary="Take a manual snapshot now (e.g. before a major push)")
+async def admin_take_backup(request: Request):
+    _guard(request)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    label = (body or {}).get("label") if isinstance(body, dict) else None
+    wait = bool((body or {}).get("wait")) if isinstance(body, dict) else False
+    try:
+        result = backup_service.create_snapshot(label=label, wait=wait)
+    except backup_service.BackupError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    return result
+
+
+@router.post("/admin/backup/schedule", summary="Create/update the daily snapshot schedule")
+async def admin_set_schedule(request: Request):
+    _guard(request)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    cron = (body or {}).get("cron")
+    retention = (body or {}).get("retention_days")
+    enabled = (body or {}).get("enabled", True)
+    if not cron or retention is None:
+        return JSONResponse({"detail": "cron and retention_days are required"}, status_code=400)
+    try:
+        return backup_service.set_schedule(cron=str(cron), retention_days=int(retention), enabled=bool(enabled))
+    except backup_service.BackupError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
+@router.post("/admin/backup/schedule/toggle", summary="Enable/disable the snapshot schedule")
+async def admin_toggle_schedule(request: Request):
+    _guard(request)
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    enabled = bool((body or {}).get("enabled", True))
+    try:
+        return backup_service.toggle_schedule(enabled)
+    except backup_service.BackupError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)

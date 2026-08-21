@@ -182,6 +182,17 @@ class AppConfig:
     OPENSEARCH_PASSWORD: str | None = _secret("OPENSEARCH_PASSWORD")
     OPENSEARCH_VERIFY_CERTS: bool = env_bool("OPENSEARCH_VERIFY_CERTS", True)
     OPENSEARCH_INDEX: str = env_str("OPENSEARCH_INDEX", "agent-kv") or "agent-kv"
+    # Manual/scheduled snapshot target — the registered repo + which indices to snapshot.
+    # The scheduled SM policy uses the same repo; the /admin "Backups" button and the deploy
+    # script take an on-demand snapshot into it (e.g. before a major push).
+    OPENSEARCH_SNAPSHOT_REPO: str = env_str("OPENSEARCH_SNAPSHOT_REPO", "agent-s3") or "agent-s3"
+    OPENSEARCH_SNAPSHOT_INDICES: str = (
+        env_str("OPENSEARCH_SNAPSHOT_INDICES", "agent-kv,agent-tools,admin_configs")
+        or "agent-kv,agent-tools,admin_configs"
+    )
+    # Snapshot Management (SM) policy the /admin Backups tab views/edits for the schedule.
+    OPENSEARCH_SM_POLICY: str = env_str("OPENSEARCH_SM_POLICY", "agent-daily") or "agent-daily"
+    OPENSEARCH_SM_TIMEZONE: str = env_str("OPENSEARCH_SM_TIMEZONE", "America/New_York") or "America/New_York"
     OPENSEARCH_TIMEOUT: int = env_int("OPENSEARCH_TIMEOUT", 10) or 10
 
     # Redis (only used when STORE_BACKEND=redis)

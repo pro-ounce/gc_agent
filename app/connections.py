@@ -302,6 +302,12 @@ def store_backend_name() -> str:
     }.get(cls, cls)
 
 
+def os_client() -> Any | None:
+    """The raw OpenSearch client if the store is OpenSearch-backed, else None. For
+    cluster-level ops (snapshots) that go beyond the KV store abstraction."""
+    return getattr(redis_client, "_c", None)
+
+
 def store_health() -> dict[str, Any]:
     """Backend name + reachability, for health/readiness probes."""
     try:

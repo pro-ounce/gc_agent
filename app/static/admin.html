@@ -131,11 +131,11 @@
     params.forEach(function(p){ if(groups.indexOf(p.group)<0) groups.push(p.group); });
     elTabs.innerHTML = groups.map(function(g,i){
       return '<button class="admin-tab'+(i===0?" active":"")+'" data-tab="'+esc(g)+'" role="tab">'+esc(g)+'</button>';
-    }).join("");
+    }).join("") + '<button class="admin-tab" data-tab="__backups__" role="tab">Backups</button>';
     elSections.innerHTML = groups.map(function(g,i){
       var cards = params.filter(function(p){return p.group===g;}).map(cardFor).join("");
       return '<section class="admin-section'+(i===0?" active":"")+'" data-tab="'+esc(g)+'"><div class="cards">'+cards+'</div></section>';
-    }).join("");
+    }).join("") + backupsSectionHTML();
     // tab switching
     Array.prototype.forEach.call(elTabs.children, function(btn){
       btn.addEventListener("click", function(){
@@ -163,6 +163,131 @@
       inp.addEventListener(inp.type==="checkbox"?"change":"input", handler);
       if(inp.tagName==="SELECT") inp.addEventListener("change", handler);
     });
+    initBackups();
+  }
+
+  // ── Backups tab (full console: repo · stats · schedule · manual · snapshots) ──
+  function badge(txt, color, bg){ return '<span style="font-size:11px;font-weight:600;color:'+color+';background:'+bg+';border-radius:999px;padding:2px 9px">'+esc(txt)+'</span>'; }
+  function fmtDur(ms){ if(ms==null) return "—"; return ms>=1000?(ms/1000).toFixed(1)+"s":ms+"ms"; }
+  function stateBadge(s){
+    if(s==="SUCCESS") return badge("SUCCESS","var(--good)","var(--good-wash)");
+    if(s==="IN_PROGRESS") return badge("IN_PROGRESS","var(--amber)","var(--amber-wash)");
+    if(s==="FAILED"||s==="PARTIAL") return badge(s,"#b91c1c","#fdeaea");
+    return badge(s||"?","var(--ink-2)","#f3f4f6");
+  }
+
+  function backupsSectionHTML(){
+    return '<section class="admin-section" data-tab="__backups__">'
+      // repo + stats
+      +'<div class="cards" style="margin-bottom:14px">'
+      +'<div class="card"><div class="top"><span class="lbl">Repository</span><span id="bk-repo-verify"></span></div>'
+      +'<div class="def" style="margin-top:8px">name: <span class="mono" id="bk-repo-name">—</span></div>'
+      +'<div class="def">indices: <span class="mono" id="bk-repo-indices">—</span></div></div>'
+      +'<div class="card"><div class="top"><span class="lbl">Stats</span></div>'
+      +'<div class="def" style="margin-top:8px">snapshots: <b id="bk-stat-total">—</b> &nbsp; last success: <span class="mono" id="bk-stat-last">—</span></div>'
+      +'<div class="def" id="bk-stat-states"></div></div></div>'
+      // schedule
+      +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Schedule <span id="bk-sch-enabled"></span></span>'
+      +'<button id="bk-sch-toggle" class="btn" style="padding:5px 11px">—</button></div>'
+      +'<div class="desc">Daily Snapshot-Management policy. Uses standard 5-field cron (min hour dom mon dow).</div>'
+      +'<div class="form-row" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">'
+      +'<label style="flex:1;min-width:180px">cron<br><input type="text" id="bk-sch-cron" placeholder="0 2 * * *" style="width:100%;font:inherit;font-size:14px;padding:9px 11px;border:1px solid var(--line);border-radius:9px" class="mono"></label>'
+      +'<label style="width:150px">retention (days)<br><input type="number" id="bk-sch-ret" min="1" max="365" style="width:100%;font:inherit;font-size:14px;padding:9px 11px;border:1px solid var(--line);border-radius:9px"></label>'
+      +'<button id="bk-sch-save" class="btn primary">Save schedule</button><span id="bk-sch-status" style="font-size:13px"></span></div>'
+      +'<div class="def" id="bk-sch-runs" style="margin-top:10px"></div></div>'
+      // manual
+      +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Take a snapshot now</span></div>'
+      +'<div class="desc">Trigger a snapshot immediately — do this before a major push. Scheduled snapshots keep running regardless.</div>'
+      +'<div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap">'
+      +'<input type="text" id="bk-label" placeholder="label (optional, e.g. pre-v1.5-deploy)" style="flex:1;min-width:220px;font:inherit;font-size:14px;padding:9px 11px;border:1px solid var(--line);border-radius:9px">'
+      +'<button id="bk-take" class="btn primary">Take snapshot now</button><span id="bk-status" style="font-size:13px"></span></div></div>'
+      // snapshots table
+      +'<div class="card"><div class="top"><span class="lbl">Recent snapshots</span>'
+      +'<button id="bk-refresh" class="btn" style="padding:5px 11px">Refresh</button></div>'
+      +'<div id="bk-list" class="desc" style="margin-top:10px">loading…</div></div></section>';
+  }
+
+  function renderOverview(d){
+    // repo + stats
+    var rv = document.getElementById("bk-repo-verify");
+    if(rv) rv.innerHTML = d.repository && d.repository.verified ? badge("verified","var(--good)","var(--good-wash)") : badge("unverified","#b91c1c","#fdeaea");
+    document.getElementById("bk-repo-name").textContent = (d.repository&&d.repository.name)||"—";
+    document.getElementById("bk-repo-indices").textContent = d.indices||"—";
+    var st = d.stats||{};
+    document.getElementById("bk-stat-total").textContent = st.total!=null?st.total:"—";
+    document.getElementById("bk-stat-last").textContent = st.last_success||"—";
+    document.getElementById("bk-stat-states").innerHTML = Object.keys(st.by_state||{}).map(function(k){return k+": "+st.by_state[k];}).join(" · ");
+    // schedule
+    var sch = d.schedule||{};
+    var en = document.getElementById("bk-sch-enabled");
+    en.innerHTML = !sch.exists ? badge("not set up","var(--ink-2)","#f3f4f6") : (sch.enabled?badge("enabled","var(--good)","var(--good-wash)"):badge("disabled","var(--amber)","var(--amber-wash)"));
+    document.getElementById("bk-sch-cron").value = sch.cron||"0 2 * * *";
+    document.getElementById("bk-sch-ret").value = sch.retention_days!=null?sch.retention_days:14;
+    var tg = document.getElementById("bk-sch-toggle");
+    tg.textContent = sch.exists ? (sch.enabled?"Disable":"Enable") : "—";
+    tg.disabled = !sch.exists; tg.dataset.next = sch.enabled?"false":"true";
+    document.getElementById("bk-sch-save").textContent = sch.exists?"Save schedule":"Set up schedule";
+    var runs = "";
+    if(sch.last_execution){ runs += "last run: "+stateBadge(sch.last_execution.status)+" <span class='mono'>"+esc(sch.last_execution.time||"")+"</span>"; }
+    if(sch.next_execution){ runs += (runs?" &nbsp; ":"")+"next: <span class='mono'>"+esc(sch.next_execution)+"</span>"; }
+    document.getElementById("bk-sch-runs").innerHTML = runs;
+    // snapshots table
+    var el = document.getElementById("bk-list");
+    if(d.error){ el.innerHTML = '<span style="color:#b91c1c">'+esc(d.error)+'</span>'; return; }
+    var snaps = d.snapshots||[];
+    if(!snaps.length){ el.innerHTML = "No snapshots yet."; return; }
+    var rows = snaps.map(function(s){
+      return '<tr style="border-top:1px solid var(--line)">'
+        +'<td style="padding:8px 6px" class="mono">'+esc(s.snapshot)+'</td>'
+        +'<td style="padding:8px 6px">'+stateBadge(s.state)+'</td>'
+        +'<td style="padding:8px 6px">'+esc(s.trigger||"")+(s.label?' · '+esc(s.label):"")+'</td>'
+        +'<td style="padding:8px 6px;white-space:nowrap">'+esc(s.start_time||"—")+'</td>'
+        +'<td style="padding:8px 6px" class="mono">'+fmtDur(s.duration_ms)+'</td></tr>';
+    }).join("");
+    el.innerHTML = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
+      +'<thead><tr style="text-align:left;color:var(--ink-2);font-size:11.5px;text-transform:uppercase;letter-spacing:.04em">'
+      +'<th style="padding:0 6px 6px">Snapshot</th><th style="padding:0 6px 6px">State</th><th style="padding:0 6px 6px">Trigger</th>'
+      +'<th style="padding:0 6px 6px">Started</th><th style="padding:0 6px 6px">Duration</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+  }
+
+  function loadBackups(){
+    var el = document.getElementById("bk-list"); if(el) el.textContent = "loading…";
+    fetch("/admin/backup",{cache:"no-store"}).then(function(r){return r.json();}).then(renderOverview)
+      .catch(function(e){ if(el) el.innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; });
+  }
+
+  function post(url, body, statusEl, okMsg){
+    if(statusEl){ statusEl.textContent="working…"; statusEl.style.color="var(--ink-2)"; }
+    return fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body||{})})
+      .then(function(r){ return r.json().then(function(d){ return {ok:r.ok,d:d}; }); })
+      .then(function(res){
+        if(!res.ok){ if(statusEl){statusEl.textContent=res.d.detail||"failed";statusEl.style.color="#b91c1c";} }
+        else if(statusEl){ statusEl.textContent=okMsg||"done ✓"; statusEl.style.color="var(--good)"; setTimeout(function(){statusEl.textContent="";},3000); }
+        return res;
+      });
+  }
+
+  function initBackups(){
+    var take = document.getElementById("bk-take"); if(!take) return;
+    take.addEventListener("click", function(){
+      var label=(document.getElementById("bk-label").value||"").trim();
+      take.disabled=true;
+      post("/admin/backup",{label:label},document.getElementById("bk-status"),"snapshot started ✓")
+        .then(function(res){ if(res.ok) setTimeout(loadBackups,1500); }).finally(function(){ take.disabled=false; });
+    });
+    document.getElementById("bk-sch-save").addEventListener("click", function(){
+      var cron=(document.getElementById("bk-sch-cron").value||"").trim();
+      var ret=parseInt(document.getElementById("bk-sch-ret").value,10);
+      post("/admin/backup/schedule",{cron:cron,retention_days:ret,enabled:true},document.getElementById("bk-sch-status"),"schedule saved ✓")
+        .then(function(res){ if(res.ok) renderOverview(res.d.snapshots!=null?res.d:{schedule:res.d}); loadBackups(); });
+    });
+    document.getElementById("bk-sch-toggle").addEventListener("click", function(){
+      var next=this.dataset.next==="true";
+      post("/admin/backup/schedule/toggle",{enabled:next},document.getElementById("bk-sch-status"),next?"enabled ✓":"disabled ✓")
+        .then(function(){ loadBackups(); });
+    });
+    document.getElementById("bk-refresh").addEventListener("click", loadBackups);
+    loadBackups();
   }
 
   function load(){
