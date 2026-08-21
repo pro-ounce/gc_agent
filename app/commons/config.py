@@ -73,7 +73,7 @@ def env_list(key: str, separator: str = ",") -> list[str]:
 # jasypt-spring-boot config), so the cleartext key is never stored at rest — only
 # the ENC(...) value + the one master JASYPT_ENCRYPTOR_PASSWORD. `_secret()` reads
 # an env var and transparently decrypts it when wrapped in ENC(...).
-from app.commons.jasypt import resolve as _jasypt_resolve  # noqa: E402
+from ..commons.jasypt import resolve as _jasypt_resolve  # noqa: E402
 
 _JASYPT_PASSWORD: str | None = env_str("JASYPT_ENCRYPTOR_PASSWORD")
 _JASYPT_ITERATIONS: int = env_int("JASYPT_KEY_ITERATIONS", 1000) or 1000

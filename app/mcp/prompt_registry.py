@@ -9,10 +9,10 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from app.commons.config import cfg
-from app.commons.logger import get_logger
-from app.mcp.client import MCPClientError, mcp_client
-from app.models.mcp import Prompt, PromptArgument
+from ..commons.config import cfg
+from ..commons.logger import get_logger
+from ..mcp.client import MCPClientError, mcp_client
+from ..models.mcp import Prompt, PromptArgument
 
 log = get_logger(__name__)
 

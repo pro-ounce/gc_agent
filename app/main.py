@@ -19,10 +19,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.commons.config import cfg
-from app.commons.flags import flags
-from app.commons.logger import get_logger
-from app.commons.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
+from .commons.config import cfg
+from .commons.flags import flags
+from .commons.logger import get_logger
+from .commons.middleware import RequestContextMiddleware, SecurityHeadersMiddleware
 
 log = get_logger(__name__)
 
@@ -38,8 +38,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # Pre-warm MCP tool & prompt caches
     try:
-        from app.mcp.tool_registry import tool_registry
-        from app.mcp.prompt_registry import prompt_registry
+        from .mcp.tool_registry import tool_registry
+        from .mcp.prompt_registry import prompt_registry
 
         await tool_registry.get_tools()
         await prompt_registry.get_prompts()
@@ -52,7 +52,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield  # Application running
 
     log.bind(func="lifespan").info("Shutting down — closing connections")
-    from app.connections import close_connections
+    from .connections import close_connections
     await close_connections()
 
 
@@ -93,18 +93,18 @@ def create_app() -> FastAPI:
 
     # RBAC / auth middleware
     if flags.auth_enabled or flags.rbac_enabled:
-        from app.rbac.middleware import RBACMiddleware
+        from .rbac.middleware import RBACMiddleware
         app.add_middleware(RBACMiddleware)
 
     # ── Routers ───────────────────────────────────────────────────────────────
 
-    from app.routers.health import router as health_router
-    from app.routers.chat import router as chat_router
-    from app.routers.tools import router as tools_router
-    from app.routers.prompts import router as prompts_router
-    from app.routers.sessions import router as sessions_router
-    from app.routers.platform import router as platform_router
-    from app.routers.admin import router as admin_router
+    from .routers.health import router as health_router
+    from .routers.chat import router as chat_router
+    from .routers.tools import router as tools_router
+    from .routers.prompts import router as prompts_router
+    from .routers.sessions import router as sessions_router
+    from .routers.platform import router as platform_router
+    from .routers.admin import router as admin_router
 
     app.include_router(health_router)
     app.include_router(admin_router)  # /admin — runtime config UI (IP-gated like actuator)
@@ -115,7 +115,7 @@ def create_app() -> FastAPI:
     app.include_router(platform_router)  # /ai-service/{agent}/chat — GC platform-facing
 
     if flags.rbac_enabled:
-        from app.routers.auth import router as auth_router
+        from .routers.auth import router as auth_router
         app.include_router(auth_router)
 
     # ── Static UI ─────────────────────────────────────────────────────────────
@@ -144,9 +144,10 @@ if __name__ == "__main__":
     import uvicorn
 
     # Dev entry — serves the module-level instance. Production/UDS deploys use the factory
-    # via deploy/run_uvicorn_uds.py (`uvicorn app.main:create_app --factory`).
+    # via deploy/run_uvicorn_uds.py, which auto-detects the package name. __package__ keeps
+    # this correct whether the package is `app` (repo) or `app_gc_agent` (deployed).
     uvicorn.run(
-        "app.main:app",
+        f"{__package__ or 'app'}.main:app",
         host=cfg.HOST,
         port=cfg.PORT,
         reload=cfg.RELOAD,

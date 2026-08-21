@@ -14,7 +14,7 @@ from typing import Any
 
 from pythonjsonlogger import jsonlogger
 
-from app.commons.config import cfg
+from ..commons.config import cfg
 
 # ── Context variables (propagated across async tasks) ─────────────────────────
 _request_id_ctx: ContextVar[str] = ContextVar("request_id", default="")

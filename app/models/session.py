@@ -12,8 +12,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from app.commons.config import cfg
-from app.services import runtime_config
+from ..commons.config import cfg
+from ..services import runtime_config
 
 
 def _now_iso() -> str:

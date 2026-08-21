@@ -23,7 +23,7 @@ from prometheus_client import (
 )
 from prometheus_client import GCCollector, PlatformCollector, ProcessCollector
 
-from app.commons.logger import get_logger
+from ..commons.logger import get_logger
 
 _tlog = get_logger("app.metrics.turn")
 

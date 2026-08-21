@@ -8,9 +8,9 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
-from app.mcp.prompt_registry import prompt_registry
-from app.rbac.middleware import require_permission
-from app.rbac.permissions import Permissions
+from ..mcp.prompt_registry import prompt_registry
+from ..rbac.middleware import require_permission
+from ..rbac.permissions import Permissions
 
 router = APIRouter(prefix="/api/prompts", tags=["prompts"])
 
@@ -58,7 +58,7 @@ async def execute_prompt(
     body: PromptExecuteRequest,
     _: object = Depends(require_permission(Permissions.PROMPT_EXECUTE)),
 ) -> dict:
-    from app.mcp.client import MCPClientError
+    from ..mcp.client import MCPClientError
 
     try:
         text = await prompt_registry.execute_prompt(prompt_name, body.arguments)

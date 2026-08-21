@@ -15,10 +15,10 @@ from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.types import ASGIApp
 
-from app.commons import metrics as M
-from app.commons.config import cfg
-from app.commons.flags import flags
-from app.commons.logger import get_logger, set_request_context
+from ..commons import metrics as M
+from ..commons.config import cfg
+from ..commons.flags import flags
+from ..commons.logger import get_logger, set_request_context
 
 log = get_logger(__name__)
 

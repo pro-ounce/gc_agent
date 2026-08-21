@@ -10,13 +10,13 @@ from __future__ import annotations
 from fastapi import Request, Response
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 
-from app.commons.config import cfg
-from app.commons.flags import flags
-from app.commons.logger import get_logger, set_request_context
-from app.rbac.gateway_auth import authenticate_gateway
-from app.rbac.jwt_handler import JWTError, decode_token
-from app.rbac.models import APIKey, User
-from app.rbac.permissions import get_permissions_for_roles
+from ..commons.config import cfg
+from ..commons.flags import flags
+from ..commons.logger import get_logger, set_request_context
+from ..rbac.gateway_auth import authenticate_gateway
+from ..rbac.jwt_handler import JWTError, decode_token
+from ..rbac.models import APIKey, User
+from ..rbac.permissions import get_permissions_for_roles
 
 log = get_logger(__name__)
 

@@ -26,10 +26,10 @@ import httpx
 
 import time
 
-from app.commons import metrics as M
-from app.commons.config import cfg
-from app.services import runtime_config
-from app.commons.logger import get_logger
+from ..commons import metrics as M
+from ..commons.config import cfg
+from ..services import runtime_config
+from ..commons.logger import get_logger
 
 log = get_logger(__name__)
 

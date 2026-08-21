@@ -16,11 +16,11 @@ import hashlib
 import re
 from typing import Any
 
-from app.commons.config import cfg
-from app.commons.flags import flags
-from app.commons.logger import get_logger
-from app.services.embeddings import embed
-from app.services import runtime_config
+from ..commons.config import cfg
+from ..commons.flags import flags
+from ..commons.logger import get_logger
+from ..services.embeddings import embed
+from ..services import runtime_config
 
 log = get_logger(__name__)
 

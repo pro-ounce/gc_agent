@@ -25,11 +25,11 @@ from typing import Any
 
 import httpx
 
-from app.commons import metrics as M
-from app.commons.config import cfg
-from app.commons.logger import get_logger
-from app.rbac.jwt_handler import mint_service_token
-from app.connections import get_mcp_http_client
+from ..commons import metrics as M
+from ..commons.config import cfg
+from ..commons.logger import get_logger
+from ..rbac.jwt_handler import mint_service_token
+from ..connections import get_mcp_http_client
 
 log = get_logger(__name__)
 

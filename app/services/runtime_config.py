@@ -14,10 +14,10 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from app.commons.config import cfg
-from app.commons.flags import flags
-from app.commons.logger import get_logger
-from app.connections import redis_get_json, redis_set_json
+from ..commons.config import cfg
+from ..commons.flags import flags
+from ..commons.logger import get_logger
+from ..connections import redis_get_json, redis_set_json
 
 log = get_logger(__name__)
 

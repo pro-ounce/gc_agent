@@ -19,15 +19,15 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
 
-from app.agents.registry import STRICT_GROUNDING_INSTRUCTION, get_agent, list_agents
-from app.commons.config import cfg
-from app.commons.flags import flags
-from app.services import runtime_config
-from app.commons.logger import get_logger
-from app.models.platform import ApiResponse
-from app.rbac.middleware import get_current_user
-from app.rbac.models import User
-from app.services.chat_service import chat_service
+from ..agents.registry import STRICT_GROUNDING_INSTRUCTION, get_agent, list_agents
+from ..commons.config import cfg
+from ..commons.flags import flags
+from ..services import runtime_config
+from ..commons.logger import get_logger
+from ..models.platform import ApiResponse
+from ..rbac.middleware import get_current_user
+from ..rbac.models import User
+from ..services.chat_service import chat_service
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/ai-service", tags=["platform"])

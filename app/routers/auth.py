@@ -15,11 +15,11 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, EmailStr
 
-from app.commons.config import cfg
-from app.rbac.jwt_handler import JWTError, create_access_token, create_refresh_token, decode_token
-from app.rbac.middleware import get_current_user, require_permission
-from app.rbac.models import APIKey, User, audit
-from app.rbac.permissions import Permissions
+from ..commons.config import cfg
+from ..rbac.jwt_handler import JWTError, create_access_token, create_refresh_token, decode_token
+from ..rbac.middleware import get_current_user, require_permission
+from ..rbac.models import APIKey, User, audit
+from ..rbac.permissions import Permissions
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -118,7 +118,7 @@ async def create_api_key(
 
 @router.get("/keys", summary="List API keys for current user")
 async def list_api_keys(user: User = Depends(get_current_user)) -> dict:
-    from app.connections import redis_client, redis_get_json
+    from ..connections import redis_client, redis_get_json
 
     raw_keys = redis_client.keys("apikey:*")
     keys = []
@@ -148,7 +148,7 @@ async def revoke_api_key(
     key_id: str,
     user: User = Depends(get_current_user),
 ) -> dict:
-    from app.connections import redis_get_json, redis_set_json
+    from ..connections import redis_get_json, redis_set_json
 
     data = redis_get_json(f"apikey:{key_id}")
     if not data or data.get("user_id") != user.id:

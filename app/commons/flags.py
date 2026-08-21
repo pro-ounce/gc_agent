@@ -7,7 +7,7 @@ All flags read from environment so they can be overridden in CI/test/prod.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from app.commons.config import env_bool
+from ..commons.config import env_bool
 
 
 @dataclass

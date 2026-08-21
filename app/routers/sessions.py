@@ -7,11 +7,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from app.models.chat import SessionSummary
-from app.rbac.middleware import get_current_user, require_permission
-from app.rbac.models import User
-from app.rbac.permissions import Permissions
-from app.services.session_service import session_service
+from ..models.chat import SessionSummary
+from ..rbac.middleware import get_current_user, require_permission
+from ..rbac.models import User
+from ..rbac.permissions import Permissions
+from ..services.session_service import session_service
 
 router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 

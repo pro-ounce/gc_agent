@@ -16,18 +16,18 @@ import time
 import uuid
 from typing import Any, AsyncIterator
 
-from app.commons import metrics as M
-from app.commons.config import cfg
-from app.commons.flags import flags
-from app.services import runtime_config
-from app.commons.logger import get_logger
-from app.mcp.prompt_registry import prompt_registry
-from app.mcp.tool_registry import is_mutation, tool_registry
-from app.models.chat import ChatResponse, StreamChunk
-from app.models.mcp import PendingAction
-from app.models.session import Session
-from app.services.llm_service import LLMResponse, ToolCall, llm
-from app.services.session_service import session_service
+from ..commons import metrics as M
+from ..commons.config import cfg
+from ..commons.flags import flags
+from ..services import runtime_config
+from ..commons.logger import get_logger
+from ..mcp.prompt_registry import prompt_registry
+from ..mcp.tool_registry import is_mutation, tool_registry
+from ..models.chat import ChatResponse, StreamChunk
+from ..models.mcp import PendingAction
+from ..models.session import Session
+from ..services.llm_service import LLMResponse, ToolCall, llm
+from ..services.session_service import session_service
 
 log = get_logger(__name__)
 
@@ -305,7 +305,7 @@ class ChatService:
         turn: "M.TurnMetrics | None" = None,
     ) -> AsyncIterator[StreamChunk]:
         """Shared agentic loop for reply_stream / confirm_stream."""
-        from app.services.llm_service import _extract_text_tool_calls
+        from ..services.llm_service import _extract_text_tool_calls
 
         session_id = session.session_id
         nudged = False

@@ -15,20 +15,20 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sse_starlette.sse import EventSourceResponse
 
-from app.commons import metrics as M
-from app.commons.config import cfg
-from app.commons.flags import flags
-from app.commons.logger import get_logger
-from app.models.chat import (
+from ..commons import metrics as M
+from ..commons.config import cfg
+from ..commons.flags import flags
+from ..commons.logger import get_logger
+from ..models.chat import (
     ChatRequest,
     ChatResponse,
     ConfirmRequest,
     PromptExecuteRequest,
 )
-from app.rbac.middleware import get_current_user, require_permission
-from app.rbac.models import User
-from app.rbac.permissions import Permissions
-from app.services.chat_service import chat_service
+from ..rbac.middleware import get_current_user, require_permission
+from ..rbac.models import User
+from ..rbac.permissions import Permissions
+from ..services.chat_service import chat_service
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/api/chat", tags=["chat"])
@@ -114,7 +114,7 @@ async def chat_stream(
                     break
         except Exception as exc:
             log.exception(f"Stream error: {exc}")
-            from app.models.chat import StreamChunk
+            from ..models.chat import StreamChunk
 
             yield {
                 "data": StreamChunk(
@@ -162,7 +162,7 @@ async def prompt_chat(
     body: PromptExecuteRequest,
     user: User = Depends(require_permission(Permissions.PROMPT_EXECUTE)),
 ) -> ChatResponse:
-    from app.mcp.client import MCPClientError
+    from ..mcp.client import MCPClientError
 
     try:
         return await chat_service.execute_prompt(

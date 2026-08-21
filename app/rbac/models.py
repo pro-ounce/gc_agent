@@ -12,8 +12,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from app.commons.logger import get_logger
-from app.connections import redis_client, redis_get_json, redis_set_json
+from ..commons.logger import get_logger
+from ..connections import redis_client, redis_get_json, redis_set_json
 
 log = get_logger(__name__)
 
@@ -163,7 +163,7 @@ def audit(
     detail: str = "",
     success: bool = True,
 ) -> None:
-    from app.commons.logger import get_request_id
+    from ..commons.logger import get_request_id
     entry = {
         "id": str(uuid.uuid4()),
         "timestamp": _now(),

@@ -16,9 +16,9 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from app.commons.logger import get_logger
-from app.routers.health import _guard  # reuse the actuator IP allow-list guard
-from app.services import backup_service, runtime_config
+from ..commons.logger import get_logger
+from ..routers.health import _guard  # reuse the actuator IP allow-list guard
+from ..services import backup_service, runtime_config
 
 log = get_logger(__name__)
 

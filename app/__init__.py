@@ -10,9 +10,9 @@ process works unchanged):
 """
 import os
 
-from app.main import create_app  # noqa: F401 — factory is always exported
+from .main import create_app  # noqa: F401 — factory is always exported
 
 if os.environ.get("APP_SKIP_INIT") != "1":
     # main.py builds the eager instance (also guarded there); re-export it so both
     # `app:app` and `app.main:app` resolve to the same single application.
-    from app.main import app  # noqa: F401
+    from .main import app  # noqa: F401

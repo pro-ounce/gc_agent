@@ -5,10 +5,10 @@ CRUD operations for chat sessions backed by Redis.
 """
 from __future__ import annotations
 
-from app.commons.config import cfg
-from app.commons.logger import get_logger
-from app.connections import redis_delete, redis_get_json, redis_set_json
-from app.models.session import Session
+from ..commons.config import cfg
+from ..commons.logger import get_logger
+from ..connections import redis_delete, redis_get_json, redis_set_json
+from ..models.session import Session
 
 log = get_logger(__name__)
 
@@ -21,7 +21,7 @@ def _key(session_id: str) -> str:
 
 def count_sessions() -> int:
     """Approximate active-session count (for metrics)."""
-    from app.connections import redis_client
+    from ..connections import redis_client
     try:
         return len(redis_client.keys(f"{_PREFIX}*"))
     except Exception:
@@ -66,7 +66,7 @@ class SessionService:
 
     def list_sessions(self, user_id: str | None = None) -> list[dict]:
         """List all active sessions (optionally filtered by user_id)."""
-        from app.connections import redis_client
+        from ..connections import redis_client
 
         keys = redis_client.keys(f"{_PREFIX}*")
         summaries = []

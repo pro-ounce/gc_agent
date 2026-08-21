@@ -24,12 +24,27 @@ import os
 import pathlib
 import stat
 
+import sys
+
 import uvicorn
 
 
 def _to_umask(mode: int) -> int:
     # umask blocks bits; it's the complement of the desired permission within 0777.
     return (~mode) & 0o777
+
+
+def _detect_pkg(root: pathlib.Path) -> str:
+    """Name of the app package (a sibling of this deploy/ dir). The shared deploy renames
+    the repo's `app/` to `app_<name>/`, so it may be `app` here or `app_gc_agent` on the
+    target. Pick the dir that is a Python package with main.py. Override with AGENT_PKG."""
+    override = os.environ.get("AGENT_PKG", "").strip()
+    if override:
+        return override
+    for child in sorted(root.iterdir()):
+        if child.is_dir() and (child / "main.py").is_file() and (child / "__init__.py").is_file():
+            return child.name
+    return "app"
 
 
 def main() -> None:
@@ -39,11 +54,19 @@ def main() -> None:
     # Build the app once, in the factory — not on package import.
     os.environ["APP_SKIP_INIT"] = "1"
 
+    # Ensure the checkout root (parent of deploy/) is importable — running this file as a
+    # script puts deploy/ on sys.path, not the root — so `{pkg}.main` resolves. PYTHONPATH
+    # carries it to uvicorn's worker subprocesses too.
+    root = pathlib.Path(__file__).resolve().parent.parent
+    sys.path.insert(0, str(root))
+    os.environ["PYTHONPATH"] = str(root) + os.pathsep + os.environ.get("PYTHONPATH", "")
+    target = f"{_detect_pkg(root)}.main:create_app"
+
     host = os.environ.get("AGENT_HOST", "").strip()
     port = os.environ.get("AGENT_PORT", "").strip()
     if host and port:
         # TCP mode — what the Spring gateway proxies to (localhost:17024).
-        uvicorn.run("app.main:create_app", factory=True, host=host, port=int(port),
+        uvicorn.run(target, factory=True, host=host, port=int(port),
                     workers=workers, log_level=log_level, log_config=None)
         return
 
@@ -70,7 +93,7 @@ def main() -> None:
     old_umask = os.umask(_to_umask(uds_mode))
     try:
         uvicorn.run(
-            "app.main:create_app",
+            target,
             factory=True,
             uds=uds_path,
             workers=workers,

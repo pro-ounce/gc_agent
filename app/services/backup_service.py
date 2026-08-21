@@ -14,9 +14,9 @@ import time
 from datetime import datetime, timezone
 from typing import Any
 
-from app.commons.config import cfg
-from app.commons.logger import get_logger
-from app.connections import os_client
+from ..commons.config import cfg
+from ..commons.logger import get_logger
+from ..connections import os_client
 
 log = get_logger(__name__)
 

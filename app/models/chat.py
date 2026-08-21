@@ -9,7 +9,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
-from app.models.mcp import PendingAction
+from ..models.mcp import PendingAction
 
 
 # ── Inbound ───────────────────────────────────────────────────────────────────

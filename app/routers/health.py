@@ -24,15 +24,15 @@ import time
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from app.commons import metrics as M
-from app.commons.config import cfg
-from app.commons.flags import flags
-from app.connections import store_health
-from app.mcp.client import mcp_client
-from app.mcp.tool_registry import tool_registry
-from app.services import backup_service
-from app.services.llm_service import llm
-from app.services.session_service import count_sessions
+from ..commons import metrics as M
+from ..commons.config import cfg
+from ..commons.flags import flags
+from ..connections import store_health
+from ..mcp.client import mcp_client
+from ..mcp.tool_registry import tool_registry
+from ..services import backup_service
+from ..services.llm_service import llm
+from ..services.session_service import count_sessions
 
 # Process start — used for uptime in /info.
 _START_TS = time.time()

@@ -16,8 +16,8 @@ from typing import Any
 import redis as _redis
 import httpx
 
-from app.commons.config import cfg
-from app.commons.logger import get_logger
+from .commons.config import cfg
+from .commons.logger import get_logger
 
 log = get_logger(__name__)
 

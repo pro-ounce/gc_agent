@@ -7,10 +7,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from app.mcp.tool_registry import tool_registry
-from app.models.mcp import Tool
-from app.rbac.middleware import require_permission
-from app.rbac.permissions import Permissions
+from ..mcp.tool_registry import tool_registry
+from ..models.mcp import Tool
+from ..rbac.middleware import require_permission
+from ..rbac.permissions import Permissions
 
 router = APIRouter(prefix="/api/tools", tags=["tools"])
 
@@ -20,8 +20,8 @@ async def list_tools(
     force_refresh: bool = Query(False, alias="refresh"),
     _: object = Depends(require_permission(Permissions.TOOL_LIST)),
 ) -> dict:
-    from app.commons.config import cfg
-    from app.mcp.client import MCPClientError
+    from ..commons.config import cfg
+    from ..mcp.client import MCPClientError
 
     error: str | None = None
     try:

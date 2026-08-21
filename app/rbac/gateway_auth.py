@@ -20,10 +20,10 @@ from __future__ import annotations
 import jwt
 from fastapi import Request
 
-from app.commons.config import cfg
-from app.commons.logger import get_logger
-from app.rbac.jwt_handler import JWTError, decode_internal_token, decode_user_token
-from app.rbac.models import User
+from ..commons.config import cfg
+from ..commons.logger import get_logger
+from ..rbac.jwt_handler import JWTError, decode_internal_token, decode_user_token
+from ..rbac.models import User
 
 log = get_logger(__name__)
 
