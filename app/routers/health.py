@@ -30,6 +30,7 @@ from app.commons.flags import flags
 from app.connections import store_health
 from app.mcp.client import mcp_client
 from app.mcp.tool_registry import tool_registry
+from app.services import backup_service
 from app.services.llm_service import llm
 from app.services.session_service import count_sessions
 
@@ -92,16 +93,33 @@ async def _components() -> dict:
     M.set_dependency("mcp", up(mcp))
     M.set_dependency("llm", up(lm))
 
-    return {
+    comps = {
         "store": _comp("UP" if up(store) else "DOWN", backend=store.get("backend")),
         "mcp": _comp("UP" if up(mcp) else "DOWN", **{k: v for k, v in mcp.items() if k != "status"}),
         "llm": _comp("UP" if up(lm) else "DOWN", **{k: v for k, v in lm.items() if k != "status"}),
     }
+    # Backup freshness — informational. Only surfaced once backups are set up; UNKNOWN/
+    # DISABLED never affect the aggregate. A stale/failed backup shows as DEGRADED.
+    try:
+        bk = backup_service.backup_health()
+    except Exception as exc:  # noqa: BLE001
+        bk = {"status": "UNKNOWN", "reason": str(exc)}
+    status = str(bk.pop("status", "UNKNOWN"))
+    comps["backup"] = _comp(status, **bk)
+    return comps
+
+
+# Critical components whose DOWN takes the service out of rotation (503). Others (e.g.
+# backup) are informational: DEGRADED is surfaced but the service stays 200.
+_CRITICAL = ("store", "mcp", "llm")
 
 
 def _aggregate(components: dict) -> str:
-    statuses = {c["status"] for c in components.values()}
-    return "UP" if statuses == {"UP"} else "DOWN"
+    if any(components.get(k, {}).get("status") == "DOWN" for k in _CRITICAL):
+        return "DOWN"
+    if any(c.get("status") == "DEGRADED" for c in components.values()):
+        return "DEGRADED"
+    return "UP"
 
 
 async def _health_body() -> dict:
@@ -114,7 +132,7 @@ async def _health_body() -> dict:
 async def actuator_health(request: Request, response: Response) -> dict:
     _guard(request)
     body = await _health_body()
-    response.status_code = 200 if body["status"] == "UP" else 503
+    response.status_code = 200 if body["status"] in ("UP", "DEGRADED") else 503
     return body
 
 
@@ -195,7 +213,7 @@ router.include_router(actuator)
 @router.get("/api/health", include_in_schema=False)
 async def health_alias(response: Response) -> dict:
     body = await _health_body()
-    response.status_code = 200 if body["status"] == "UP" else 503
+    response.status_code = 200 if body["status"] in ("UP", "DEGRADED") else 503
     # flat shape kept for older callers
     return {"status": body["status"], "app": cfg.APP_NAME, "version": cfg.APP_VERSION,
             "env": cfg.ENV, "components": body["components"]}

@@ -1,7 +1,16 @@
 # Deploying `ai-agent-service` on RHEL with Supervisor
 
-The GC Agent is a uvicorn/FastAPI app (`app.main:app`, port **8080**). This runs it as
-a non-root service managed by **supervisor** (not systemd directly, not Docker).
+The GC Agent is a uvicorn/FastAPI app launched via the shared deploy runner
+`deploy/run_uvicorn_uds.py` (factory entry `app.main:create_app`, same convention as the
+delivery/rag apps). It serves **TCP `:17024`** by default (what the Spring gateway proxies
+to); set `AGENT_UDS_PATH` instead to serve over a unix socket behind Apache. Runs as a
+non-root service managed by **supervisor** (not systemd directly, not Docker).
+
+**Pre-deploy backup (wire as the FIRST deploy step):** before rsync + restart, take an
+OpenSearch snapshot so a bad push is recoverable — `make snapshot LABEL=pre-<tag>` (or
+`deploy/os-snapshot.sh <label>`). It blocks and returns non-zero on failure, so the deploy
+aborts if the backup fails. Requires the snapshot repo to be registered (see the Backups
+section of the /admin console).
 
 | Item | Value |
 |---|---|

@@ -75,6 +75,14 @@ dev: install
 run: install
 	$(APP) --host 0.0.0.0 --port 8080 --workers 2
 
+# ── Backup ──────────────────────────────────────────────────────────────────────
+# Pre-deploy OpenSearch snapshot (run ON the box, before rsync/restart, so a failed
+# backup aborts the deploy). Wire this as the FIRST step of the deploy pipeline.
+#   make snapshot LABEL=pre-v1.5
+LABEL ?= pre-deploy
+snapshot:
+	bash deploy/os-snapshot.sh "$(LABEL)"
+
 # ── Test ──────────────────────────────────────────────────────────────────────
 TEST_ENV := TESTING=1 ENV=test AUTH_ENABLED=false RBAC_ENABLED=false \
             REDIS_ENABLED=false LOG_LEVEL=WARNING \

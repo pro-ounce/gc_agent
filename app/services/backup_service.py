@@ -10,6 +10,7 @@ Thin wrapper over the OpenSearch snapshot API via the store's raw client — no 
 from __future__ import annotations
 
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -212,6 +213,43 @@ def _stats(snaps: list[dict]) -> dict[str, Any]:
         if st == "SUCCESS" and last_success is None:
             last_success = s.get("end_time") or s.get("start_time")
     return {"total": len(snaps), "by_state": by_state, "last_success": last_success}
+
+
+def backup_health() -> dict[str, Any]:
+    """Backup freshness for /actuator/health. Returns a component dict:
+      - UP        : a SUCCESS snapshot exists within OPENSEARCH_SNAPSHOT_MAX_AGE_HOURS
+      - DEGRADED  : repo registered but newest SUCCESS is stale / none exists
+      - UNKNOWN   : backups not set up (no OS store, or repo not registered) → not an alarm
+      - DISABLED  : the freshness check is turned off (max_age_hours = 0)
+    Never raises."""
+    max_age_h = cfg.OPENSEARCH_SNAPSHOT_MAX_AGE_HOURS
+    if max_age_h <= 0:
+        return {"status": "DISABLED"}
+    repo = cfg.OPENSEARCH_SNAPSHOT_REPO
+    try:
+        c = _client()
+    except BackupError:
+        return {"status": "UNKNOWN", "reason": "store is not OpenSearch"}
+    try:
+        resp = c.snapshot.get(repository=repo, snapshot="_all", ignore=[404])
+        snaps = resp.get("snapshots", []) if isinstance(resp, dict) else []
+    except Exception:  # noqa: BLE001
+        return {"status": "UNKNOWN", "repository": repo, "reason": "repository not registered"}
+    successes = [s for s in snaps if s.get("state") == "SUCCESS"]
+    if not successes:
+        return {"status": "DEGRADED", "repository": repo, "reason": "no successful snapshot yet"}
+    newest = max(successes, key=lambda s: s.get("end_time_in_millis") or s.get("start_time_in_millis") or 0)
+    end_ms = newest.get("end_time_in_millis") or newest.get("start_time_in_millis") or 0
+    age_h = round((time.time() * 1000 - end_ms) / 3_600_000, 1)
+    fresh = age_h <= max_age_h
+    return {
+        "status": "UP" if fresh else "DEGRADED",
+        "repository": repo,
+        "latest": newest.get("snapshot"),
+        "age_hours": age_h,
+        "max_age_hours": max_age_h,
+        **({} if fresh else {"reason": f"newest snapshot is {age_h}h old (> {max_age_h}h)"}),
+    }
 
 
 def overview() -> dict[str, Any]:

@@ -193,6 +193,9 @@ class AppConfig:
     # Snapshot Management (SM) policy the /admin Backups tab views/edits for the schedule.
     OPENSEARCH_SM_POLICY: str = env_str("OPENSEARCH_SM_POLICY", "agent-daily") or "agent-daily"
     OPENSEARCH_SM_TIMEZONE: str = env_str("OPENSEARCH_SM_TIMEZONE", "America/New_York") or "America/New_York"
+    # Health flags the backup as DEGRADED if the newest SUCCESS snapshot is older than this
+    # (hours). 0 disables the check. Surfaces a silently-broken backup in monitoring.
+    OPENSEARCH_SNAPSHOT_MAX_AGE_HOURS: int = env_int("OPENSEARCH_SNAPSHOT_MAX_AGE_HOURS", 48) or 48
     OPENSEARCH_TIMEOUT: int = env_int("OPENSEARCH_TIMEOUT", 10) or 10
 
     # Redis (only used when STORE_BACKEND=redis)
