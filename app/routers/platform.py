@@ -22,6 +22,7 @@ from sse_starlette.sse import EventSourceResponse
 from app.agents.registry import STRICT_GROUNDING_INSTRUCTION, get_agent, list_agents
 from app.commons.config import cfg
 from app.commons.flags import flags
+from app.services import runtime_config
 from app.commons.logger import get_logger
 from app.models.platform import ApiResponse
 from app.rbac.middleware import get_current_user
@@ -79,7 +80,7 @@ def _ground(
     user: "User | None" = None,
 ) -> str:
     """Assemble the final system prompt: base + strict-grounding + current-user + context."""
-    if flags.strict_grounding:
+    if runtime_config.get_bool("AGENT_STRICT_GROUNDING"):
         system_prompt = f"{system_prompt}{STRICT_GROUNDING_INSTRUCTION}"
     system_prompt = f"{system_prompt}{_user_context(user)}"
     grounding = (context or "").strip()

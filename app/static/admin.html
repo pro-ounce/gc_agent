@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin • GC Agent</title>
+  <style>
+    :root{
+      --bg:#f4f5f8; --panel:#fff; --ink:#111827; --ink-2:#6b7280; --line:#e5e7eb;
+      --accent:#6d28d9; --accent-2:#7c3aed; --accent-wash:#f1ecfb; --accent-line:#ddd0f7;
+      --good:#16a34a; --good-wash:#e7f6ec; --amber:#b45309; --amber-wash:#fdf1e3;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--ink);
+      font-family:"IBM Plex Sans",system-ui,-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.5}
+    .mono{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,monospace}
+    .header{background:linear-gradient(90deg,#2a1150,#4c1d95);color:#fff;padding:16px 22px}
+    .header-content{max-width:1100px;margin:0 auto;display:flex;align-items:center;justify-content:space-between}
+    .logo-text h1{margin:0;font-size:20px;font-weight:700}
+    .logo-text p{margin:2px 0 0;font-size:12.5px;opacity:.75}
+    .header-actions a{color:#fff;text-decoration:none;font-size:13px;opacity:.85;border:1px solid rgba(255,255,255,.25);
+      padding:6px 12px;border-radius:8px}
+    .admin-shell{max-width:1100px;margin:22px auto;padding:0 16px}
+    .admin-header{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+    .admin-header h2{margin:0;font-size:18px}
+    .admin-tabs{display:flex;flex-wrap:wrap;gap:8px;margin:6px 0 16px}
+    .admin-tab{padding:8px 14px;border:1px solid var(--line);border-radius:9px;background:var(--panel);
+      cursor:pointer;font:inherit;font-size:13.5px;color:var(--ink-2)}
+    .admin-tab.active{background:var(--accent-wash);border-color:var(--accent-line);color:var(--accent);font-weight:600}
+    .admin-section{display:none} .admin-section.active{display:block}
+    .cards{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+    @media (max-width:760px){.cards{grid-template-columns:1fr}}
+    .card{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:15px 17px;
+      box-shadow:0 1px 2px rgba(16,24,40,.04)}
+    .card .top{display:flex;align-items:baseline;justify-content:space-between;gap:10px}
+    .card .lbl{font-weight:600;font-size:14.5px}
+    .card .key{font-size:11px;color:var(--ink-2)}
+    .card .desc{color:var(--ink-2);font-size:12.7px;margin:6px 0 12px}
+    .ctl input[type=number],.ctl input[type=text],.ctl select{
+      width:100%;font:inherit;font-size:14px;padding:9px 11px;border:1px solid var(--line);
+      border-radius:9px;background:#fff;color:var(--ink)}
+    .ctl input:focus,.ctl select:focus{outline:2px solid var(--accent);outline-offset:0;border-color:transparent}
+    .switch{display:inline-flex;align-items:center;gap:10px;cursor:pointer;user-select:none}
+    .switch input{position:absolute;opacity:0;width:0;height:0}
+    .track{width:44px;height:24px;border-radius:999px;background:#cbd5e1;position:relative;transition:background .15s}
+    .knob{position:absolute;top:3px;left:3px;width:18px;height:18px;border-radius:50%;background:#fff;
+      box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .15s}
+    .switch input:checked + .track{background:var(--accent)}
+    .switch input:checked + .track .knob{left:23px}
+    .switch .state{font-size:13px;color:var(--ink-2);min-width:22px}
+    .ovr{display:inline-block;font-size:10.5px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;
+      color:var(--amber);background:var(--amber-wash);border:1px solid #f3ddc0;border-radius:999px;padding:1px 7px;margin-left:8px}
+    .def{font-size:11.5px;color:var(--ink-2);margin-top:7px}
+    .btns{display:flex;gap:9px;align-items:center}
+    .btn{padding:9px 16px;border-radius:9px;border:1px solid var(--line);background:var(--panel);
+      cursor:pointer;font:inherit;font-size:13.5px;font-weight:600;color:var(--ink)}
+    .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+    .btn.primary:disabled{opacity:.5;cursor:default}
+    .btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+    #status{font-size:13px;margin-left:4px}
+    #status.ok{color:var(--good)} #status.err{color:#b91c1c} #status.dirty{color:var(--amber)}
+    .foot{max-width:1100px;margin:20px auto 40px;padding:0 16px;color:var(--ink-2);font-size:12px}
+  </style>
+</head>
+<body>
+  <header class="header">
+    <div class="header-content">
+      <div class="logo-text"><h1>GC Agent · Admin</h1><p>Runtime configuration &amp; controls</p></div>
+      <div class="header-actions"><a href="/actuator/info" title="Metrics">Metrics</a></div>
+    </div>
+  </header>
+
+  <main class="admin-shell">
+    <div class="admin-header">
+      <h2>Settings</h2>
+      <div class="btns">
+        <span id="status"></span>
+        <button id="btn-reset" class="btn">Reset to defaults</button>
+        <button id="btn-save" class="btn primary" disabled>Save</button>
+      </div>
+    </div>
+    <nav class="admin-tabs" id="tabs" role="tablist"></nav>
+    <div id="sections"></div>
+  </main>
+  <div class="foot">Changes persist to OpenSearch and take effect on the next turn (no restart). Reachable on the ops LAN, same as the actuator.</div>
+
+<script>
+(function(){
+  "use strict";
+  var $ = function(s,r){return (r||document).querySelector(s);};
+  var elTabs = $("#tabs"), elSections = $("#sections"), elStatus = $("#status");
+  var btnSave = $("#btn-save"), btnReset = $("#btn-reset");
+  var esc = function(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});};
+  var params = [];       // from server
+  var pending = {};       // key -> new value (dirty)
+
+  function setStatus(msg, cls){ elStatus.textContent = msg||""; elStatus.className = cls||""; }
+  function markDirty(){ var n=Object.keys(pending).length; btnSave.disabled = n===0;
+    if(n) setStatus(n+" unsaved change"+(n>1?"s":""), "dirty"); else setStatus("", ""); }
+
+  function ctlFor(p){
+    var v = (p.key in pending) ? pending[p.key] : p.value;
+    if(p.type==="bool"){
+      var on = !!v;
+      return '<label class="switch"><input type="checkbox" data-key="'+p.key+'"'+(on?" checked":"")+'>'
+        +'<span class="track"><span class="knob"></span></span><span class="state">'+(on?"On":"Off")+'</span></label>';
+    }
+    if(p.type==="select"){
+      var opts=(p.options||[]).map(function(o){return '<option value="'+esc(o)+'"'+(String(o)===String(v)?" selected":"")+'>'+esc(o)+'</option>';}).join("");
+      return '<div class="ctl"><select data-key="'+p.key+'">'+opts+'</select></div>';
+    }
+    if(p.type==="int"||p.type==="float"){
+      var step = p.type==="float" ? (p.step||0.1) : 1;
+      var mn = ("min" in p)?' min="'+p.min+'"':"", mx=("max" in p)?' max="'+p.max+'"':"";
+      return '<div class="ctl"><input type="number" data-key="'+p.key+'" value="'+esc(v)+'" step="'+step+'"'+mn+mx+'></div>';
+    }
+    return '<div class="ctl"><input type="text" data-key="'+p.key+'" value="'+esc(v)+'"></div>';
+  }
+
+  function cardFor(p){
+    var ovr = p.overridden ? '<span class="ovr">overridden</span>' : '';
+    return '<div class="card"><div class="top"><span class="lbl">'+esc(p.label)+ovr+'</span>'
+      +'<span class="key mono">'+esc(p.key)+'</span></div>'
+      +'<div class="desc">'+esc(p.description)+'</div>'
+      + ctlFor(p)
+      +'<div class="def">default: <span class="mono">'+esc(p.default)+'</span></div></div>';
+  }
+
+  function render(){
+    var groups = [];
+    params.forEach(function(p){ if(groups.indexOf(p.group)<0) groups.push(p.group); });
+    elTabs.innerHTML = groups.map(function(g,i){
+      return '<button class="admin-tab'+(i===0?" active":"")+'" data-tab="'+esc(g)+'" role="tab">'+esc(g)+'</button>';
+    }).join("");
+    elSections.innerHTML = groups.map(function(g,i){
+      var cards = params.filter(function(p){return p.group===g;}).map(cardFor).join("");
+      return '<section class="admin-section'+(i===0?" active":"")+'" data-tab="'+esc(g)+'"><div class="cards">'+cards+'</div></section>';
+    }).join("");
+    // tab switching
+    Array.prototype.forEach.call(elTabs.children, function(btn){
+      btn.addEventListener("click", function(){
+        Array.prototype.forEach.call(elTabs.children, function(b){b.classList.remove("active");});
+        btn.classList.add("active");
+        Array.prototype.forEach.call(elSections.children, function(s){
+          s.classList.toggle("active", s.getAttribute("data-tab")===btn.getAttribute("data-tab"));
+        });
+      });
+    });
+    // input wiring
+    Array.prototype.forEach.call(elSections.querySelectorAll("[data-key]"), function(inp){
+      var handler = function(){
+        var key = inp.getAttribute("data-key");
+        var spec = params.filter(function(p){return p.key===key;})[0];
+        var val;
+        if(inp.type==="checkbox"){ val = inp.checked; var st=inp.parentNode.querySelector(".state"); if(st) st.textContent = val?"On":"Off"; }
+        else if(spec.type==="int") val = parseInt(inp.value,10);
+        else if(spec.type==="float") val = parseFloat(inp.value);
+        else val = inp.value;
+        // dirty if differs from current server value
+        if(String(val)===String(spec.value)) delete pending[key]; else pending[key]=val;
+        markDirty();
+      };
+      inp.addEventListener(inp.type==="checkbox"?"change":"input", handler);
+      if(inp.tagName==="SELECT") inp.addEventListener("change", handler);
+    });
+  }
+
+  function load(){
+    setStatus("loading…","");
+    fetch("/admin/config",{headers:{Accept:"application/json"},cache:"no-store"})
+      .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+      .then(function(d){ params = d.params||[]; pending={}; render(); markDirty(); setStatus("",""); })
+      .catch(function(e){ setStatus("Failed to load: "+e.message,"err"); });
+  }
+
+  btnSave.addEventListener("click", function(){
+    if(!Object.keys(pending).length) return;
+    btnSave.disabled=true; setStatus("saving…","");
+    fetch("/admin/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({updates:pending})})
+      .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+      .then(function(d){ params=d.params||[]; pending={}; render(); setStatus("Saved ✓","ok"); setTimeout(function(){setStatus("","");},2500); })
+      .catch(function(e){ setStatus("Save failed: "+e.message,"err"); btnSave.disabled=false; });
+  });
+
+  btnReset.addEventListener("click", function(){
+    if(!confirm("Reset ALL parameters to their .env defaults?")) return;
+    setStatus("resetting…","");
+    fetch("/admin/config/reset",{method:"POST"})
+      .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
+      .then(function(d){ params=d.params||[]; pending={}; render(); setStatus("Reset to defaults ✓","ok"); setTimeout(function(){setStatus("","");},2500); })
+      .catch(function(e){ setStatus("Reset failed: "+e.message,"err"); });
+  });
+
+  load();
+})();
+</script>
+</body>
+</html>

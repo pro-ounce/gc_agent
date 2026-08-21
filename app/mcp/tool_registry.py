@@ -19,6 +19,7 @@ from app.commons.config import cfg
 from app.commons.flags import flags
 from app.commons.logger import get_logger
 from app.connections import redis_get_json, redis_set_json
+from app.services import runtime_config
 from app.mcp.client import MCPClientError, mcp_client
 from app.mcp.tool_index import tool_index
 from app.models.mcp import Tool, ToolResult
@@ -121,16 +122,16 @@ class ToolRegistry:
         (≤ TOOL_RAG_MIN_TOOLS), or retrieval fails — so it never breaks chat."""
         tools = await self.get_tools(request_headers=request_headers)
         total_all = len(tools)
-        if flags.chatbot_read_only:
+        if runtime_config.get_bool("CHATBOT_READ_ONLY"):
             # Never OFFER mutations to the model — it can't call what it can't see.
             tools = [t for t in tools if _is_read_only(t.name)]
             if len(tools) != total_all:
                 log.bind(func="select_tools", read_only=True, kept=len(tools), total=total_all).info(
                     f"read-only: offering {len(tools)}/{total_all} tools (mutations withheld)"
                 )
-        if not flags.tool_rag_enabled or len(tools) <= cfg.TOOL_RAG_MIN_TOOLS:
+        if not runtime_config.get_bool("TOOL_RAG_ENABLED") or len(tools) <= cfg.TOOL_RAG_MIN_TOOLS:
             return _log_schema_cost([_to_tool_schema(t) for t in tools], len(tools))
-        names = await tool_index.search(query, cfg.TOOL_RAG_TOP_K)
+        names = await tool_index.search(query, runtime_config.get_int("TOOL_RAG_TOP_K"))
         if not names:
             return [_to_tool_schema(t) for t in tools]
         by_name = {t.name: t for t in tools}

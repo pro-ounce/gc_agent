@@ -13,6 +13,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from app.commons.config import cfg
+from app.services import runtime_config
 
 
 def _now_iso() -> str:
@@ -72,7 +73,7 @@ class Session(BaseModel):
         prompt. Walks back accumulating content length, then trims the front to the first
         `user` turn — a safe conversation boundary that never orphans a tool_call/tool_result
         pair. 0 = unlimited."""
-        budget = cfg.MAX_HISTORY_CHARS
+        budget = runtime_config.get_int("MAX_HISTORY_CHARS")
         msgs = self.messages
         if budget <= 0 or len(msgs) <= 1:
             return msgs

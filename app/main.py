@@ -103,8 +103,10 @@ def create_app() -> FastAPI:
     from app.routers.prompts import router as prompts_router
     from app.routers.sessions import router as sessions_router
     from app.routers.platform import router as platform_router
+    from app.routers.admin import router as admin_router
 
     app.include_router(health_router)
+    app.include_router(admin_router)  # /admin — runtime config UI (IP-gated like actuator)
     app.include_router(chat_router)
     app.include_router(tools_router)
     app.include_router(prompts_router)

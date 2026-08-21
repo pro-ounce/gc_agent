@@ -20,6 +20,7 @@ from app.commons.config import cfg
 from app.commons.flags import flags
 from app.commons.logger import get_logger
 from app.services.embeddings import embed
+from app.services import runtime_config
 
 log = get_logger(__name__)
 
@@ -128,7 +129,7 @@ class ToolIndex:
     async def reindex(self, tools: list[Any]) -> None:
         """Embed + upsert tools. Skips work when the tool-name set is unchanged.
         Stale docs (removed tools) are harmless — select_tools filters to live tools."""
-        if not flags.tool_rag_enabled or not tools:
+        if not runtime_config.get_bool("TOOL_RAG_ENABLED") or not tools:
             return
         # Stable across processes (Python's hash() is per-process salted, so it could
         # never match a persisted value). Lets us skip the ~24s re-embed after a restart.
@@ -193,7 +194,7 @@ class ToolIndex:
         the embedding misses; kNN catches paraphrases BM25 misses. Over-fetch each,
         then fuse. Fail-open to None everywhere.
         """
-        if not flags.tool_rag_enabled:
+        if not runtime_config.get_bool("TOOL_RAG_ENABLED"):
             return None
         c = self._os()
         if c is None:

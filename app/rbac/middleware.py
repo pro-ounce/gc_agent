@@ -43,6 +43,7 @@ class RBACMiddleware(BaseHTTPMiddleware):
             path in _PUBLIC_PATHS
             or path.startswith("/assets")
             or path.startswith(cfg.MANAGEMENT_BASE_PATH)   # /actuator/* — actuator, guarded by IP allow-list
+            or path.startswith("/admin")                   # /admin/* — config UI, same IP allow-list guard
         ):
             return await call_next(request)
 

@@ -19,6 +19,7 @@ from typing import Any, AsyncIterator
 from app.commons import metrics as M
 from app.commons.config import cfg
 from app.commons.flags import flags
+from app.services import runtime_config
 from app.commons.logger import get_logger
 from app.mcp.prompt_registry import prompt_registry
 from app.mcp.tool_registry import is_mutation, tool_registry
@@ -103,7 +104,7 @@ def _log_prompt(session_id: str, user_id: str | None, question: str,
     retrieved for it — so a turn is diagnosable from the logs (prompt → retrieval →
     answer) without a client screenshot. Auto-carries request_id/trace_id via the logger
     context. Gated by LOG_USER_PROMPTS (default on)."""
-    if not flags.log_user_prompts:
+    if not runtime_config.get_bool("LOG_USER_PROMPTS"):
         return
     q = question or ""
     names = _schema_names(tools)
@@ -139,7 +140,7 @@ class ChatService:
 
         llm_response: LLMResponse | None = None
 
-        for iteration in range(cfg.LLM_MAX_ITERATIONS):
+        for iteration in range(runtime_config.get_int("LLM_MAX_ITERATIONS")):
             messages = session.to_llm_messages()
             llm_response = await llm().complete(messages, tools, system)
 
@@ -308,7 +309,7 @@ class ChatService:
 
         session_id = session.session_id
         nudged = False
-        for _ in range(cfg.LLM_MAX_ITERATIONS):
+        for _ in range(runtime_config.get_int("LLM_MAX_ITERATIONS")):
             if turn:
                 turn.iterations += 1
             messages = session.to_llm_messages()
@@ -389,7 +390,7 @@ class ChatService:
                     tool.requires_confirmation if tool is not None else is_mutation(tc["name"])
                 )
                 if (
-                    flags.tool_risk_confirmation
+                    runtime_config.get_bool("TOOL_RISK_CONFIRMATION")
                     and needs_confirm
                     and not session.metadata.get("bypass_confirmation")
                 ):
@@ -553,7 +554,7 @@ class ChatService:
 
             # Risk gate — pause and ask user before executing
             if (
-                flags.tool_risk_confirmation
+                runtime_config.get_bool("TOOL_RISK_CONFIRMATION")
                 and tool
                 and tool.requires_confirmation
                 and not session.metadata.get("bypass_confirmation")

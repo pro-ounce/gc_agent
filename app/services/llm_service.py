@@ -28,6 +28,7 @@ import time
 
 from app.commons import metrics as M
 from app.commons.config import cfg
+from app.services import runtime_config
 from app.commons.logger import get_logger
 
 log = get_logger(__name__)
@@ -159,14 +160,18 @@ class OllamaProvider:
             f"OLLAMA provider ready: {self._base_url}  model={self._model}"
         )
 
+    @property
+    def model(self) -> str:
+        """Live model — runtime_config override (from /admin) or the configured default."""
+        return runtime_config.get_str("LLM_MODEL") or self._model
+
     def _options(self) -> dict[str, Any]:
         """Sampling/context options — shared by every call path so streaming and
-        non-streaming can't drift (streaming previously sent none, silently running
-        at Ollama's defaults: temp 0.8 and num_ctx 4096)."""
+        non-streaming can't drift. Read from runtime_config so /admin edits apply live."""
         return {
-            "temperature": cfg.LLM_TEMPERATURE,
-            "num_predict": cfg.LLM_MAX_TOKENS,
-            "num_ctx": cfg.LLM_NUM_CTX,
+            "temperature": runtime_config.get_float("LLM_TEMPERATURE"),
+            "num_predict": runtime_config.get_int("LLM_MAX_TOKENS"),
+            "num_ctx": runtime_config.get_int("LLM_NUM_CTX"),
         }
 
     async def complete(
@@ -179,7 +184,7 @@ class OllamaProvider:
         full_messages = [{"role": "system", "content": system}] + messages
 
         payload: dict[str, Any] = {
-            "model": self._model,
+            "model": self.model,
             "messages": full_messages,
             "stream": False,
             "options": self._options(),
@@ -267,7 +272,7 @@ class OllamaProvider:
     ) -> AsyncIterator[str]:
         full_messages = [{"role": "system", "content": system}] + messages
         payload: dict[str, Any] = {
-            "model": self._model,
+            "model": self.model,
             "messages": full_messages,
             "stream": True,
             "options": self._options(),
@@ -299,7 +304,7 @@ class OllamaProvider:
         """
         full_messages = [{"role": "system", "content": system}] + messages
         payload: dict[str, Any] = {
-            "model": self._model,
+            "model": self.model,
             "messages": full_messages,
             "stream": True,
             "options": self._options(),
