@@ -147,6 +147,11 @@ class AppConfig:
     # prompt + num_predict. Lower it only if the box is memory-starved (bigger ctx = bigger KV cache).
     LLM_NUM_CTX: int = env_int("LLM_NUM_CTX", 8192) or 8192
     LLM_MAX_ITERATIONS: int = env_int("LLM_MAX_ITERATIONS", 10) or 10
+    # Cap on conversation history sent to the LLM (approx chars; ~4 chars/token). Older turns
+    # beyond this are dropped so a long-lived session can't bloat the prompt and slow every
+    # turn. The window always starts at a user turn so no tool_call/tool_result pair is
+    # orphaned. 0 = unlimited. 12000 chars ≈ 3000 tokens of recent context.
+    MAX_HISTORY_CHARS: int = env_int("MAX_HISTORY_CHARS", 12000) or 12000
     # HTTP timeout for LLM calls. CPU inference of a large prompt can take minutes, so
     # this must exceed the slowest expected turn (raise it, or move Ollama to a GPU).
     LLM_TIMEOUT_SECONDS: float = env_float("LLM_TIMEOUT_SECONDS", 300.0) or 300.0

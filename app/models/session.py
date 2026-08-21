@@ -12,6 +12,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.commons.config import cfg
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -65,6 +67,28 @@ class Session(BaseModel):
         self.messages.append(Message(role=role, content=content, **kw))
         self.touch()
 
+    def _windowed_messages(self) -> list["Message"]:
+        """Most-recent messages within MAX_HISTORY_CHARS, so a long session can't bloat the
+        prompt. Walks back accumulating content length, then trims the front to the first
+        `user` turn — a safe conversation boundary that never orphans a tool_call/tool_result
+        pair. 0 = unlimited."""
+        budget = cfg.MAX_HISTORY_CHARS
+        msgs = self.messages
+        if budget <= 0 or len(msgs) <= 1:
+            return msgs
+        total = 0
+        start = 0
+        for i in range(len(msgs) - 1, -1, -1):
+            total += len(msgs[i].content or "")
+            if total > budget:
+                start = i + 1
+                break
+        window = msgs[start:]
+        for i, m in enumerate(window):
+            if m.role == "user":
+                return window[i:]
+        return window  # no user turn in window (unusual) — keep as-is
+
     def to_llm_messages(self) -> list[dict[str, Any]]:
         """
         Convert session history to OpenAI-compatible message list for OLLAMA.
@@ -75,7 +99,7 @@ class Session(BaseModel):
           tool      → result of a tool call (tool_call_id required)
         """
         result: list[dict[str, Any]] = []
-        for msg in self.messages:
+        for msg in self._windowed_messages():
             if msg.role == "user":
                 result.append({"role": "user", "content": msg.content})
 
