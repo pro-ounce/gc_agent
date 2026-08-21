@@ -8,6 +8,7 @@ Usage:
 """
 from __future__ import annotations
 
+import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
@@ -130,7 +131,11 @@ def create_app() -> FastAPI:
     return app
 
 
-app = create_app()
+# Module-level ASGI instance for `uvicorn app:app` / `app.main:app`. Skipped when
+# APP_SKIP_INIT=1 — the factory/UDS deploy (deploy/run_uvicorn_uds.py) runs
+# `uvicorn app.main:create_app --factory`, so the app must not be built twice.
+if os.environ.get("APP_SKIP_INIT") != "1":
+    app = create_app()
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -138,6 +143,8 @@ app = create_app()
 if __name__ == "__main__":
     import uvicorn
 
+    # Dev entry — serves the module-level instance. Production/UDS deploys use the factory
+    # via deploy/run_uvicorn_uds.py (`uvicorn app.main:create_app --factory`).
     uvicorn.run(
         "app.main:app",
         host=cfg.HOST,
