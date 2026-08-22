@@ -16,7 +16,7 @@ from pathlib import Path
 from fastapi import APIRouter, Request
 from fastapi.responses import FileResponse, JSONResponse
 
-from ..commons.logger import get_logger
+from ..commons.logger import get_logger, recent_logs
 from ..routers.health import _guard  # reuse the actuator IP allow-list guard
 from ..services import backup_service, runtime_config
 
@@ -55,6 +55,15 @@ async def admin_reset_config(request: Request):
     _guard(request)
     runtime_config.reset()
     return {"params": runtime_config.get_all()}
+
+
+@router.get("/admin/logs", summary="Recent in-memory logs (turns, prompts, errors)")
+async def admin_logs(request: Request):
+    _guard(request)
+    limit = int(request.query_params.get("limit", "150"))
+    event = request.query_params.get("event") or None
+    level = request.query_params.get("level") or None
+    return {"logs": recent_logs(limit=limit, event=event, level=level)}
 
 
 @router.get("/admin/backup", summary="Backup overview — repo, schedule, snapshots, stats")

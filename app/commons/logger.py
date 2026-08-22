@@ -6,8 +6,10 @@ Mirrors delivery/app/commons/logger.py pattern.
 """
 from __future__ import annotations
 
+import collections
 import logging
 import sys
+import time as _time
 import uuid
 from contextvars import ContextVar
 from typing import Any
@@ -83,6 +85,52 @@ class _ContextFormatter(jsonlogger.JsonFormatter):
             log_record["trace_id"] = tid
 
 
+# ── In-memory ring buffer (recent logs for the /admin Logs view) ─────────────────
+_LOG_RING: collections.deque = collections.deque(maxlen=800)
+# Standard LogRecord attributes to skip when capturing the structured 'extra' fields.
+_STD_ATTRS = set(vars(logging.makeLogRecord({}))) | {"asctime", "message", "taskName"}
+
+
+def _jsonable(v: Any) -> bool:
+    return isinstance(v, (str, int, float, bool, list, dict)) or v is None
+
+
+class _RingHandler(logging.Handler):
+    """Keeps the last N log records in memory so the /admin console can show recent
+    turns (turn_summary / chat_prompt / turn_step) + errors without shell access."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            fields = {
+                k: v for k, v in record.__dict__.items()
+                if k not in _STD_ATTRS and not k.startswith("_") and _jsonable(v)
+            }
+            rid = _request_id_ctx.get()
+            if rid and "request_id" not in fields:
+                fields["request_id"] = rid
+            _LOG_RING.append({
+                "ts": _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(record.created)),
+                "level": record.levelname,
+                "logger": record.name.rsplit(".", 1)[-1],
+                "msg": record.getMessage(),
+                "fields": fields,
+            })
+        except Exception:  # noqa: BLE001 — logging must never raise
+            pass
+
+
+def recent_logs(limit: int = 150, event: str | None = None, level: str | None = None) -> list[dict]:
+    """Most-recent captured logs, newest first. Optional filter by structured event
+    (turn_summary/chat_prompt/turn_step/…) or level."""
+    items = list(_LOG_RING)
+    if event:
+        items = [r for r in items if r["fields"].get("event") == event or r["fields"].get("step") == event]
+    if level:
+        lv = level.upper()
+        items = [r for r in items if r["level"] == lv]
+    return list(reversed(items[-max(1, limit):]))
+
+
 # ── Logger factory ─────────────────────────────────────────────────────────────
 
 def _build_handler() -> logging.Handler:
@@ -101,6 +149,7 @@ def _configure_root() -> None:
         return  # Already configured
     root.setLevel(getattr(logging, cfg.LOG_LEVEL.upper(), logging.INFO))
     root.addHandler(_build_handler())
+    root.addHandler(_RingHandler())  # capture recent logs for the /admin Logs view
 
     # Silence noisy third-party loggers
     for noisy in ("httpx", "httpcore", "uvicorn.access"):

@@ -137,11 +137,14 @@
     params.forEach(function(p){ if(groups.indexOf(p.group)<0) groups.push(p.group); });
     elTabs.innerHTML = groups.map(function(g,i){
       return '<button class="admin-tab'+(i===0?" active":"")+'" data-tab="'+esc(g)+'" role="tab">'+esc(g)+'</button>';
-    }).join("") + '<button class="admin-tab" data-tab="__backups__" role="tab">Backups</button>';
+    }).join("")
+      + '<button class="admin-tab" data-tab="__backups__" role="tab">Backups</button>'
+      + '<button class="admin-tab" data-tab="__metrics__" role="tab">Metrics</button>'
+      + '<button class="admin-tab" data-tab="__logs__" role="tab">Logs</button>';
     elSections.innerHTML = groups.map(function(g,i){
       var cards = params.filter(function(p){return p.group===g;}).map(cardFor).join("");
       return '<section class="admin-section'+(i===0?" active":"")+'" data-tab="'+esc(g)+'"><div class="cards">'+cards+'</div></section>';
-    }).join("") + backupsSectionHTML();
+    }).join("") + backupsSectionHTML() + metricsSectionHTML() + logsSectionHTML();
     // tab switching
     Array.prototype.forEach.call(elTabs.children, function(btn){
       btn.addEventListener("click", function(){
@@ -170,6 +173,8 @@
       if(inp.tagName==="SELECT") inp.addEventListener("change", handler);
     });
     initBackups();
+    initMetrics();
+    initLogs();
   }
 
   // ── Backups tab (full console: repo · stats · schedule · manual · snapshots) ──
@@ -294,6 +299,85 @@
     });
     document.getElementById("bk-refresh").addEventListener("click", loadBackups);
     loadBackups();
+  }
+
+  // ── Metrics tab (renders /actuator/info) ──
+  function metricsSectionHTML(){
+    return '<section class="admin-section" data-tab="__metrics__">'
+      +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Runtime</span>'
+      +'<button id="mx-refresh" class="btn" style="padding:5px 11px">Refresh</button></div>'
+      +'<div id="mx-runtime" class="def" style="margin-top:8px">loading…</div></div>'
+      +'<div id="mx-cards" class="cards"></div></section>';
+  }
+  function tile(label, val, foot){
+    return '<div class="card"><div class="def" style="margin:0">'+esc(label)+'</div>'
+      +'<div style="font-size:26px;font-weight:600;margin-top:4px" class="mono">'+esc(val)+'</div>'
+      +(foot?'<div class="def">'+esc(foot)+'</div>':'')+'</div>';
+  }
+  function ms(v){ if(v==null) return "—"; return v>=1000?(v/1000).toFixed(2)+"s":Math.round(v)+"ms"; }
+  function num(v){ return v==null?"—":Number(v).toLocaleString("en-US"); }
+  function loadMetrics(){
+    var rt=document.getElementById("mx-runtime"); if(rt) rt.textContent="loading…";
+    fetch(ROOT+"/actuator/info",{cache:"no-store"}).then(function(r){return r.json();}).then(function(d){
+      var r=d.runtime||{}, m=d.metrics||{}, llm=m.llm||{}, turn=m.turn||{}, tools=m.tools||{}, mcp=m.mcp||{}, http=m.http||{}, chat=m.chat||{};
+      var up=r.uptime_seconds||0, uph=up>=3600?(up/3600).toFixed(1)+"h":Math.round(up/60)+"m";
+      document.getElementById("mx-runtime").innerHTML =
+        "model <b class=mono>"+esc((r.llm||{}).model||"?")+"</b> · tools loaded <b>"+num(r.tools_loaded)+"</b> · sessions <b>"+num(r.sessions)+"</b> · uptime <b>"+esc(uph)+"</b> · store <b>"+esc(r.store_backend||"?")+"</b>";
+      document.getElementById("mx-cards").innerHTML =
+        tile("Turns", num(turn.count), "avg "+ms(turn.avg_ms)+" · "+ (turn.avg_tools!=null?Number(turn.avg_tools).toFixed(1)+" tools/turn":""))
+       +tile("LLM calls", num(llm.calls), "avg "+ms(llm.avg_ms)+" / call")
+       +tile("LLM tokens", num((((llm.tokens||{}).input)||0)+(((llm.tokens||{}).output)||0)), num((llm.tokens||{}).input)+" in · "+num((llm.tokens||{}).output)+" out")
+       +tile("Tool execs", num(tools.executions), "avg "+ms(tools.avg_ms))
+       +tile("MCP requests", num(mcp.requests), "avg "+ms(mcp.avg_ms))
+       +tile("HTTP requests", num(http.requests), "avg "+ms(http.avg_ms));
+    }).catch(function(e){ document.getElementById("mx-runtime").innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; });
+  }
+  function initMetrics(){ var b=document.getElementById("mx-refresh"); if(!b) return; b.addEventListener("click",loadMetrics); loadMetrics(); }
+
+  // ── Logs tab (recent in-memory logs) ──
+  function logsSectionHTML(){
+    return '<section class="admin-section" data-tab="__logs__">'
+      +'<div class="card"><div class="top"><span class="lbl">Recent logs</span>'
+      +'<span class="btns"><select id="lg-filter" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line);border-radius:8px">'
+      +'<option value="">all</option><option value="turn_summary">turn_summary</option><option value="chat_prompt">chat_prompt</option>'
+      +'<option value="turn_step">turn_step</option><option value="__err">errors</option></select>'
+      +'<label class="switch" style="gap:6px"><input type="checkbox" id="lg-auto"><span class="track"><span class="knob"></span></span><span class="state" style="font-size:12px">auto</span></label>'
+      +'<button id="lg-refresh" class="btn" style="padding:5px 11px">Refresh</button></span></div>'
+      +'<div id="lg-list" class="def" style="margin-top:10px;max-height:60vh;overflow:auto">loading…</div></div></section>';
+  }
+  function fmtFields(f){
+    if(f.event==="turn_summary") return "total="+ms(f.total_ms)+" retrieval="+ms(f.retrieval_ms)+" llm="+ms(f.llm_ms)+" tools="+ms(f.tools_ms)+" iters="+(f.iterations!=null?f.iterations:"?")+" tok="+num(f.prompt_tokens)+"/"+num(f.completion_tokens)+(f.tools_used?" "+JSON.stringify(f.tools_used):"");
+    var skip={event:1,step:1,request_id:1,session_id:1,user_id:1,agent:1,func:1};
+    return Object.keys(f).filter(function(k){return !skip[k];}).map(function(k){return k+"="+(typeof f[k]==="object"?JSON.stringify(f[k]):f[k]);}).join(" ");
+  }
+  function loadLogs(){
+    var el=document.getElementById("lg-list"); if(!el) return;
+    var f=document.getElementById("lg-filter").value;
+    var q="?limit=200"; if(f==="__err") q+="&level=ERROR"; else if(f) q+="&event="+encodeURIComponent(f);
+    fetch(API+"/logs"+q,{cache:"no-store"}).then(function(r){return r.json();}).then(function(d){
+      var rows=(d.logs||[]).map(function(r){
+        var lc=r.level==="ERROR"?"#b91c1c":(r.level==="WARNING"?"var(--amber)":"var(--ink-2)");
+        var extra=fmtFields(r.fields||{});
+        return '<div style="border-top:1px solid var(--line);padding:6px 2px;font-size:12.5px">'
+          +'<span class="mono" style="color:var(--ink-2)">'+esc(r.ts)+'</span> '
+          +'<span class="mono" style="color:'+lc+'">'+esc(r.level)+'</span> '
+          +'<span class="mono" style="color:var(--accent)">'+esc(r.logger)+'</span> '
+          +esc(r.msg)
+          +(extra?'<div class="mono" style="color:var(--ink-2);margin-left:12px">'+esc(extra)+'</div>':'')+'</div>';
+      }).join("");
+      el.innerHTML = rows || "No logs captured yet.";
+    }).catch(function(e){ el.innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; });
+  }
+  var _lgTimer=null;
+  function initLogs(){
+    var b=document.getElementById("lg-refresh"); if(!b) return;
+    b.addEventListener("click",loadLogs);
+    document.getElementById("lg-filter").addEventListener("change",loadLogs);
+    document.getElementById("lg-auto").addEventListener("change",function(){
+      if(_lgTimer){clearInterval(_lgTimer);_lgTimer=null;}
+      if(this.checked){ _lgTimer=setInterval(loadLogs,4000); loadLogs(); }
+    });
+    loadLogs();
   }
 
   function load(){
