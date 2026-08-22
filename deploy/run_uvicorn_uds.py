@@ -75,7 +75,8 @@ def main() -> None:
     if host and port:
         # TCP mode — what the Spring gateway proxies to (localhost:17024).
         uvicorn.run(target, factory=True, host=host, port=int(port),
-                    workers=workers, log_level=log_level, log_config=None, access_log=False)
+                    workers=workers, log_level=log_level, log_config=None, access_log=False,
+                    proxy_headers=False)
         return
 
     uds_path = os.environ.get("AGENT_UDS_PATH", "/tmp/agent.sock")
@@ -108,6 +109,7 @@ def main() -> None:
             log_level=log_level,
             log_config=None,  # use the app's structured logger
             access_log=False,
+            proxy_headers=False,  # trust the direct peer (Apache/gateway hop) for _guard IP checks
         )
     finally:
         os.umask(old_umask)
