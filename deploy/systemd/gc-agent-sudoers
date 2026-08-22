@@ -1,0 +1,6 @@
+# Allow the service user to restart ONLY the agent, with no password — needed so the
+# unattended auto-deploy (gc-agent-autopull.timer) can restart after a git pull.
+# Install:  sudo cp gc-agent-sudoers /etc/sudoers.d/gc-agent && sudo chmod 440 /etc/sudoers.d/gc-agent
+# Validate: sudo visudo -c
+# Adjust the supervisorctl path if yours differs (e.g. /usr/bin/supervisorctl).
+gcusr ALL=(root) NOPASSWD: /apps/supervisor/bin/supervisorctl restart ai-agent-service

@@ -1,0 +1,11 @@
+[Unit]
+Description=Run GC Agent auto-deploy check every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+AccuracySec=15s
+Unit=gc-agent-autopull.service
+
+[Install]
+WantedBy=timers.target

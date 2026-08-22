@@ -1,0 +1,11 @@
+[Unit]
+Description=GC Agent auto-deploy — poll origin/main and deploy on new commits
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=gcusr
+WorkingDirectory=/apps/gc_agent
+# Adjust the path if the checkout lives elsewhere.
+ExecStart=/apps/gc_agent/deploy/autopull.sh
