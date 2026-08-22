@@ -232,8 +232,10 @@ class AppConfig:
     # GC_USER_JWT_SECRET. Disable to fall back to MCP_BEARER_TOKEN / no credential.
     GC_MINT_DISCOVERY_TOKEN: bool = env_bool("GC_MINT_DISCOVERY_TOKEN", True)
     GC_SERVICE_USER_ID: str = env_str("GC_SERVICE_USER_ID", "1") or "1"
-    # Platform usernames are UPPERCASE; keep the minted token's uname in that convention.
-    GC_SERVICE_USERNAME: str = env_str("GC_SERVICE_USERNAME", "GC-AGENT") or "GC-AGENT"
+    # Mint as a REAL platform user so MCP accepts the discovery token (a synthetic uname can
+    # be rejected if MCP resolves the user). userId 1 = GCADMIN. Used only for the agent's
+    # own tokenless discovery/health calls — never for tool execution (chats forward the caller).
+    GC_SERVICE_USERNAME: str = env_str("GC_SERVICE_USERNAME", "GCADMIN") or "GCADMIN"
     GC_INTERNAL_ISSUER: str = env_str("GC_INTERNAL_ISSUER", "GC_INTERNAL") or "GC_INTERNAL"
     GC_INTERNAL_AUDIENCE: str = env_str("GC_INTERNAL_AUDIENCE", "GC_INTERNAL_API") or "GC_INTERNAL_API"
     # Verify issuer/audience on the internal token? Default OFF — the gateway signs with the

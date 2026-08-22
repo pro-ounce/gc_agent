@@ -196,13 +196,18 @@ class MCPClient:
     # ── Health ────────────────────────────────────────────────────────────────
 
     async def health(self) -> dict[str, Any]:
-        """Probe by calling GET {base}/tools — UP if it responds."""
+        """Probe by calling GET {base}/tools. A 401/403 means MCP is UP — it answered, just
+        rejected this (tokenless) health probe; that's reachability, which is what health
+        asks. Only a connection error / timeout (no status) is genuinely DOWN."""
         try:
             resp = await self._get("/tools")
             data = resp.json()
-            tool_count = len(data.get("result", []))
-            return {"status": "UP", "tools": tool_count}
-        except Exception as exc:
+            return {"status": "UP", "tools": len(data.get("result", []))}
+        except MCPClientError as exc:
+            if exc.status_code in (401, 403):
+                return {"status": "UP", "detail": "reachable (auth-gated probe)"}
+            return {"status": "DOWN", "error": str(exc)}
+        except Exception as exc:  # noqa: BLE001
             return {"status": "DOWN", "error": str(exc)}
 
     # ── Private HTTP helpers ──────────────────────────────────────────────────
