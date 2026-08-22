@@ -87,6 +87,12 @@
 <script>
 (function(){
   "use strict";
+  // Base-path aware: works served at /admin OR behind a proxy prefix (/<prefix>/admin).
+  var _ai = location.pathname.indexOf("/admin");
+  var API = _ai >= 0 ? location.pathname.slice(0, _ai + 6) : "/admin";   // ".../admin"
+  var ROOT = API.replace(/\/admin$/, "");                                // proxy prefix ("" if none)
+  var _mlink = document.querySelector(".header-actions a");
+  if (_mlink) _mlink.href = ROOT + "/actuator/info";
   var $ = function(s,r){return (r||document).querySelector(s);};
   var elTabs = $("#tabs"), elSections = $("#sections"), elStatus = $("#status");
   var btnSave = $("#btn-save"), btnReset = $("#btn-reset");
@@ -252,7 +258,7 @@
 
   function loadBackups(){
     var el = document.getElementById("bk-list"); if(el) el.textContent = "loading…";
-    fetch("/admin/backup",{cache:"no-store"}).then(function(r){return r.json();}).then(renderOverview)
+    fetch(API+"/backup",{cache:"no-store"}).then(function(r){return r.json();}).then(renderOverview)
       .catch(function(e){ if(el) el.innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; });
   }
 
@@ -272,18 +278,18 @@
     take.addEventListener("click", function(){
       var label=(document.getElementById("bk-label").value||"").trim();
       take.disabled=true;
-      post("/admin/backup",{label:label},document.getElementById("bk-status"),"snapshot started ✓")
+      post(API+"/backup",{label:label},document.getElementById("bk-status"),"snapshot started ✓")
         .then(function(res){ if(res.ok) setTimeout(loadBackups,1500); }).finally(function(){ take.disabled=false; });
     });
     document.getElementById("bk-sch-save").addEventListener("click", function(){
       var cron=(document.getElementById("bk-sch-cron").value||"").trim();
       var ret=parseInt(document.getElementById("bk-sch-ret").value,10);
-      post("/admin/backup/schedule",{cron:cron,retention_days:ret,enabled:true},document.getElementById("bk-sch-status"),"schedule saved ✓")
+      post(API+"/backup/schedule",{cron:cron,retention_days:ret,enabled:true},document.getElementById("bk-sch-status"),"schedule saved ✓")
         .then(function(res){ if(res.ok) renderOverview(res.d.snapshots!=null?res.d:{schedule:res.d}); loadBackups(); });
     });
     document.getElementById("bk-sch-toggle").addEventListener("click", function(){
       var next=this.dataset.next==="true";
-      post("/admin/backup/schedule/toggle",{enabled:next},document.getElementById("bk-sch-status"),next?"enabled ✓":"disabled ✓")
+      post(API+"/backup/schedule/toggle",{enabled:next},document.getElementById("bk-sch-status"),next?"enabled ✓":"disabled ✓")
         .then(function(){ loadBackups(); });
     });
     document.getElementById("bk-refresh").addEventListener("click", loadBackups);
@@ -292,7 +298,7 @@
 
   function load(){
     setStatus("loading…","");
-    fetch("/admin/config",{headers:{Accept:"application/json"},cache:"no-store"})
+    fetch(API+"/config",{headers:{Accept:"application/json"},cache:"no-store"})
       .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
       .then(function(d){ params = d.params||[]; pending={}; render(); markDirty(); setStatus("",""); })
       .catch(function(e){ setStatus("Failed to load: "+e.message,"err"); });
@@ -301,7 +307,7 @@
   btnSave.addEventListener("click", function(){
     if(!Object.keys(pending).length) return;
     btnSave.disabled=true; setStatus("saving…","");
-    fetch("/admin/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({updates:pending})})
+    fetch(API+"/config",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({updates:pending})})
       .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
       .then(function(d){ params=d.params||[]; pending={}; render(); setStatus("Saved ✓","ok"); setTimeout(function(){setStatus("","");},2500); })
       .catch(function(e){ setStatus("Save failed: "+e.message,"err"); btnSave.disabled=false; });
@@ -310,7 +316,7 @@
   btnReset.addEventListener("click", function(){
     if(!confirm("Reset ALL parameters to their .env defaults?")) return;
     setStatus("resetting…","");
-    fetch("/admin/config/reset",{method:"POST"})
+    fetch(API+"/config/reset",{method:"POST"})
       .then(function(r){ if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); })
       .then(function(d){ params=d.params||[]; pending={}; render(); setStatus("Reset to defaults ✓","ok"); setTimeout(function(){setStatus("","");},2500); })
       .catch(function(e){ setStatus("Reset failed: "+e.message,"err"); });
