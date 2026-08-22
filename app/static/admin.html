@@ -66,7 +66,6 @@
   <header class="header">
     <div class="header-content">
       <div class="logo-text"><h1>GC Agent · Admin</h1><p>Runtime configuration &amp; controls</p></div>
-      <div class="header-actions"><a href="/actuator/info" title="Metrics">Metrics</a></div>
     </div>
   </header>
 
@@ -90,9 +89,7 @@
   // Base-path aware: works served at /admin OR behind a proxy prefix (/<prefix>/admin).
   var _ai = location.pathname.indexOf("/admin");
   var API = _ai >= 0 ? location.pathname.slice(0, _ai + 6) : "/admin";   // ".../admin"
-  var ROOT = API.replace(/\/admin$/, "");                                // proxy prefix ("" if none)
-  var _mlink = document.querySelector(".header-actions a");
-  if (_mlink) _mlink.href = ROOT + "/actuator/info";
+  var ROOT = API.replace(/\/admin$/, "");                                // proxy prefix ("" if none) — used by the Metrics tab
   var $ = function(s,r){return (r||document).querySelector(s);};
   var elTabs = $("#tabs"), elSections = $("#sections"), elStatus = $("#status");
   var btnSave = $("#btn-save"), btnReset = $("#btn-reset");
