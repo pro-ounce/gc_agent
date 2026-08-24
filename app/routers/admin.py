@@ -24,7 +24,9 @@ log = get_logger(__name__)
 
 router = APIRouter(tags=["admin"])
 
-_ADMIN_HTML = Path(__file__).resolve().parent.parent / "static" / "admin.html"
+_STATIC_DIR = Path(__file__).resolve().parent.parent / "static"
+_ADMIN_HTML = _STATIC_DIR / "admin.html"
+_ADMIN_JS = _STATIC_DIR / "admin.js"
 
 
 @router.get("/admin", include_in_schema=False)
@@ -33,6 +35,16 @@ async def admin_page(request: Request):
     if _ADMIN_HTML.exists():
         return FileResponse(str(_ADMIN_HTML))
     return JSONResponse({"detail": "admin UI not found"}, status_code=404)
+
+
+@router.get("/admin.js", include_in_schema=False)
+async def admin_js(request: Request):
+    # Served here (not from /static) so it shares the /admin IP-guard and stays
+    # RBAC-exempt; also lets the strict CSP keep script-src 'self' (no inline).
+    _guard(request)
+    if _ADMIN_JS.exists():
+        return FileResponse(str(_ADMIN_JS), media_type="application/javascript")
+    return JSONResponse({"detail": "admin.js not found"}, status_code=404)
 
 
 @router.get("/admin/config", summary="Current runtime config (values + defaults)")
