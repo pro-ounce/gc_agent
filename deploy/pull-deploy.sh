@@ -48,6 +48,20 @@ if [ "$old" = "$new" ]; then
   echo "==> Already up to date."
 fi
 
+# 2b. Deploy convention: git ships the package as app/, but the target runs it as
+# app_<name>. A *rename* would break git pull (git tracks app/); instead expose the
+# renamed name as a symlink → app, and locally-ignore it so git status stays clean.
+# The runner prefers app_<name>, so it runs under that name; git only ever manages app/.
+PKG="${AGENT_PKG:-app_gc_agent}"
+if [ "$PKG" != "app" ] && [ -d app ]; then
+  if [ ! -L "$PKG" ]; then
+    rm -rf "$PKG"                     # drop a stale real dir from a prior rsync deploy
+    ln -s app "$PKG"
+    echo "==> linked ${PKG} -> app"
+  fi
+  grep -qxF "/$PKG" .git/info/exclude 2>/dev/null || echo "/$PKG" >> .git/info/exclude
+fi
+
 # 3. Reinstall deps only if requirements.txt changed.
 if [ "$(_sha requirements.txt || true)" != "$req_before" ]; then
   echo "==> requirements.txt changed — installing deps ..."
