@@ -46,8 +46,11 @@ def mint_service_token(ttl_seconds: int = 300) -> str | None:
     now = datetime.now(timezone.utc)
     payload = {
         "sub": cfg.GC_SERVICE_USER_ID,
+        "sid": cfg.GC_SERVICE_USER_ID,
         "uname": cfg.GC_SERVICE_USERNAME,
         "iss": cfg.GC_USER_JWT_ISSUER,
+        "aud": cfg.GC_USER_JWT_AUDIENCE,          # MCP gc-jwt-filter: required audience (GC360_API)
+        cfg.GC_TOKEN_TYPE_CLAIM: cfg.GC_ACCESS_TOKEN_TYPE,  # X_TP=ACCESS — MCP rejects otherwise
         "authorities": ["ADMIN"],
         "iat": now,
         "exp": now + timedelta(seconds=max(30, ttl_seconds)),

@@ -226,6 +226,12 @@ class AppConfig:
     # from the internal key above. Accepts ENC(...) (same jasypt password).
     GC_USER_JWT_SECRET: str | None = _secret("GC_USER_JWT_SECRET")
     GC_USER_JWT_ISSUER: str = env_str("GC_USER_JWT_ISSUER", "GC360") or "GC360"
+    # MCP's gc-jwt-filter validates a user/access token by audience (aud) + a token-type claim
+    # (X_TP == ACCESS). The discovery token must carry both or MCP 401s ("invalid audience" /
+    # "token type is not ACCESS"). Values match the platform's GC360 access token.
+    GC_USER_JWT_AUDIENCE: str = env_str("GC_USER_JWT_AUDIENCE", "GC360_API") or "GC360_API"
+    GC_TOKEN_TYPE_CLAIM: str = env_str("GC_TOKEN_TYPE_CLAIM", "X_TP") or "X_TP"
+    GC_ACCESS_TOKEN_TYPE: str = env_str("GC_ACCESS_TOKEN_TYPE", "ACCESS") or "ACCESS"
     # The agent signs its OWN short-lived token (same iss=GC360 user-JWT shape MCP accepts
     # from the gateway) for tokenless MCP calls — startup/health tool discovery, which carry
     # no caller token. Real chats forward the caller's token instead. Signed with
