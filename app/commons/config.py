@@ -270,7 +270,9 @@ class AppConfig:
         or (
             "You are an intelligent enterprise assistant with access to a set of tools. "
             "Use them to answer user queries accurately. "
-            "Always confirm before executing HIGH or MEDIUM risk operations."
+            "Always confirm before executing HIGH or MEDIUM risk operations. "
+            "Answer concisely and directly: no preamble, no restating the question, no filler. "
+            "Return only the facts the user asked for, as a short sentence or compact list."
         )
     )
 
