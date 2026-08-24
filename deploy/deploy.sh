@@ -58,9 +58,14 @@ _deploy() {
   sed -i.bak '/^BUILD_COMMIT=/d; /^BUILD_TIME=/d' .env && rm -f .env.bak
   printf 'BUILD_COMMIT=%s\nBUILD_TIME=%s\n' "${NEW}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> .env
 
-  # 6. Restart.
-  sudo supervisorctl restart "${D_SVC}" 2>/dev/null \
-    || sudo /apps/supervisor/bin/supervisorctl restart "${D_SVC}"
+  # 6. Restart. Resolve supervisorctl explicitly — a non-login systemd shell
+  #    (autopull.service) may not have it on PATH, and a wrong path fails silently.
+  SVCTL="$(command -v supervisorctl || true)"
+  [ -n "${SVCTL}" ] || for p in /usr/bin/supervisorctl /usr/local/bin/supervisorctl /apps/supervisor/bin/supervisorctl; do
+    [ -x "$p" ] && SVCTL="$p" && break
+  done
+  if [ -z "${SVCTL}" ]; then echo "==> ERROR: supervisorctl not found; restart skipped" >&2; exit 1; fi
+  sudo "${SVCTL}" restart "${D_SVC}"
   echo "==> deployed ${NEW} on $(hostname)"
 }
 
