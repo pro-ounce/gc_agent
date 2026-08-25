@@ -209,6 +209,25 @@ def blocks_from_outputs(outputs: list[tuple[str, Any, bool]]) -> list[UIBlock]:
     return blocks
 
 
+def lead_in(blocks: list[UIBlock]) -> str:
+    """A one-line header to show above rendered blocks when the synthesis LLM call is
+    skipped (the data is IN the blocks, so the text must not re-list it)."""
+    if not blocks:
+        return ""
+    b = blocks[0]
+    if b.type == "notice":                 # a notice already carries the full message
+        return b.text or ""
+    if b.type == "table":
+        n = len(b.rows or [])
+        return f"Here {'is' if n == 1 else 'are'} {n} result{'' if n == 1 else 's'}:"
+    if b.type == "list":
+        n = len(b.items or [])
+        return f"Here {'is' if n == 1 else 'are'} {n} item{'' if n == 1 else 's'}:"
+    if b.type == "fields":
+        return "Here are the details:"
+    return "Here's what I found:"
+
+
 def blocks_to_text(blocks: list[UIBlock]) -> str:
     """Flatten blocks to a plain-text fallback for `assistant_message` (clients that
     don't render blocks still get readable content)."""

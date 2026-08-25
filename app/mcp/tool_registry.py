@@ -190,6 +190,46 @@ class ToolRegistry:
             )
             arguments["applicationId"] = resolved
 
+    @staticmethod
+    def _caller_user_id(request_headers: dict[str, str] | None) -> str | None:
+        """The current user's id from the caller/forwarded JWT (sub claim)."""
+        if not request_headers:
+            return None
+        auth = None
+        for k in ("Authorization", "authorization", cfg.GC_INTERNAL_HEADER):
+            v = request_headers.get(k)
+            if v:
+                auth = v
+                break
+        if not auth:
+            return None
+        raw = auth.split(" ", 1)[1] if auth.lower().startswith("bearer ") else auth
+        try:
+            import jwt as _jwt
+            claims = _jwt.decode(raw, options={"verify_signature": False})
+            return claims.get("sub") or claims.get("userId") or claims.get("user_id")
+        except Exception:  # noqa: BLE001
+            return None
+
+    async def _apply_default_user_scope(
+        self, tool_name: str, arguments: dict[str, Any], request_headers: dict[str, str] | None
+    ) -> None:
+        """Personal-assistant default: a tool that filters by userId, called with no user
+        identifier, is scoped to the caller — so 'my apps/roles' means mine, not everyone's."""
+        if not cfg.DEFAULT_USER_SCOPE:
+            return
+        tool = await self.get_tool(tool_name)
+        if not tool or not any(p.name.lower() == "userid" for p in tool.parameters):
+            return
+        if any(str(arguments.get(k) or "").strip() for k in ("userId", "userid", "username", "userName")):
+            return  # the model already named a user — respect it
+        uid = self._caller_user_id(request_headers)
+        if uid:
+            arguments["userId"] = uid
+            log.bind(func="user_scope", tool=tool_name, userId=str(uid)).info(
+                f"scoped {tool_name} to caller userId={uid}"
+            )
+
     async def execute(
         self,
         tool_name: str,
@@ -204,6 +244,7 @@ class ToolRegistry:
         # not by numeric id. If applicationId is non-numeric, resolve it here so any
         # application-scoped tool works without depending on the model to chain a lookup.
         await self._resolve_application_id(arguments, request_headers)
+        await self._apply_default_user_scope(tool_name, arguments, request_headers)
         start = _time.perf_counter()
         try:
             raw = await mcp_client.execute_tool(tool_name, arguments, request_headers)

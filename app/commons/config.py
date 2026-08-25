@@ -174,6 +174,13 @@ class AppConfig:
     # needs to turn a name/code into an id (getAllApplications_get → applicationId). Without
     # pinning, a "roles for app X" query may not surface the app lookup, so the chain breaks.
     TOOL_RAG_PINNED: str = env_str("TOOL_RAG_PINNED", "") or ""
+    # Structured-response mode: when read-only tool results already render as UIBlocks,
+    # skip the final LLM synthesis call and emit a one-line lead-in + the blocks. Kills the
+    # stream-prose-then-table double render and the generation latency for data lookups.
+    SKIP_SYNTHESIS_WITH_BLOCKS: bool = env_bool("SKIP_SYNTHESIS_WITH_BLOCKS", True)
+    # Personal-assistant default: a user-scoped tool (has a userId param) called with no user
+    # identifier is scoped to the caller — so "my apps/roles" means mine, not everyone's.
+    DEFAULT_USER_SCOPE: bool = env_bool("DEFAULT_USER_SCOPE", True)
 
     # Session / KV store backend: "opensearch" (default) | "redis" | "memory".
     # We run on OpenSearch (already in the estate); Redis can be added later by flipping this.
@@ -281,7 +288,12 @@ class AppConfig:
             # name directly and it is resolved to the numeric id before the call.
             "When a query is about a named application (e.g. 'FORMULATION'), call the "
             "application-scoped tool directly and pass the application code or name as "
-            "applicationId — the system resolves it to the numeric id automatically."
+            "applicationId — the system resolves it to the numeric id automatically. "
+            # Self-scope: 'my …' means the current user.
+            "When the user asks about their OWN data ('my applications', 'my roles', 'do I "
+            "have access'), use the user-scoped tool (e.g. getUserAppsByUserId) — NOT the "
+            "getAll… variants that return every user. You may omit userId; the system fills "
+            "in the current user."
         )
     )
 

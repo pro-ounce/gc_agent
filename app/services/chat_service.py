@@ -25,7 +25,7 @@ from ..mcp.prompt_registry import prompt_registry
 from ..mcp.tool_registry import is_mutation, tool_registry
 from ..models.chat import ChatResponse, StreamChunk
 from ..models.mcp import PendingAction
-from ..services.ui_blocks import blocks_from_outputs, blocks_to_text
+from ..services.ui_blocks import blocks_from_outputs, blocks_to_text, lead_in
 from ..models.session import Session
 from ..services.llm_service import LLMResponse, ToolCall, llm
 from ..services.session_service import session_service
@@ -182,6 +182,25 @@ class ChatService:
                     model=llm_response.model,
                     usage=llm_response.usage,
                     finish_reason="tool_confirmation_required",
+                )
+
+            # Structured-response mode (Approach B): read-only tool results already render as
+            # blocks → skip the synthesis call, emit a one-line lead-in + blocks.
+            blocks = blocks_from_outputs(tool_outputs)
+            if (blocks and cfg.SKIP_SYNTHESIS_WITH_BLOCKS
+                    and not any(is_mutation(n) for n in tool_calls_made)):
+                lead = lead_in(blocks)
+                session.add_assistant(lead)
+                session_service.save(session)
+                return ChatResponse(
+                    session_id=session_id,
+                    message_id=str(uuid.uuid4()),
+                    assistant_message=lead,
+                    blocks=blocks,
+                    tool_calls_made=tool_calls_made,
+                    model=llm_response.model,
+                    usage=llm_response.usage,
+                    finish_reason="stop",
                 )
 
         # Final assistant message + structured blocks (rendered from the actual tool
@@ -433,6 +452,22 @@ class ChatService:
             )
             for tc, output in executed:
                 session.add_tool_result(tc["id"], tc["name"], output)
+
+            # Structured-response mode (Approach B): if the read-only results render as blocks,
+            # skip the synthesis LLM call and finish now with a one-line lead-in + blocks. This
+            # removes the stream-prose-then-swap-to-table double render and its generation cost.
+            if (executed and pending_tc is None and cfg.SKIP_SYNTHESIS_WITH_BLOCKS
+                    and not any(is_mutation(tc["name"]) for tc, _ in executed)):
+                sblocks = blocks_from_outputs(tool_outputs)
+                if sblocks:
+                    lead = lead_in(sblocks)
+                    session.add_assistant(lead)
+                    session_service.save(session)
+                    if turn:
+                        turn.finish("stop")
+                    yield StreamChunk(type="done", session_id=session_id, content=lead,
+                                      blocks=sblocks, finish_reason="stop")
+                    return
 
             if pending_tc is not None:
                 risk = (pending_tool.risk_level if pending_tool else "HIGH").upper()
