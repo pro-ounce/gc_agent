@@ -75,6 +75,7 @@ class StreamChunk(BaseModel):
     type: Literal["delta", "tool_use", "confirm_required", "done", "error"]
     session_id: str
     content: str = ""
+    blocks: list[UIBlock] = Field(default_factory=list)  # populated on the final "done" chunk
     pending_action: PendingAction | None = None
     finish_reason: str | None = None
     error: str | None = None

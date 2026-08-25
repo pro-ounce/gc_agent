@@ -319,6 +319,7 @@ class ChatService:
 
         session_id = session.session_id
         nudged = False
+        tool_outputs: list[tuple[str, Any, bool]] = []
         for _ in range(runtime_config.get_int("LLM_MAX_ITERATIONS")):
             if turn:
                 turn.iterations += 1
@@ -385,7 +386,8 @@ class ChatService:
                 session_service.save(session)
                 if turn:
                     turn.finish("stop")
-                yield StreamChunk(type="done", session_id=session_id, content=text, finish_reason="stop")
+                yield StreamChunk(type="done", session_id=session_id, content=text,
+                                  blocks=blocks_from_outputs(tool_outputs), finish_reason="stop")
                 return
 
             # Run tools inline; STOP at the first one that needs confirmation.
@@ -414,6 +416,7 @@ class ChatService:
                     turn.tools_s += time.perf_counter() - _t_tool
                     turn.tool(tc["name"])
                 output = str(result.output) if result.success else f"Error: {result.error}"
+                tool_outputs.append((tc["name"], result.output if result.success else result.error, result.success))
                 executed.append((tc, output))
 
             # Record the assistant turn with exactly the tool_calls we handle (the ones run
@@ -460,7 +463,8 @@ class ChatService:
 
         if turn:
             turn.finish("max_iterations")
-        yield StreamChunk(type="done", session_id=session_id, content="", finish_reason="max_iterations")
+        yield StreamChunk(type="done", session_id=session_id, content="",
+                          blocks=blocks_from_outputs(tool_outputs), finish_reason="max_iterations")
 
     # ── Action confirmation ───────────────────────────────────────────────────
 

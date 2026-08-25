@@ -148,6 +148,7 @@ async def agent_reply(
         message="Chat agent reply generated successfully",
         data={
             "reply": result.assistant_message,
+            "blocks": [b.model_dump() for b in result.blocks],
             "sessionId": session_id,
             "agentId": agent,
             "scope": scope,
