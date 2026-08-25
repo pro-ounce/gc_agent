@@ -28,6 +28,7 @@ from ..models.platform import ApiResponse
 from ..rbac.middleware import get_current_user
 from ..rbac.models import User
 from ..services.chat_service import chat_service
+from ..services.session_service import session_service
 from ..mcp.tool_registry import tool_registry
 
 log = get_logger(__name__)
@@ -122,6 +123,33 @@ async def agent_me(
     display = first or full or (user.username if user.username not in ("", "anonymous") else "there")
     return ApiResponse.ok(message="ok", data={
         "userName": user.username, "firstName": first, "fullName": full, "displayName": display,
+    })
+
+
+@router.get("/{agent}/resume", summary="Resume hint — the user's last question, to pick up where they left off")
+async def agent_resume(
+    agent: str,
+    request: Request,
+    sessionId: str = "",
+    user: User = Depends(get_current_user),
+) -> ApiResponse:
+    """Look at the caller's most recent conversation and return their last question, so the UI
+    can offer a 'pick up where you left off' suggestion."""
+    sess = session_service.get(sessionId) if sessionId else None
+    if sess is None:
+        listed = session_service.list_sessions(user.id) or []
+        listed.sort(key=lambda s: str(s.get("updated_at") or ""), reverse=True)
+        for item in listed:
+            s = session_service.get(item.get("session_id", ""))
+            if s and any(m.role == "user" for m in s.messages):
+                sess = s
+                break
+    if not sess or not sess.messages:
+        return ApiResponse.ok(message="ok", data={"hasHistory": False})
+    last_q = next((m.content for m in reversed(sess.messages) if m.role == "user"), None)
+    return ApiResponse.ok(message="ok", data={
+        "hasHistory": bool(last_q), "sessionId": sess.session_id,
+        "lastQuestion": last_q, "messageCount": len(sess.messages),
     })
 
 
