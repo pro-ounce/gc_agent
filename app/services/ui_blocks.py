@@ -34,14 +34,25 @@ def _coerce(value: Any) -> Any:
     return value
 
 
+_ENVELOPE_SIBLINGS = {"success", "status", "statuscode", "message", "errors", "error", "code", "timestamp"}
+
+
 def _unwrap(data: Any) -> Any:
-    """Peel common single-key envelopes so we card the payload, not the wrapper."""
+    """Peel common wrappers so we card the payload, not the envelope:
+    - the GC standard {success, message, statusCode, data, errors} → its `data`
+    - any single-key {k: <dict|list>} wrapper."""
     for _ in range(3):
-        if isinstance(data, dict) and len(data) == 1:
-            only = next(iter(data.values()))
-            if isinstance(only, (dict, list)):
-                data = only
+        if isinstance(data, dict):
+            # GC envelope: a `data` payload surrounded by status/meta siblings.
+            if "data" in data and isinstance(data["data"], (dict, list)) and \
+                    all(k.lower() in _ENVELOPE_SIBLINGS or k == "data" for k in data):
+                data = data["data"]
                 continue
+            if len(data) == 1:
+                only = next(iter(data.values()))
+                if isinstance(only, (dict, list)):
+                    data = only
+                    continue
         break
     return data
 
@@ -61,7 +72,7 @@ def _humanize(key: str) -> str:
             out.append(" ")
         out.append(ch)
         prev_lower = ch.islower()
-    words = " ".join(out.split())
+    words = " ".join("".join(out).split())
     return words[:1].upper() + words[1:] if words else key
 
 
