@@ -378,8 +378,11 @@ class ChatService:
         # one-line lead-in — no re-run LLM synthesis (which garbles on a bare result turn).
         render_out, render_name = result.output, tool_name
         if result.success:
-            render_out, render_name = await self._run_skill_chain(
-                tool_name, tool_args, result.output, request_headers)
+            async for _ev in self._skill_chain_events(tool_name, tool_args, result.output, request_headers):
+                if _ev[0] == "status":
+                    yield StreamChunk(type="tool_use", session_id=session_id, content=_ev[1])
+                elif _ev[0] == "result":
+                    render_out, render_name = _ev[1], _ev[2]
         blocks = blocks_from_outputs([(render_name, render_out if result.success else result.error, result.success)])
         lead = lead_in(blocks) if blocks else (output or "Done.")
         session.add_assistant(lead)
@@ -594,40 +597,38 @@ class ChatService:
                 return " ".join(errs)
         return None
 
-    async def _run_skill_chain(
+    async def _skill_chain_events(
         self, entry_tool: str, entry_args: dict[str, Any], entry_output: Any,
         request_headers: dict[str, str] | None,
-    ) -> tuple[Any, str]:
-        """After a confirmed skill's entry tool, run its `then` steps deterministically,
-        threading each step's captured outputs into the next. Returns (output_to_render,
-        source_tool_name)."""
+    ):
+        """Async generator for a skill's `then` dependency chain. Yields ("status", text)
+        BEFORE each step (so the UI can show 'Fetching…/Assigning…' progress), then a final
+        ("result", output, source_tool). Threads each step's captured outputs into the next."""
         skill = skills.by_tool(entry_tool)
         render_out, render_name = entry_output, entry_tool
-        if not skill or not skill.then:
-            return render_out, render_name
-        ctx: dict[str, Any] = dict(entry_args or {})
-        for step in skill.then:
-            args = skills.resolve_step_args(step, ctx)
-            try:
-                res = await tool_registry.execute(step.tool, args, request_headers)
-            except Exception as exc:  # noqa: BLE001
-                log.bind(func="skill_chain", step=step.tool).warning(f"chain step failed: {exc}")
-                if step.optional:
-                    continue
-                break
-            if not res.success:
-                if step.optional:
-                    continue
-                log.bind(func="skill_chain", step=step.tool).warning("chain step returned failure; stopping")
-                break
-            for ck, path in step.capture.items():
-                ctx[ck] = skills.dig(res.output, path)
-            if step.render:
-                render_out, render_name = res.output, step.tool
-            log.bind(func="skill_chain", step=step.tool, captured=list(step.capture)).info(
-                f"chain step {step.tool} ok"
-            )
-        return render_out, render_name
+        if skill and skill.then:
+            ctx: dict[str, Any] = dict(entry_args or {})
+            for step in skill.then:
+                yield ("status", _friendly_status(step.tool))
+                args = skills.resolve_step_args(step, ctx)
+                try:
+                    res = await tool_registry.execute(step.tool, args, request_headers)
+                except Exception as exc:  # noqa: BLE001
+                    log.bind(func="skill_chain", step=step.tool).warning(f"chain step failed: {exc}")
+                    if step.optional:
+                        continue
+                    break
+                if not res.success:
+                    if step.optional:
+                        continue
+                    log.bind(func="skill_chain", step=step.tool).warning("chain step failed; stopping")
+                    break
+                for ck, path in step.capture.items():
+                    ctx[ck] = skills.dig(res.output, path)
+                if step.render:
+                    render_out, render_name = res.output, step.tool
+                log.bind(func="skill_chain", step=step.tool).info(f"chain step {step.tool} ok")
+        yield ("result", render_out, render_name)
 
     # ── Action confirmation ───────────────────────────────────────────────────
 
@@ -679,8 +680,10 @@ class ChatService:
         # Run the skill's dependency chain (if any), threading the entry's collected args.
         render_out, render_name = result.output, pending.tool_name
         if result.success:
-            render_out, render_name = await self._run_skill_chain(
-                pending.tool_name, pending.tool_args, result.output, request_headers)
+            async for _ev in self._skill_chain_events(
+                pending.tool_name, pending.tool_args, result.output, request_headers):
+                if _ev[0] == "result":
+                    render_out, render_name = _ev[1], _ev[2]
 
         # Render the outcome as a block (success/error notice or a card) rather than a
         # re-run LLM synthesis — which tends to hallucinate on a bare tool-result turn.
