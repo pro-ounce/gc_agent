@@ -49,6 +49,31 @@ def _looks_like_unfulfilled_intent(text: str) -> bool:
     return bool(t) and _INTENT_RE.search(t) is not None
 
 
+# Never leave the user with a blank bubble — a graceful fallback when the model produced
+# neither text, a tool call, nor blocks.
+_EMPTY_FALLBACK = (
+    "I couldn't find an answer for that. Could you rephrase or add a bit more detail — "
+    "for example the application, user, or exactly what you'd like me to do?"
+)
+
+_STATUS_GERUND = {
+    "get": "Fetching", "list": "Fetching", "fetch": "Fetching", "search": "Searching",
+    "find": "Finding", "check": "Checking", "add": "Adding", "create": "Creating",
+    "update": "Updating", "delete": "Deleting", "assign": "Assigning",
+    "deactivate": "Deactivating", "activate": "Activating",
+}
+
+
+def _friendly_status(tool_name: str) -> str:
+    """Human 'working on it' line for a tool call, e.g. getUserProfile_get → 'Fetching user profile…'."""
+    from .ui_blocks import _humanize
+    words = _humanize(tool_name).split()
+    if words and words[0].lower() in _STATUS_GERUND:
+        rest = " ".join(words[1:]).lower().strip()
+        return f"{_STATUS_GERUND[words[0].lower()]} {rest or 'the data'}…"
+    return f"Working on {_humanize(tool_name).lower()}…"
+
+
 # Markers that signal the model is emitting a tool call AS TEXT (qwen does this instead of a
 # structured tool_call) — a fenced code block, a <tool_call> tag, or a bare {"name": …}. The
 # _extract_text_tool_calls fallback recovers the real call, but the raw JSON (and any
@@ -212,7 +237,7 @@ class ChatService:
 
         # Final assistant message + structured blocks (rendered from the actual tool
         # results, not the model's prose — see services/ui_blocks).
-        final_text = llm_response.text if llm_response else "I was unable to process your request."
+        final_text = ((llm_response.text or "").strip() if llm_response else "") or _EMPTY_FALLBACK
         blocks = blocks_from_outputs(tool_outputs)
         # If the model returned no prose but we have data, give a plain-text fallback so
         # non-block clients aren't left empty.
@@ -329,7 +354,7 @@ class ChatService:
                               content="Action cancelled.", finish_reason="cancelled")
             return
 
-        yield StreamChunk(type="tool_use", session_id=session_id, content=f"Running {tool_name}…")
+        yield StreamChunk(type="tool_use", session_id=session_id, content=_friendly_status(tool_name))
         with turn.phase("tools"):
             result = await tool_registry.execute(tool_name, tool_args, request_headers)
         turn.tool(tool_name)
@@ -422,12 +447,14 @@ class ChatService:
                     )
                     session_service.save(session)
                     continue
+                sblocks = blocks_from_outputs(tool_outputs)
+                text = (text or "").strip() or ("" if sblocks else _EMPTY_FALLBACK)
                 session.add_assistant(text)
                 session_service.save(session)
                 if turn:
                     turn.finish("stop")
                 yield StreamChunk(type="done", session_id=session_id, content=text,
-                                  blocks=blocks_from_outputs(tool_outputs), finish_reason="stop")
+                                  blocks=sblocks, finish_reason="stop")
                 return
 
             # Run tools inline; STOP at the first one that needs confirmation.
@@ -449,7 +476,7 @@ class ChatService:
                     pending_tc = tc
                     pending_tool = tool
                     break
-                yield StreamChunk(type="tool_use", session_id=session_id, content=f"Running {tc['name']}…")
+                yield StreamChunk(type="tool_use", session_id=session_id, content=_friendly_status(tc["name"]))
                 _t_tool = time.perf_counter()
                 result = await tool_registry.execute(tc["name"], tc["input"], request_headers)
                 if turn:
