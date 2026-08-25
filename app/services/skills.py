@@ -24,7 +24,8 @@ class Skill:
     keywords: tuple[str, ...]          # lower-cased intent substrings
     tool: str                          # backing MCP tool (pinned while the skill is active)
     required: tuple[str, ...] = ()     # fields the model must collect (ask if missing)
-    defaults: dict[str, Any] = field(default_factory=dict)  # filled by the executor if omitted
+    defaults: dict[str, Any] = field(default_factory=dict)  # static fills if omitted
+    derived: dict[str, tuple[str, ...]] = field(default_factory=dict)  # target ← join(sources)
     summary: str = ""                  # short verb phrase used in grounding
 
 
@@ -37,8 +38,16 @@ SKILLS: list[Skill] = [
             "create account", "create an account", "set up a user",
         ),
         tool="addUser_post",
-        required=("userName", "fullName", "emailAddress"),
-        defaults={"enabled": "Y", "adminFlag": "N"},
+        # The user provides these; the model asks for any that are missing.
+        required=("userName", "firstName", "lastName", "emailAddress"),
+        # Backend-mandatory fields with safe platform defaults (verified against addUser).
+        defaults={
+            "emailFlag": "N", "accountType": "L", "accountStatus": "A",
+            "accountCategory": "C", "loginType": "L", "enabled": "Y", "adminFlag": "N",
+            "userProfileGroupId": 581,   # "Core Profile" — the default new-user profile group
+        },
+        # Computed from what the user gave, so the model needn't supply them.
+        derived={"ssoUserName": ("userName",), "fullName": ("firstName", "lastName")},
         summary="create a new user account",
     ),
 ]
@@ -73,7 +82,7 @@ def grounding(s: Skill) -> str:
 
 
 def apply_defaults(tool_name: str, arguments: dict[str, Any]) -> list[str]:
-    """Fill a skill tool's default fields the model omitted. Returns the keys filled."""
+    """Fill a skill tool's default + derived fields the model omitted. Returns keys filled."""
     s = by_tool(tool_name)
     if not s:
         return []
@@ -82,4 +91,11 @@ def apply_defaults(tool_name: str, arguments: dict[str, Any]) -> list[str]:
         if not str(arguments.get(k) or "").strip():
             arguments[k] = v
             filled.append(k)
+    for target, sources in s.derived.items():
+        if str(arguments.get(target) or "").strip():
+            continue
+        parts = [str(arguments.get(src) or "").strip() for src in sources]
+        if all(parts):                       # only derive when every source is present
+            arguments[target] = " ".join(parts)
+            filled.append(target)
     return filled
