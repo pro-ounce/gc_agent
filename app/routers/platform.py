@@ -28,6 +28,7 @@ from ..models.platform import ApiResponse
 from ..rbac.middleware import get_current_user
 from ..rbac.models import User
 from ..services.chat_service import chat_service
+from ..mcp.tool_registry import tool_registry
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/ai-service", tags=["platform"])
@@ -99,6 +100,29 @@ def _forward_headers(request: Request) -> dict[str, str]:
         "X-Selected-App", "X-Selected-Role",
     )
     return {h: request.headers[h] for h in forward if h in request.headers}
+
+
+@router.get("/{agent}/me", summary="Current user identity for the UI greeting")
+async def agent_me(
+    agent: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+) -> ApiResponse:
+    """Lightweight identity for a personalized greeting. Best-effort first/full name from
+    the caller's own profile; falls back to the username."""
+    first = full = None
+    try:
+        res = await tool_registry.execute("getUserProfile_get", {}, _forward_headers(request))
+        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        if isinstance(data, dict):
+            first = (str(data.get("firstName") or "").strip()) or None
+            full = (str(data.get("fullName") or "").strip()) or None
+    except Exception:  # noqa: BLE001 — a greeting must never fail the widget
+        pass
+    display = first or full or (user.username if user.username not in ("", "anonymous") else "there")
+    return ApiResponse.ok("ok", {
+        "userName": user.username, "firstName": first, "fullName": full, "displayName": display,
+    })
 
 
 @router.post("/{agent}/reply", summary="Ask an AI agent and get a reply")
