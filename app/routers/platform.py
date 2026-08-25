@@ -128,14 +128,18 @@ def _forward_headers(request: Request) -> dict[str, str]:
     return {h: request.headers[h] for h in forward if h in request.headers}
 
 
-@router.get("/{agent}/me", summary="Current user identity for the UI greeting")
-async def agent_me(
-    agent: str,
-    request: Request,
-    user: User = Depends(get_current_user),
-) -> ApiResponse:
-    """Lightweight identity for a personalized greeting. Best-effort first/full name from
-    the caller's own profile; falls back to the username."""
+# Suggestion chips shown on an empty conversation (curated, enterprise-relevant starters).
+_SUGGESTIONS: tuple[str, ...] = (
+    "Show my applications",
+    "What roles do I have?",
+    "Look up a user by name",
+    "Create a user",
+    "Generate a user access report",
+)
+
+
+async def _identity(request: Request, user: "User") -> dict:
+    """Best-effort friendly name from the caller's own profile; falls back to the username."""
     first = full = None
     try:
         res = await tool_registry.execute("getUserProfile_get", {}, _forward_headers(request))
@@ -146,9 +150,68 @@ async def agent_me(
     except Exception:  # noqa: BLE001 — a greeting must never fail the widget
         pass
     display = first or full or (user.username if user.username not in ("", "anonymous") else "there")
+    return {"userName": user.username, "firstName": first, "fullName": full, "displayName": display}
+
+
+def _resume_hint(user: "User", session_id: str = "") -> dict:
+    """The caller's most recent conversation → 'pick up where you left off' hint."""
+    sess = session_service.get(session_id) if session_id else None
+    if sess is None:
+        listed = session_service.list_sessions(user.id) or []
+        listed.sort(key=lambda s: str(s.get("updated_at") or ""), reverse=True)
+        for item in listed:
+            s = session_service.get(item.get("session_id", ""))
+            if s and any(m.role == "user" for m in s.messages):
+                sess = s
+                break
+    if not sess or not sess.messages:
+        return {"hasHistory": False}
+    last_q = next((m.content for m in reversed(sess.messages) if m.role == "user"), None)
+    return {"hasHistory": bool(last_q), "sessionId": sess.session_id,
+            "lastQuestion": last_q, "messageCount": len(sess.messages)}
+
+
+@router.get("/{agent}/questions", summary="Widget bootstrap: suggestions + greeting name + resume hint")
+async def agent_questions(
+    agent: str,
+    request: Request,
+    taskId: str = "",
+    user: User = Depends(get_current_user),
+) -> ApiResponse:
+    """Everything the widget needs when it opens, in ONE call: suggestion chips, the
+    personalized greeting name, and a resume hint. Bundled here because `/questions` is the
+    on-open endpoint the platform gateway forwards to the agent (unlike /me, /resume).
+
+    Doubles as the background-task poll (`?taskId=`) for the same reason — it is the only
+    forwarded GET, so the widget polls a long-running action's status through it."""
+    if taskId:
+        t = task_service.get(taskId)
+        if not t or t.user_id != user.id:
+            return ApiResponse.ok(message="ok", data={"task": None})
+        return ApiResponse.ok(message="ok", data={"task": t.model_dump()})
+    ident = await _identity(request, user)
+    try:
+        resume = _resume_hint(user)
+    except Exception:  # noqa: BLE001 — never fail the bootstrap on a resume lookup
+        resume = {"hasHistory": False}
     return ApiResponse.ok(message="ok", data={
-        "userName": user.username, "firstName": first, "fullName": full, "displayName": display,
+        "questions": list(_SUGGESTIONS),
+        "displayName": ident["displayName"],
+        "firstName": ident["firstName"],
+        "userName": ident["userName"],
+        "resume": resume,
     })
+
+
+@router.get("/{agent}/me", summary="Current user identity for the UI greeting")
+async def agent_me(
+    agent: str,
+    request: Request,
+    user: User = Depends(get_current_user),
+) -> ApiResponse:
+    """Lightweight identity for a personalized greeting. Best-effort first/full name from
+    the caller's own profile; falls back to the username."""
+    return ApiResponse.ok(message="ok", data=await _identity(request, user))
 
 
 @router.get("/{agent}/resume", summary="Resume hint — the user's last question, to pick up where they left off")
@@ -160,22 +223,7 @@ async def agent_resume(
 ) -> ApiResponse:
     """Look at the caller's most recent conversation and return their last question, so the UI
     can offer a 'pick up where you left off' suggestion."""
-    sess = session_service.get(sessionId) if sessionId else None
-    if sess is None:
-        listed = session_service.list_sessions(user.id) or []
-        listed.sort(key=lambda s: str(s.get("updated_at") or ""), reverse=True)
-        for item in listed:
-            s = session_service.get(item.get("session_id", ""))
-            if s and any(m.role == "user" for m in s.messages):
-                sess = s
-                break
-    if not sess or not sess.messages:
-        return ApiResponse.ok(message="ok", data={"hasHistory": False})
-    last_q = next((m.content for m in reversed(sess.messages) if m.role == "user"), None)
-    return ApiResponse.ok(message="ok", data={
-        "hasHistory": bool(last_q), "sessionId": sess.session_id,
-        "lastQuestion": last_q, "messageCount": len(sess.messages),
-    })
+    return ApiResponse.ok(message="ok", data=_resume_hint(user, sessionId))
 
 
 @router.get("/{agent}/tasks", summary="List the caller's recent background tasks")
