@@ -134,6 +134,12 @@ class ToolRegistry:
         names = await tool_index.search(query, runtime_config.get_int("TOOL_RAG_TOP_K"))
         if not names:
             return [_to_tool_schema(t) for t in tools]
+        # Always offer the resolver tools (id lookups) so name→id chains never break for
+        # lack of the lookup being retrieved. De-duped, appended after the RAG hits.
+        pinned = [p.strip() for p in (cfg.TOOL_RAG_PINNED or "").split(",") if p.strip()]
+        for p in pinned:
+            if p not in names:
+                names.append(p)
         by_name = {t.name: t for t in tools}
         picked = [by_name[n] for n in names if n in by_name] or tools
         return _log_schema_cost([_to_tool_schema(t) for t in picked], len(tools))

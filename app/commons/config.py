@@ -170,6 +170,10 @@ class AppConfig:
     TOOL_RAG_TOP_K: int = env_int("TOOL_RAG_TOP_K", 15) or 15
     TOOL_RAG_MIN_TOOLS: int = env_int("TOOL_RAG_MIN_TOOLS", 8) or 8  # below this, send all (no RAG)
     TOOL_RAG_INDEX: str = env_str("TOOL_RAG_INDEX", "agent-tools") or "agent-tools"
+    # Resolver tools always offered alongside the RAG hits — small utility lookups the model
+    # needs to turn a name/code into an id (getAllApplications_get → applicationId). Without
+    # pinning, a "roles for app X" query may not surface the app lookup, so the chain breaks.
+    TOOL_RAG_PINNED: str = env_str("TOOL_RAG_PINNED", "getAllApplications_get") or ""
 
     # Session / KV store backend: "opensearch" (default) | "redis" | "memory".
     # We run on OpenSearch (already in the estate); Redis can be added later by flipping this.
@@ -272,7 +276,16 @@ class AppConfig:
             "Use them to answer user queries accurately. "
             "Always confirm before executing HIGH or MEDIUM risk operations. "
             "Answer concisely and directly: no preamble, no restating the question, no filler. "
-            "Return only the facts the user asked for, as a short sentence or compact list."
+            "Return only the facts the user asked for, as a short sentence or compact list. "
+            # ID resolution: many filter tools need a numeric id, but users name things by
+            # code/name. Resolve first, then call the real tool with the resolved id.
+            "Applications are identified by an applicationCode or applicationName (e.g. "
+            "'FORMULATION' is a code, name 'Formulation Planner'). Tools that filter roles or "
+            "data by application need the numeric applicationId — NOT the name/code. When the "
+            "user names an application by code or name, FIRST call getAllApplications_get, find "
+            "the entry whose applicationCode or applicationName matches, read its applicationId, "
+            "THEN call the roles/data tool with that applicationId. Never pass an application "
+            "name or code into a numeric id field."
         )
     )
 
