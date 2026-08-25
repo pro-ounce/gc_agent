@@ -119,7 +119,8 @@ class ToolRegistry:
         return [_to_tool_schema(t) for t in tools]
 
     async def select_tools(
-        self, query: str, request_headers: dict[str, str] | None = None
+        self, query: str, request_headers: dict[str, str] | None = None,
+        extra: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Return OpenAI schemas for only the tools relevant to `query` (tool-RAG).
         Falls back to ALL tools when: the flag is off, the catalog is small
@@ -138,10 +139,11 @@ class ToolRegistry:
         names = await tool_index.search(query, runtime_config.get_int("TOOL_RAG_TOP_K"))
         if not names:
             return [_to_tool_schema(t) for t in tools]
-        # Always offer the resolver tools (id lookups) so name→id chains never break for
-        # lack of the lookup being retrieved. De-duped, appended after the RAG hits.
+        # Always offer the resolver tools (id lookups) + any per-call extras (an active
+        # skill's backing tool) so name→id chains and actions never break for lack of the
+        # tool being retrieved. De-duped, appended after the RAG hits.
         pinned = [p.strip() for p in (cfg.TOOL_RAG_PINNED or "").split(",") if p.strip()]
-        for p in pinned:
+        for p in pinned + list(extra or []):
             if p not in names:
                 names.append(p)
         by_name = {t.name: t for t in tools}
@@ -245,6 +247,13 @@ class ToolRegistry:
         # application-scoped tool works without depending on the model to chain a lookup.
         await self._resolve_application_id(arguments, request_headers)
         await self._apply_default_user_scope(tool_name, arguments, request_headers)
+        # Skill defaults: fill safe defaults for an action tool's omitted fields.
+        from ..services import skills as _skills
+        _filled = _skills.apply_defaults(tool_name, arguments)
+        if _filled:
+            log.bind(func="skill_defaults", tool=tool_name, filled=",".join(_filled)).info(
+                f"applied skill defaults on {tool_name}: {_filled}"
+            )
         start = _time.perf_counter()
         try:
             raw = await mcp_client.execute_tool(tool_name, arguments, request_headers)

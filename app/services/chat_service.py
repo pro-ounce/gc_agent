@@ -25,6 +25,7 @@ from ..mcp.prompt_registry import prompt_registry
 from ..mcp.tool_registry import is_mutation, tool_registry
 from ..models.chat import ChatResponse, StreamChunk
 from ..models.mcp import PendingAction
+from ..services import skills
 from ..services.ui_blocks import blocks_from_outputs, blocks_to_text, lead_in
 from ..models.session import Session
 from ..services.llm_service import LLMResponse, ToolCall, llm
@@ -134,8 +135,14 @@ class ChatService:
         session_service.save(session)
 
         system = system_prompt or cfg.AGENT_SYSTEM_PROMPT
+        # Skill? Pin its backing action tool + ground the model on the required fields.
+        skill = skills.match(user_message)
+        if skill:
+            system = system + skills.grounding(skill)
         # Tool-RAG: pick only tools relevant to this query (falls back to all — see select_tools).
-        tools = await tool_registry.select_tools(user_message, request_headers)
+        tools = await tool_registry.select_tools(
+            user_message, request_headers, extra=[skill.tool] if skill else None
+        )
         _log_prompt(session_id, user_id, user_message, tools, mode="sync")
         tool_calls_made: list[str] = []
 
@@ -281,8 +288,13 @@ class ChatService:
         session.metadata["last_user_message"] = user_message
         session_service.save(session)
         system = system_prompt or cfg.AGENT_SYSTEM_PROMPT
+        skill = skills.match(user_message)
+        if skill:
+            system = system + skills.grounding(skill)
         with turn.phase("retrieval"):
-            tools = await tool_registry.select_tools(user_message, request_headers)
+            tools = await tool_registry.select_tools(
+                user_message, request_headers, extra=[skill.tool] if skill else None
+            )
         _log_prompt(session_id, user_id, user_message, tools, mode="stream")
         async for chunk in self._stream_loop(session, tools, system, request_headers, turn):
             yield chunk
