@@ -147,11 +147,17 @@ def status_label(tool_name: str, step: "Step | None" = None) -> str:
 
 
 def match(query: str) -> Skill | None:
-    """First skill whose intent keywords appear in the query, else None."""
-    q = (query or "").lower()
+    """First skill that matches the query. A keyword matches if it's a substring OR all of
+    its words appear in the query — so 'create a test user' matches 'create user'."""
+    ql = (query or "").lower()
+    qwords = set(re.findall(r"[a-z0-9]+", ql))
     for s in SKILLS:
-        if any(k in q for k in s.keywords):
-            return s
+        for kw in s.keywords:
+            if kw in ql:
+                return s
+            kwords = re.findall(r"[a-z0-9]+", kw.lower())
+            if len(kwords) > 1 and all(w in qwords for w in kwords):
+                return s
     return None
 
 
