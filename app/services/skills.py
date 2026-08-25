@@ -19,6 +19,20 @@ from typing import Any
 
 
 @dataclass(frozen=True)
+class Step:
+    """One link in a dependency chain that runs AFTER the confirmed entry tool.
+    args values reference the shared context with '$name' (a collected field or a value
+    captured by an earlier step); anything else is a literal. capture pulls values out of
+    this step's output (dotted path into the GC envelope's data) into the context for later
+    steps. render=True makes this step's output the final result shown to the user."""
+    tool: str
+    args: dict[str, str] = field(default_factory=dict)
+    capture: dict[str, str] = field(default_factory=dict)
+    render: bool = False
+    optional: bool = False             # on failure: skip and continue (don't abort the chain)
+
+
+@dataclass(frozen=True)
 class Skill:
     name: str
     keywords: tuple[str, ...]          # lower-cased intent substrings
@@ -27,6 +41,7 @@ class Skill:
     defaults: dict[str, Any] = field(default_factory=dict)  # static fills if omitted
     derived: dict[str, tuple[str, ...]] = field(default_factory=dict)  # target ← join(sources)
     lookups: dict[str, str] = field(default_factory=dict)   # field → admin lookup code (name→code)
+    then: tuple[Step, ...] = ()        # dependency chain run after the entry tool (on confirm)
     summary: str = ""                  # short verb phrase used in grounding
 
 
@@ -57,6 +72,12 @@ SKILLS: list[Skill] = [
             "accountCategory": "USER_ACCOUNT_CATEGORIES",
             "accountStatus": "USER_ACCOUNT_STATUS",
         },
+        # Dependency chain: addUser returns no id, so fetch the created user by the username
+        # we threaded in, and show that record as the result (proves output→input threading).
+        then=(
+            Step(tool="getUserByUserName_get", args={"userName": "$userName"},
+                 capture={"userId": "id"}, render=True),
+        ),
         summary="create a new user account",
     ),
 ]
@@ -117,3 +138,39 @@ def apply_defaults(tool_name: str, arguments: dict[str, Any]) -> list[str]:
             arguments[target] = " ".join(parts)
             filled.append(target)
     return filled
+
+
+# ── Dependency-chain execution ──────────────────────────────────────────────────────────
+
+def dig(output: Any, path: str) -> Any:
+    """Pull a value out of a GC tool result by a lenient dotted path. The payload is under
+    `data` (a dict, or a list → first row); 'id' and 'data.id' both work; 'data.0.id' indexes."""
+    cur = output
+    parts = [p for p in str(path).split(".") if p]
+    if parts and parts[0] != "data" and isinstance(cur, dict) and "data" in cur:
+        cur = cur.get("data")                # default to the payload
+    for p in parts:
+        if p == "data" and isinstance(cur, dict) and "data" in cur:
+            cur = cur.get("data")
+        elif isinstance(cur, list):
+            cur = cur[int(p)] if p.isdigit() and int(p) < len(cur) else (cur[0] if cur else None)
+            if not p.isdigit() and isinstance(cur, dict):
+                cur = cur.get(p)
+        elif isinstance(cur, dict):
+            cur = cur.get(p)
+        else:
+            return None
+    return cur
+
+
+def resolve_step_args(step: Step, ctx: dict[str, Any]) -> dict[str, Any]:
+    """Build a step's args from the shared context: '$name' → ctx['name']; else literal."""
+    out: dict[str, Any] = {}
+    for k, v in step.args.items():
+        if isinstance(v, str) and v.startswith("$"):
+            val = ctx.get(v[1:])
+            if val is not None and str(val).strip() != "":
+                out[k] = val
+        else:
+            out[k] = v
+    return out

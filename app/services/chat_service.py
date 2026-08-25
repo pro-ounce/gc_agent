@@ -360,9 +360,13 @@ class ChatService:
         turn.tool(tool_name)
         output = str(result.output) if result.success else f"Error: {result.error}"
         session.add_tool_result(tc_id, tool_name, output)
-        # Render the action outcome as a block (success/error notice) + one-line lead-in —
-        # no re-run LLM synthesis (which garbles on a bare tool-result turn).
-        blocks = blocks_from_outputs([(tool_name, result.output if result.success else result.error, result.success)])
+        # Run the skill's dependency chain (if any), then render the outcome as a block +
+        # one-line lead-in — no re-run LLM synthesis (which garbles on a bare result turn).
+        render_out, render_name = result.output, tool_name
+        if result.success:
+            render_out, render_name = await self._run_skill_chain(
+                tool_name, tool_args, result.output, request_headers)
+        blocks = blocks_from_outputs([(render_name, render_out if result.success else result.error, result.success)])
         lead = lead_in(blocks) if blocks else (output or "Done.")
         session.add_assistant(lead)
         session_service.save(session)
@@ -549,6 +553,43 @@ class ChatService:
         yield StreamChunk(type="done", session_id=session_id, content="",
                           blocks=blocks_from_outputs(tool_outputs), finish_reason="max_iterations")
 
+    # ── Skill dependency chains ───────────────────────────────────────────────
+
+    async def _run_skill_chain(
+        self, entry_tool: str, entry_args: dict[str, Any], entry_output: Any,
+        request_headers: dict[str, str] | None,
+    ) -> tuple[Any, str]:
+        """After a confirmed skill's entry tool, run its `then` steps deterministically,
+        threading each step's captured outputs into the next. Returns (output_to_render,
+        source_tool_name)."""
+        skill = skills.by_tool(entry_tool)
+        render_out, render_name = entry_output, entry_tool
+        if not skill or not skill.then:
+            return render_out, render_name
+        ctx: dict[str, Any] = dict(entry_args or {})
+        for step in skill.then:
+            args = skills.resolve_step_args(step, ctx)
+            try:
+                res = await tool_registry.execute(step.tool, args, request_headers)
+            except Exception as exc:  # noqa: BLE001
+                log.bind(func="skill_chain", step=step.tool).warning(f"chain step failed: {exc}")
+                if step.optional:
+                    continue
+                break
+            if not res.success:
+                if step.optional:
+                    continue
+                log.bind(func="skill_chain", step=step.tool).warning("chain step returned failure; stopping")
+                break
+            for ck, path in step.capture.items():
+                ctx[ck] = skills.dig(res.output, path)
+            if step.render:
+                render_out, render_name = res.output, step.tool
+            log.bind(func="skill_chain", step=step.tool, captured=list(step.capture)).info(
+                f"chain step {step.tool} ok"
+            )
+        return render_out, render_name
+
     # ── Action confirmation ───────────────────────────────────────────────────
 
     async def confirm_action(
@@ -596,9 +637,15 @@ class ChatService:
         output_text = str(result.output) if result.success else f"Error: {result.error}"
         session.add_tool_result(action_id, pending.tool_name, output_text)
 
+        # Run the skill's dependency chain (if any), threading the entry's collected args.
+        render_out, render_name = result.output, pending.tool_name
+        if result.success:
+            render_out, render_name = await self._run_skill_chain(
+                pending.tool_name, pending.tool_args, result.output, request_headers)
+
         # Render the outcome as a block (success/error notice or a card) rather than a
         # re-run LLM synthesis — which tends to hallucinate on a bare tool-result turn.
-        blocks = blocks_from_outputs([(pending.tool_name, result.output if result.success else result.error, result.success)])
+        blocks = blocks_from_outputs([(render_name, render_out if result.success else result.error, result.success)])
         final_text = lead_in(blocks) if blocks else output_text
         session.add_assistant(final_text)
         session_service.save(session)
