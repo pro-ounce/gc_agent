@@ -32,6 +32,10 @@ log = get_logger(__name__)
 # first authenticated chat. The raw MCP payloads round-trip via Tool.from_mcp_payload.
 _CATALOG_KEY = "mcp:tools:catalog"
 
+# Cache for deterministic application code/name → id resolution (see _resolve_application_id).
+_APP_MAP_CACHE: dict[str, Any] = {"map": None, "ts": 0.0}
+_APP_MAP_TTL = 300.0  # seconds
+
 # Name prefixes that read state (safe for a read-only chatbot). Everything else —
 # _put/_delete/_patch, and _post whose verb isn't a read (activate/deactivate/delete/
 # create/update/add/remove/reset/restore/upload/bulk…) — is treated as a mutation.
@@ -144,6 +148,45 @@ class ToolRegistry:
         picked = [by_name[n] for n in names if n in by_name] or tools
         return _log_schema_cost([_to_tool_schema(t) for t in picked], len(tools))
 
+    async def _app_map(self, request_headers: dict[str, str] | None) -> dict[str, Any]:
+        """Cached {code|name|shortCode (lower) → applicationId} from getAllApplications_get."""
+        import time as _t
+        now = _t.monotonic()
+        cache = _APP_MAP_CACHE
+        if cache["map"] is not None and (now - cache["ts"]) < _APP_MAP_TTL:
+            return cache["map"]
+        amap: dict[str, Any] = {}
+        try:
+            raw = await mcp_client.execute_tool("getAllApplications_get", {}, request_headers)
+            data = raw.get("data") if isinstance(raw, dict) else raw
+            for a in (data or []):
+                if not isinstance(a, dict):
+                    continue
+                aid = a.get("applicationId")
+                if aid in (None, ""):
+                    continue
+                for key in (a.get("applicationCode"), a.get("applicationName"), a.get("applicationShortCode")):
+                    if key:
+                        amap[str(key).strip().lower()] = aid
+        except Exception as exc:  # noqa: BLE001 — resolution is best-effort; never break the call
+            log.bind(func="app_map").warning(f"app map load failed: {exc}")
+        cache["map"], cache["ts"] = amap, now
+        return amap
+
+    async def _resolve_application_id(
+        self, arguments: dict[str, Any], request_headers: dict[str, str] | None
+    ) -> None:
+        """If applicationId is a non-numeric code/name, replace it with the numeric id."""
+        val = arguments.get("applicationId")
+        if val is None or str(val).strip() == "" or str(val).strip().isdigit():
+            return
+        resolved = (await self._app_map(request_headers)).get(str(val).strip().lower())
+        if resolved is not None:
+            log.bind(func="resolve_app_id", frm=str(val), to=str(resolved)).info(
+                f"resolved applicationId '{val}' → {resolved}"
+            )
+            arguments["applicationId"] = resolved
+
     async def execute(
         self,
         tool_name: str,
@@ -154,6 +197,10 @@ class ToolRegistry:
         # Drop any injected/header params the model may have hallucinated into the args
         # (auth/tracing are provided by request_headers → MCP injects the real values).
         arguments = {k: v for k, v in arguments.items() if k.lower() not in _INJECTED_PARAMS}
+        # Deterministic id resolution: models reliably name an application by code/name but
+        # not by numeric id. If applicationId is non-numeric, resolve it here so any
+        # application-scoped tool works without depending on the model to chain a lookup.
+        await self._resolve_application_id(arguments, request_headers)
         start = _time.perf_counter()
         try:
             raw = await mcp_client.execute_tool(tool_name, arguments, request_headers)

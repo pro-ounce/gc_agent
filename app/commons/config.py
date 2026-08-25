@@ -173,7 +173,7 @@ class AppConfig:
     # Resolver tools always offered alongside the RAG hits — small utility lookups the model
     # needs to turn a name/code into an id (getAllApplications_get → applicationId). Without
     # pinning, a "roles for app X" query may not surface the app lookup, so the chain breaks.
-    TOOL_RAG_PINNED: str = env_str("TOOL_RAG_PINNED", "getAllApplications_get") or ""
+    TOOL_RAG_PINNED: str = env_str("TOOL_RAG_PINNED", "") or ""
 
     # Session / KV store backend: "opensearch" (default) | "redis" | "memory".
     # We run on OpenSearch (already in the estate); Redis can be added later by flipping this.
@@ -277,15 +277,11 @@ class AppConfig:
             "Always confirm before executing HIGH or MEDIUM risk operations. "
             "Answer concisely and directly: no preamble, no restating the question, no filler. "
             "Return only the facts the user asked for, as a short sentence or compact list. "
-            # ID resolution: many filter tools need a numeric id, but users name things by
-            # code/name. Resolve first, then call the real tool with the resolved id.
-            "Applications are identified by an applicationCode or applicationName (e.g. "
-            "'FORMULATION' is a code, name 'Formulation Planner'). Tools that filter roles or "
-            "data by application need the numeric applicationId — NOT the name/code. When the "
-            "user names an application by code or name, FIRST call getAllApplications_get, find "
-            "the entry whose applicationCode or applicationName matches, read its applicationId, "
-            "THEN call the roles/data tool with that applicationId. Never pass an application "
-            "name or code into a numeric id field."
+            # ID resolution is handled by the system: the model may pass an application code or
+            # name directly and it is resolved to the numeric id before the call.
+            "When a query is about a named application (e.g. 'FORMULATION'), call the "
+            "application-scoped tool directly and pass the application code or name as "
+            "applicationId — the system resolves it to the numeric id automatically."
         )
     )
 
