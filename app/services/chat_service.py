@@ -76,13 +76,17 @@ class _StreamGate:
     (the JSON + any fabricated response) is dropped; if it was a false alarm, it's flushed.
     Full text is still accumulated separately by the caller for tool extraction / history."""
 
-    def __init__(self) -> None:
+    def __init__(self, hold_all: bool = False) -> None:
         self._buf = ""
         self._gated = False
+        # hold_all: buffer ALL text and reveal nothing mid-turn — the caller flushes it at
+        # close() only if the turn was a plain answer (no tool call). This removes the
+        # "I'll create the user…" flash that a tool/confirm/validation result then erases.
+        self._hold_all = hold_all
 
     def feed(self, delta: str) -> str:
         self._buf += delta
-        if self._gated:
+        if self._hold_all or self._gated:
             return ""
         m = _TOOL_TEXT_MARKER.search(self._buf)
         if m:
@@ -96,7 +100,9 @@ class _StreamGate:
         return ""
 
     def close(self, tool_called: bool) -> str:
-        if self._gated and tool_called:
+        # Discard held text when a tool ran (its result/confirm replaces it); otherwise flush
+        # the plain answer. In hold_all mode nothing was streamed, so this is the whole reply.
+        if tool_called and (self._gated or self._hold_all):
             self._buf = ""
             return ""
         out, self._buf = self._buf, ""
@@ -400,7 +406,7 @@ class ChatService:
             messages = session.to_llm_messages()
             text = ""
             tool_calls: list[dict[str, Any]] = []
-            gate = _StreamGate()
+            gate = _StreamGate(hold_all=not cfg.STREAM_PARTIAL_TEXT)
             try:
                 async for kind, payload in llm().stream_chat(messages, tools, system):
                     if kind == "delta":

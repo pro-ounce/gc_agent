@@ -180,6 +180,11 @@ class AppConfig:
     # skip the final LLM synthesis call and emit a one-line lead-in + the blocks. Kills the
     # stream-prose-then-table double render and the generation latency for data lookups.
     SKIP_SYNTHESIS_WITH_BLOCKS: bool = env_bool("SKIP_SYNTHESIS_WITH_BLOCKS", True)
+    # Stream partial assistant text token-by-token. Default OFF: hold the model's text and
+    # reveal only the final answer (or the result blocks) — so a tool/confirm/validation
+    # outcome never has to erase a half-shown "I'll create the user…" line. Status chunks
+    # ("Creating…") still stream, so the UI stays live.
+    STREAM_PARTIAL_TEXT: bool = env_bool("STREAM_PARTIAL_TEXT", False)
     # Personal-assistant default: a user-scoped tool (has a userId param) called with no user
     # identifier is scoped to the caller — so "my apps/roles" means mine, not everyone's.
     DEFAULT_USER_SCOPE: bool = env_bool("DEFAULT_USER_SCOPE", True)
