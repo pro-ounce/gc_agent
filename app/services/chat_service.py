@@ -322,20 +322,29 @@ class ChatService:
 
         if not confirmed:
             session.add_tool_result(tc_id, tool_name, "User declined to run this action.")
-        else:
-            yield StreamChunk(type="tool_use", session_id=session_id, content=f"Running {tool_name}…")
-            with turn.phase("tools"):
-                result = await tool_registry.execute(tool_name, tool_args, request_headers)
-            turn.tool(tool_name)
-            output = str(result.output) if result.success else f"Error: {result.error}"
-            session.add_tool_result(tc_id, tool_name, output)
-        session_service.save(session)
+            session_service.save(session)
+            if turn:
+                turn.finish("cancelled")
+            yield StreamChunk(type="done", session_id=session_id,
+                              content="Action cancelled.", finish_reason="cancelled")
+            return
 
-        last_user = session.metadata.get("last_user_message", "")
-        with turn.phase("retrieval"):
-            tools = await tool_registry.select_tools(last_user, request_headers)
-        async for chunk in self._stream_loop(session, tools, cfg.AGENT_SYSTEM_PROMPT, request_headers, turn):
-            yield chunk
+        yield StreamChunk(type="tool_use", session_id=session_id, content=f"Running {tool_name}…")
+        with turn.phase("tools"):
+            result = await tool_registry.execute(tool_name, tool_args, request_headers)
+        turn.tool(tool_name)
+        output = str(result.output) if result.success else f"Error: {result.error}"
+        session.add_tool_result(tc_id, tool_name, output)
+        # Render the action outcome as a block (success/error notice) + one-line lead-in —
+        # no re-run LLM synthesis (which garbles on a bare tool-result turn).
+        blocks = blocks_from_outputs([(tool_name, result.output if result.success else result.error, result.success)])
+        lead = lead_in(blocks) if blocks else (output or "Done.")
+        session.add_assistant(lead)
+        session_service.save(session)
+        if turn:
+            turn.finish("stop")
+        yield StreamChunk(type="done", session_id=session_id, content=lead,
+                          blocks=blocks, finish_reason="stop")
 
     async def _stream_loop(
         self,
@@ -558,16 +567,12 @@ class ChatService:
         # Execute the confirmed tool
         result = await tool_registry.execute(pending.tool_name, pending.tool_args, request_headers)
         output_text = str(result.output) if result.success else f"Error: {result.error}"
-
         session.add_tool_result(action_id, pending.tool_name, output_text)
-        session_service.save(session)
 
-        # Re-run LLM with tool result to generate the final response
-        system = cfg.AGENT_SYSTEM_PROMPT
-        tools_schema = await tool_registry.as_tools(request_headers)
-        llm_response = await llm().complete(session.to_llm_messages(), tools_schema, system)
-        final_text = llm_response.text or output_text
-
+        # Render the outcome as a block (success/error notice or a card) rather than a
+        # re-run LLM synthesis — which tends to hallucinate on a bare tool-result turn.
+        blocks = blocks_from_outputs([(pending.tool_name, result.output if result.success else result.error, result.success)])
+        final_text = lead_in(blocks) if blocks else output_text
         session.add_assistant(final_text)
         session_service.save(session)
 
@@ -575,10 +580,9 @@ class ChatService:
             session_id=session_id,
             message_id=str(uuid.uuid4()),
             assistant_message=final_text,
+            blocks=blocks,
             tool_calls_made=[pending.tool_name],
-            model=llm_response.model,
-            usage=llm_response.usage,
-            finish_reason=llm_response.finish_reason,
+            finish_reason="stop",
         )
 
     # ── Prompt execution ──────────────────────────────────────────────────────
