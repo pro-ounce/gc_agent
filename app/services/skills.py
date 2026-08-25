@@ -74,10 +74,12 @@ def grounding(s: Skill) -> str:
     req = ", ".join(s.required) if s.required else "(none)"
     return (
         f"\n\nACTION — the user wants to {s.summary}. Use the '{s.tool}' tool. "
-        f"Required fields: {req}. If any required field is missing from the request, ASK the "
-        f"user for it in a short question and do NOT call the tool yet — never invent values. "
-        f"Once you have the required fields, call the tool; remaining fields are set "
-        f"automatically. The action pauses for the user to confirm before it runs."
+        f"Required fields: {req}. Ask the user ONLY for these — if one is missing, ask a short "
+        f"question and do NOT call the tool yet (never invent values). Do NOT ask for any other "
+        f"field (password, account type, profile group, etc.); every non-required field is set "
+        f"automatically — never request it. Once you have the required fields, call the tool "
+        f"with just those; the rest are filled in. The action pauses for the user to confirm "
+        f"before it runs."
     )
 
 
