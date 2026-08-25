@@ -56,6 +56,49 @@ async def _aliases(lookup_code: str, execute: ExecFn, request_headers: dict | No
     return amap
 
 
+# lookup NAME/label → lookup CODE (e.g. "account category" → USER_ACCOUNT_CATEGORIES)
+_CODE_CACHE: dict[str, Any] = {"ts": 0.0, "map": None}
+
+
+async def _code_map(execute: ExecFn, request_headers: dict | None) -> dict[str, str]:
+    now = time.monotonic()
+    if _CODE_CACHE["map"] is not None and now - _CODE_CACHE["ts"] < _TTL:
+        return _CODE_CACHE["map"]
+    m: dict[str, str] = {}
+    try:
+        res = await execute("getLookupByApplicationId_get",
+                            {"applicationid": cfg.LOOKUP_ADMIN_APP_ID}, request_headers)
+        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        for x in (data or []):
+            if not isinstance(x, dict):
+                continue
+            code = x.get("lookup")
+            if not code:
+                continue
+            m[str(code).strip().lower()] = code
+            name = x.get("lookupName")
+            if name:
+                m[str(name).strip().lower()] = code
+    except Exception as exc:  # noqa: BLE001
+        log.bind(func="lookups").warning(f"lookup-code map load failed: {exc}")
+    _CODE_CACHE["map"], _CODE_CACHE["ts"] = m, now
+    return m
+
+
+async def resolve_lookup_name(name: Any, execute: ExecFn, request_headers: dict | None) -> str | None:
+    """Map a lookup name/label to its code (e.g. 'account category' → USER_ACCOUNT_CATEGORIES)."""
+    if name in (None, ""):
+        return None
+    m = await _code_map(execute, request_headers)
+    key = str(name).strip().lower()
+    if key in m:
+        return m[key]
+    for alias, code in m.items():          # loose: 'account category' in 'user account categories'
+        if key and key in alias:
+            return code
+    return None
+
+
 async def resolve(lookup_code: str, value: Any, execute: ExecFn, request_headers: dict | None) -> str | None:
     """Return the valid lookupValueCode for `value` (a code or a name/label), else None."""
     if value in (None, ""):

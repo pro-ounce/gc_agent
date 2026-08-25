@@ -254,6 +254,21 @@ class ToolRegistry:
             log.bind(func="skill_defaults", tool=tool_name, filled=",".join(_filled)).info(
                 f"applied skill defaults on {tool_name}: {_filled}"
             )
+        # Lookup QUERIES: a getLookup* call with a lookup NAME ("account category") → its code
+        # (USER_ACCOUNT_CATEGORIES); default applicationId to the administration app.
+        if tool_name.lower().startswith("getlookup"):
+            _lkkey = "lookup" if "lookup" in arguments else ("lookUp" if "lookUp" in arguments else None)
+            if _lkkey and arguments.get(_lkkey):
+                from ..services import lookups as _lookups
+                _lc = await _lookups.resolve_lookup_name(arguments[_lkkey], self.execute, request_headers)
+                if _lc and str(_lc) != str(arguments[_lkkey]):
+                    log.bind(func="lookup_name", frm=str(arguments[_lkkey]), to=str(_lc)).info(
+                        f"resolved lookup '{arguments[_lkkey]}' → {_lc}")
+                    arguments[_lkkey] = _lc
+            _tool = await self.get_tool(tool_name)
+            if _tool and any(p.name.lower() == "applicationid" for p in _tool.parameters) \
+                    and not str(arguments.get("applicationId") or "").strip():
+                arguments["applicationId"] = cfg.LOOKUP_ADMIN_APP_ID
         # Skill lookups: resolve master-data fields (type/category/status) named by the user
         # to their code, via the ADMINISTRATION-app lookups.
         _sk = _skills.by_tool(tool_name)
