@@ -211,6 +211,29 @@ def apply_defaults(tool_name: str, arguments: dict[str, Any]) -> list[str]:
 
 # ── Pre-create validation ───────────────────────────────────────────────────────────────
 
+def missing_required(tool_name: str, args: dict[str, Any]) -> list[str]:
+    """Required fields the model failed to collect (empty/absent). Deterministic gate so a
+    small model can't skip straight to the mutation with invented or partial values."""
+    s = by_tool(tool_name)
+    if not s or not s.required:
+        return []
+    return [f for f in s.required if not str((args or {}).get(f) or "").strip()]
+
+
+def ask_for_required(tool_name: str, missing: list[str]) -> str:
+    """Friendly clarifying question naming the fields still needed (no method names)."""
+    s = by_tool(tool_name)
+    what = s.summary if s else "continue"
+    names = [_humanize(f).lower() for f in missing]
+    if len(names) == 1:
+        fields = names[0]
+    elif len(names) == 2:
+        fields = f"{names[0]} and {names[1]}"
+    else:
+        fields = ", ".join(names[:-1]) + f", and {names[-1]}"
+    return f"To {what}, I just need the {fields}. What would you like to use?"
+
+
 async def validate_inputs(tool_name: str, args: dict[str, Any], execute, request_headers) -> list[str]:
     """Run a skill's format + uniqueness checks BEFORE the mutation. Returns error messages
     (empty = ok). Uniqueness calls a read tool; a non-empty result means it already exists."""

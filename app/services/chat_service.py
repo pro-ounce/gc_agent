@@ -197,15 +197,16 @@ class ChatService:
             # Validate skill mutations BEFORE creating (format + uniqueness).
             verr = await self._validate_skill_calls(llm_response.tool_calls, request_headers)
             if verr:
-                session.add_assistant(verr)
+                vmsg, vlevel = verr
+                session.add_assistant(vmsg)
                 session_service.save(session)
                 return ChatResponse(
                     session_id=session_id,
                     message_id=str(uuid.uuid4()),
-                    assistant_message=verr,
-                    blocks=[UIBlock(type="notice", level="error", text=verr)],
+                    assistant_message=vmsg,
+                    blocks=[UIBlock(type="notice", level=vlevel, text=vmsg)],
                     tool_calls_made=tool_calls_made,
-                    finish_reason="validation_failed",
+                    finish_reason="needs_input" if vlevel == "info" else "validation_failed",
                 )
 
             # Process tool calls
@@ -484,16 +485,19 @@ class ChatService:
                                   blocks=sblocks, finish_reason="stop")
                 return
 
-            # Validate skill mutations BEFORE creating (format + uniqueness).
+            # Gate skill mutations BEFORE creating: ask for missing required fields (info),
+            # else block on format/uniqueness failure (error).
             verr = await self._validate_skill_calls(tool_calls, request_headers)
             if verr:
-                session.add_assistant(verr)
+                vmsg, vlevel = verr
+                fin = "needs_input" if vlevel == "info" else "validation_failed"
+                session.add_assistant(vmsg)
                 session_service.save(session)
                 if turn:
-                    turn.finish("validation_failed")
-                yield StreamChunk(type="done", session_id=session_id, content=verr,
-                                  blocks=[UIBlock(type="notice", level="error", text=verr)],
-                                  finish_reason="validation_failed")
+                    turn.finish(fin)
+                yield StreamChunk(type="done", session_id=session_id, content=vmsg,
+                                  blocks=[UIBlock(type="notice", level=vlevel, text=vmsg)],
+                                  finish_reason=fin)
                 return
 
             # Run tools inline; STOP at the first one that needs confirmation.
@@ -621,17 +625,23 @@ class ChatService:
 
     # ── Skill validation & dependency chains ──────────────────────────────────
 
-    async def _validate_skill_calls(self, tool_calls, request_headers) -> str | None:
-        """Run pre-create validation (format + uniqueness) for any skill mutation the model
-        is about to call. Returns a combined error message, or None if all clear."""
+    async def _validate_skill_calls(self, tool_calls, request_headers) -> tuple[str, str] | None:
+        """Gate a skill mutation the model is about to call. Returns (message, level) or None:
+          • ("…what would you like…", "info")  → required fields missing: ask, don't error.
+          • ("… already exists.", "error")      → format/uniqueness failure: block the create.
+        The required-field gate is deterministic — a small model can't skip past it by
+        inventing partial values."""
         for tc in tool_calls or []:
             name = getattr(tc, "name", None) or (tc.get("name") if isinstance(tc, dict) else None)
             args = getattr(tc, "input", None)
             if args is None and isinstance(tc, dict):
                 args = tc.get("input", {})
+            missing = skills.missing_required(name or "", args or {})
+            if missing:
+                return (skills.ask_for_required(name or "", missing), "info")
             errs = await skills.validate_inputs(name or "", args or {}, tool_registry.execute, request_headers)
             if errs:
-                return " ".join(errs)
+                return (" ".join(errs), "error")
         return None
 
     async def _skill_chain_events(
