@@ -120,7 +120,7 @@ async def agent_me(
     except Exception:  # noqa: BLE001 — a greeting must never fail the widget
         pass
     display = first or full or (user.username if user.username not in ("", "anonymous") else "there")
-    return ApiResponse.ok("ok", {
+    return ApiResponse.ok(message="ok", data={
         "userName": user.username, "firstName": first, "fullName": full, "displayName": display,
     })
 
