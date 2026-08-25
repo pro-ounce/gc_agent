@@ -11,6 +11,7 @@ Deliberately decoupled from tool_registry: the caller passes its `execute` corou
 """
 from __future__ import annotations
 
+import re
 import time
 from typing import Any, Awaitable, Callable
 
@@ -85,18 +86,31 @@ async def _code_map(execute: ExecFn, request_headers: dict | None) -> dict[str, 
     return m
 
 
+def _toks(s: Any) -> list[str]:
+    return [t for t in re.split(r"[^a-z0-9]+", str(s).lower()) if len(t) > 2]
+
+
 async def resolve_lookup_name(name: Any, execute: ExecFn, request_headers: dict | None) -> str | None:
-    """Map a lookup name/label to its code (e.g. 'account category' → USER_ACCOUNT_CATEGORIES)."""
+    """Map a lookup name/label to its code (e.g. 'account category' → USER_ACCOUNT_CATEGORIES).
+    Token-prefix match so singular/plural and code/name forms all resolve."""
     if name in (None, ""):
         return None
     m = await _code_map(execute, request_headers)
     key = str(name).strip().lower()
-    if key in m:
+    if key in m:                                   # exact code or label
         return m[key]
-    for alias, code in m.items():          # loose: 'account category' in 'user account categories'
-        if key and key in alias:
-            return code
-    return None
+    ktoks = _toks(key)
+    if not ktoks:
+        return None
+    by_code: dict[str, set[str]] = {}
+    for alias, code in m.items():
+        by_code.setdefault(code, set()).update(_toks(alias))
+    best, best_score = None, 0
+    for code, atoks in by_code.items():            # every key token must prefix-match an alias token
+        score = sum(1 for k in ktoks if any(a[:4] == k[:4] for a in atoks))
+        if score > best_score:
+            best, best_score = code, score
+    return best if best_score >= len(ktoks) else None
 
 
 async def resolve(lookup_code: str, value: Any, execute: ExecFn, request_headers: dict | None) -> str | None:
