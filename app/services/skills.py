@@ -14,8 +14,11 @@ Add a new action by appending a Skill below — no control-flow changes needed.
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from typing import Any
+
+from .ui_blocks import _humanize
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,8 @@ class Skill:
     defaults: dict[str, Any] = field(default_factory=dict)  # static fills if omitted
     derived: dict[str, tuple[str, ...]] = field(default_factory=dict)  # target ← join(sources)
     lookups: dict[str, str] = field(default_factory=dict)   # field → admin lookup code (name→code)
+    validate: dict[str, str] = field(default_factory=dict)  # field → regex (format check)
+    unique: dict[str, str] = field(default_factory=dict)    # field → check tool (must NOT already exist)
     then: tuple[Step, ...] = ()        # dependency chain run after the entry tool (on confirm)
     summary: str = ""                  # short verb phrase used in grounding
 
@@ -64,6 +69,9 @@ SKILLS: list[Skill] = [
         },
         # Computed from what the user gave, so the model needn't supply them.
         derived={"ssoUserName": ("userName",), "fullName": ("firstName", "lastName")},
+        # Validate BEFORE creating: email format + username must not already exist.
+        validate={"emailAddress": r"^[^@\s]+@[^@\s]+\.[^@\s]+$"},
+        unique={"userName": "getUserByUserName_get"},
         # Master-data fields: the user may name a type/category/status; resolved to its
         # code via the ADMINISTRATION-app lookups (USER_ACCOUNT_*). Defaults above win if
         # the user says nothing.
@@ -138,6 +146,33 @@ def apply_defaults(tool_name: str, arguments: dict[str, Any]) -> list[str]:
             arguments[target] = " ".join(parts)
             filled.append(target)
     return filled
+
+
+# ── Pre-create validation ───────────────────────────────────────────────────────────────
+
+async def validate_inputs(tool_name: str, args: dict[str, Any], execute, request_headers) -> list[str]:
+    """Run a skill's format + uniqueness checks BEFORE the mutation. Returns error messages
+    (empty = ok). Uniqueness calls a read tool; a non-empty result means it already exists."""
+    s = by_tool(tool_name)
+    if not s:
+        return []
+    errs: list[str] = []
+    for fld, pattern in s.validate.items():
+        val = str(args.get(fld) or "").strip()
+        if val and not re.match(pattern, val):
+            errs.append(f"'{val}' is not a valid {_humanize(fld).lower()}.")
+    for fld, check_tool in s.unique.items():
+        val = str(args.get(fld) or "").strip()
+        if not val:
+            continue
+        try:
+            res = await execute(check_tool, {fld: val}, request_headers)
+            data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+            if data not in (None, "", [], {}):
+                errs.append(f"A record with {_humanize(fld).lower()} '{val}' already exists.")
+        except Exception:  # noqa: BLE001 — a failing pre-check must not block a legitimate create
+            pass
+    return errs
 
 
 # ── Dependency-chain execution ──────────────────────────────────────────────────────────

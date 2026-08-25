@@ -23,7 +23,7 @@ from ..services import runtime_config
 from ..commons.logger import get_logger
 from ..mcp.prompt_registry import prompt_registry
 from ..mcp.tool_registry import is_mutation, tool_registry
-from ..models.chat import ChatResponse, StreamChunk
+from ..models.chat import ChatResponse, StreamChunk, UIBlock
 from ..models.mcp import PendingAction
 from ..services import skills
 from ..services.ui_blocks import blocks_from_outputs, blocks_to_text, lead_in
@@ -187,6 +187,20 @@ class ChatService:
 
             if not llm_response.has_tool_calls:
                 break
+
+            # Validate skill mutations BEFORE creating (format + uniqueness).
+            verr = await self._validate_skill_calls(llm_response.tool_calls, request_headers)
+            if verr:
+                session.add_assistant(verr)
+                session_service.save(session)
+                return ChatResponse(
+                    session_id=session_id,
+                    message_id=str(uuid.uuid4()),
+                    assistant_message=verr,
+                    blocks=[UIBlock(type="notice", level="error", text=verr)],
+                    tool_calls_made=tool_calls_made,
+                    finish_reason="validation_failed",
+                )
 
             # Process tool calls
             pending = await self._process_tool_calls(
@@ -461,6 +475,18 @@ class ChatService:
                                   blocks=sblocks, finish_reason="stop")
                 return
 
+            # Validate skill mutations BEFORE creating (format + uniqueness).
+            verr = await self._validate_skill_calls(tool_calls, request_headers)
+            if verr:
+                session.add_assistant(verr)
+                session_service.save(session)
+                if turn:
+                    turn.finish("validation_failed")
+                yield StreamChunk(type="done", session_id=session_id, content=verr,
+                                  blocks=[UIBlock(type="notice", level="error", text=verr)],
+                                  finish_reason="validation_failed")
+                return
+
             # Run tools inline; STOP at the first one that needs confirmation.
             executed: list[tuple[dict[str, Any], str]] = []
             pending_tc: dict[str, Any] | None = None
@@ -553,7 +579,20 @@ class ChatService:
         yield StreamChunk(type="done", session_id=session_id, content="",
                           blocks=blocks_from_outputs(tool_outputs), finish_reason="max_iterations")
 
-    # ── Skill dependency chains ───────────────────────────────────────────────
+    # ── Skill validation & dependency chains ──────────────────────────────────
+
+    async def _validate_skill_calls(self, tool_calls, request_headers) -> str | None:
+        """Run pre-create validation (format + uniqueness) for any skill mutation the model
+        is about to call. Returns a combined error message, or None if all clear."""
+        for tc in tool_calls or []:
+            name = getattr(tc, "name", None) or (tc.get("name") if isinstance(tc, dict) else None)
+            args = getattr(tc, "input", None)
+            if args is None and isinstance(tc, dict):
+                args = tc.get("input", {})
+            errs = await skills.validate_inputs(name or "", args or {}, tool_registry.execute, request_headers)
+            if errs:
+                return " ".join(errs)
+        return None
 
     async def _run_skill_chain(
         self, entry_tool: str, entry_args: dict[str, Any], entry_output: Any,
