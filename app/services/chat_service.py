@@ -44,9 +44,21 @@ _INTENT_RE = re.compile(
 )
 
 
+# The model is legitimately ASKING the user for input (a clarifying question) — the turn
+# should END here, never be nudged to "proceed" (which makes it invent values).
+_ASKING_RE = re.compile(
+    r"\?|\b(could you|can you|would you|please provide|please share|what (is|are|'s)|"
+    r"which|provide (the|these|your|me)|i need (the|some|to know|more)|let me know|"
+    r"do you (have|want)|may i)\b",
+    re.IGNORECASE,
+)
+
+
 def _looks_like_unfulfilled_intent(text: str) -> bool:
     t = (text or "").strip()
-    return bool(t) and _INTENT_RE.search(t) is not None
+    if not t or _ASKING_RE.search(t):   # a question to the user is a valid turn end, not a dead-end
+        return False
+    return _INTENT_RE.search(t) is not None
 
 
 # Never leave the user with a blank bubble — a graceful fallback when the model produced
