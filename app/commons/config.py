@@ -173,7 +173,9 @@ class AppConfig:
     # Resolver tools always offered alongside the RAG hits — small utility lookups the model
     # needs to turn a name/code into an id (getAllApplications_get → applicationId). Without
     # pinning, a "roles for app X" query may not surface the app lookup, so the chain breaks.
-    TOOL_RAG_PINNED: str = env_str("TOOL_RAG_PINNED", "getUserAppsByUserId_get") or ""
+    TOOL_RAG_PINNED: str = env_str(
+        "TOOL_RAG_PINNED", "getUserAppsByUserId_get,getUserAppRoleByUserId_post"
+    ) or ""
     # Structured-response mode: when read-only tool results already render as UIBlocks,
     # skip the final LLM synthesis call and emit a one-line lead-in + the blocks. Kills the
     # stream-prose-then-table double render and the generation latency for data lookups.

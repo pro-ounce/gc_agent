@@ -116,7 +116,8 @@ def _is_id_col(k: str) -> bool:
     return kl == "id" or kl.endswith("id")
 
 
-_NOISE_COL_HINTS = ("icon", "url", "image", "img", "href", "logo", "avatar", "attribute")
+_NOISE_COL_HINTS = ("icon", "url", "image", "img", "href", "logo", "avatar", "attribute",
+                    "rnum", "rownum", "rowid")
 
 
 def _is_noise_col(k: str) -> bool:
@@ -125,17 +126,25 @@ def _is_noise_col(k: str) -> bool:
 
 
 def _table_block(name: str, rows_in: list[dict]) -> UIBlock:
+    sample = rows_in[:_MAX_ROWS]
     all_keys: list[str] = []
-    for row in rows_in[:_MAX_ROWS]:
+    for row in sample:
         for k in row.keys():
             if k not in all_keys:
                 all_keys.append(k)
-    # Drop url/icon/image noise columns (never useful in a chat table), then prefer
-    # human-meaningful columns, pushing id-like ones to the end.
+    # Drop url/icon/rownum noise columns (never useful in a chat table).
     keys = [k for k in all_keys if not _is_noise_col(k)] or all_keys
+    # Drop constant columns — a value repeated in every row carries no information in a
+    # table (e.g. the user's own name when the query is scoped to them). Keep them only
+    # if dropping would leave fewer than 2 columns.
+    if len(sample) >= 2:
+        varying = [k for k in keys if len({_cell(r.get(k)) for r in sample}) > 1]
+        if len(varying) >= 2:
+            keys = varying
+    # Prefer human-meaningful columns; push id-like ones to the end.
     ordered = [k for k in keys if not _is_id_col(k)] + [k for k in keys if _is_id_col(k)]
     cols = ordered[:_MAX_COLS]
-    rows = [[_cell(row.get(c)) for c in cols] for row in rows_in[:_MAX_ROWS]]
+    rows = [[_cell(row.get(c)) for c in cols] for row in sample]
     block = UIBlock(
         type="table",
         title=_humanize(name),
