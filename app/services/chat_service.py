@@ -227,8 +227,7 @@ class ChatService:
                     message_id=str(uuid.uuid4()),
                     assistant_message=(
                         llm_response.text
-                        or f"I need your confirmation to run '{pending.tool_name}' "
-                        f"(risk: {pending.risk_level})."
+                        or skills.confirm_summary(pending.tool_name, pending.tool_args)
                     ),
                     pending_action=pending,
                     tool_calls_made=tool_calls_made,
@@ -562,12 +561,13 @@ class ChatService:
 
             if pending_tc is not None:
                 risk = (pending_tool.risk_level if pending_tool else "HIGH").upper()
+                human = skills.confirm_summary(pending_tc["name"], pending_tc["input"])
                 pending = PendingAction(
                     session_id=session_id,
                     tool_name=pending_tc["name"],
                     tool_args=pending_tc["input"],
                     risk_level=risk,
-                    description=f"Runs '{pending_tc['name']}' (risk: {risk}). Confirm to proceed.",
+                    description=human,
                 )
                 session.pending_action_id = pending.id
                 stored = pending.model_dump()
@@ -579,8 +579,7 @@ class ChatService:
                 yield StreamChunk(
                     type="confirm_required",
                     session_id=session_id,
-                    content=f"⚠️ This will run **{pending_tc['name']}** (risk: {risk}) with "
-                    f"{pending_tc['input']}. Confirm to proceed.",
+                    content=human,
                     pending_action=pending,
                 )
                 return
@@ -796,7 +795,7 @@ class ChatService:
                     tool_name=tc.name,
                     tool_args=tc.input,
                     risk_level=tool.risk_level,
-                    description=tool.description,
+                    description=skills.confirm_summary(tc.name, tc.input),
                 )
                 # Record the assistant message + tool_call in history
                 openai_tool_calls = [

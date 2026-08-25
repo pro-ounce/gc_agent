@@ -220,6 +220,24 @@ def missing_required(tool_name: str, args: dict[str, Any]) -> list[str]:
     return [f for f in s.required if not str((args or {}).get(f) or "").strip()]
 
 
+def confirm_summary(tool_name: str, args: dict[str, Any]) -> str:
+    """A human, method-name-free confirmation prompt for a mutating action.
+    e.g. 'Create a new user account — John Doe (username JDOE2025, email …). Shall I proceed?'"""
+    args = args or {}
+    s = by_tool(tool_name)
+    verb = (s.summary if s and s.summary else status_label(tool_name).rstrip("…").lower())
+    verb = verb[:1].upper() + verb[1:]
+    # Prefer the user-facing fields (a skill's required set); else any non-internal args.
+    fields = list(s.required) if (s and s.required) else [k for k in args if not str(k).startswith("_")]
+    parts = []
+    for f in fields:
+        v = args.get(f)
+        if v not in (None, "", [], {}):
+            parts.append(f"{_humanize(f).lower()}: {v}")
+    detail = f" — {', '.join(parts)}" if parts else ""
+    return f"{verb}{detail}. Shall I go ahead?"
+
+
 def ask_for_required(tool_name: str, missing: list[str]) -> str:
     """Friendly clarifying question naming the fields still needed (no method names)."""
     s = by_tool(tool_name)
