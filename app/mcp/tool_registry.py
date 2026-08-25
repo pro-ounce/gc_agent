@@ -157,8 +157,11 @@ class ToolRegistry:
             return cache["map"]
         amap: dict[str, Any] = {}
         try:
-            raw = await mcp_client.execute_tool("getAllApplications_get", {}, request_headers)
-            data = raw.get("data") if isinstance(raw, dict) else raw
+            # Reuse execute() so the JSON-RPC/envelope normalization is shared. Safe from
+            # recursion: getAllApplications_get carries no applicationId to resolve.
+            res = await self.execute("getAllApplications_get", {}, request_headers)
+            out = res.output if res.success else None
+            data = out.get("data") if isinstance(out, dict) else out
             for a in (data or []):
                 if not isinstance(a, dict):
                     continue
