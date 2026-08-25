@@ -56,22 +56,10 @@ _EMPTY_FALLBACK = (
     "for example the application, user, or exactly what you'd like me to do?"
 )
 
-_STATUS_GERUND = {
-    "get": "Fetching", "list": "Fetching", "fetch": "Fetching", "search": "Searching",
-    "find": "Finding", "check": "Checking", "add": "Adding", "create": "Creating",
-    "update": "Updating", "delete": "Deleting", "assign": "Assigning",
-    "deactivate": "Deactivating", "activate": "Activating",
-}
-
-
 def _friendly_status(tool_name: str) -> str:
-    """Human 'working on it' line for a tool call, e.g. getUserProfile_get → 'Fetching user profile…'."""
-    from .ui_blocks import _humanize
-    words = _humanize(tool_name).split()
-    if words and words[0].lower() in _STATUS_GERUND:
-        rest = " ".join(words[1:]).lower().strip()
-        return f"{_STATUS_GERUND[words[0].lower()]} {rest or 'the data'}…"
-    return f"Working on {_humanize(tool_name).lower()}…"
+    """Human 'working on it' line for a tool call — never exposes the method name.
+    Delegates to skills.status_label (curated tool labels + generic verb fallback)."""
+    return skills.status_label(tool_name)
 
 
 # Markers that signal the model is emitting a tool call AS TEXT (qwen does this instead of a
@@ -609,7 +597,7 @@ class ChatService:
         if skill and skill.then:
             ctx: dict[str, Any] = dict(entry_args or {})
             for step in skill.then:
-                yield ("status", _friendly_status(step.tool))
+                yield ("status", skills.status_label(step.tool, step))
                 args = skills.resolve_step_args(step, ctx)
                 try:
                     res = await tool_registry.execute(step.tool, args, request_headers)

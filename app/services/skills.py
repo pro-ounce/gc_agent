@@ -33,6 +33,7 @@ class Step:
     capture: dict[str, str] = field(default_factory=dict)
     render: bool = False
     optional: bool = False             # on failure: skip and continue (don't abort the chain)
+    label: str = ""                    # human status shown while this step runs (no method names)
 
 
 @dataclass(frozen=True)
@@ -84,11 +85,52 @@ SKILLS: list[Skill] = [
         # we threaded in, and show that record as the result (proves output→input threading).
         then=(
             Step(tool="getUserByUserName_get", args={"userName": "$userName"},
-                 capture={"userId": "id"}, render=True),
+                 capture={"userId": "id"}, render=True, label="Loading the new user"),
         ),
         summary="create a new user account",
     ),
 ]
+
+
+# Human status labels shown while a tool runs — keep method-level names OUT of the UI.
+_TOOL_LABELS: dict[str, str] = {
+    "addUser_post": "Creating the user",
+    "getUserByUserName_get": "Loading the user",
+    "getUserByUsernameAndUserId_get": "Loading the user",
+    "getUserProfile_get": "Loading the profile",
+    "getAllApplications_get": "Loading applications",
+    "getUserAppsByUserId_get": "Loading applications",
+    "getUserAppRoleByUserId_post": "Loading roles",
+    "getApplicationRolesBy_post": "Loading roles",
+    "getApplicationRolesByAppId_get": "Loading roles",
+    "getAllApplicationRoles_get": "Loading roles",
+    "getApplicationRoleByRole_post": "Loading the role",
+    "getLookupValueByLookupAndApplicationId_get": "Loading options",
+    "deactivateUserByUserName_put": "Deactivating the user",
+}
+
+# Generic verb fallback (by tool-name prefix) — clean, and still never a method name.
+_VERB_PHRASES: dict[str, str] = {
+    "add": "Creating", "create": "Creating", "register": "Creating", "save": "Saving",
+    "update": "Updating", "edit": "Updating", "modify": "Updating", "assign": "Assigning",
+    "delete": "Removing", "remove": "Removing", "deactivate": "Deactivating",
+    "activate": "Activating", "get": "Fetching", "list": "Fetching", "search": "Searching",
+    "find": "Finding", "check": "Checking", "fetch": "Fetching",
+}
+
+
+def status_label(tool_name: str, step: "Step | None" = None) -> str:
+    """A human 'working on it' line for a tool/step — never exposes the method name.
+    Priority: an explicit Step.label → a curated tool label → a generic verb phrase."""
+    if step is not None and step.label:
+        return f"{step.label}…"
+    if tool_name in _TOOL_LABELS:
+        return f"{_TOOL_LABELS[tool_name]}…"
+    tl = (tool_name or "").lower()
+    for prefix, phrase in _VERB_PHRASES.items():
+        if tl.startswith(prefix):
+            return f"{phrase}…"
+    return "Working on it…"
 
 
 def match(query: str) -> Skill | None:
