@@ -18,8 +18,9 @@ from typing import Any
 from ..models.chat import UIBlock
 
 _MAX_ROWS = 50          # cap table rows so a huge list can't bloat the reply
-_MAX_COLS = 8           # cap table columns
-_MAX_FIELD_VAL = 400    # truncate a single scalar value
+_MAX_COLS = 6           # cap table columns (keep the widget readable)
+_MAX_FIELD_VAL = 400    # truncate a single scalar value (fields card)
+_MAX_CELL_VAL = 60      # truncate a table cell (keeps rows compact)
 
 
 def _coerce(value: Any) -> Any:
@@ -105,15 +106,27 @@ def _fields_block(name: str, data: dict) -> UIBlock:
     return UIBlock(type="fields", title=_humanize(name), items=items, source_tool=name)
 
 
+def _cell(value: Any) -> str:
+    s = _fmt(value)
+    return s if len(s) <= _MAX_CELL_VAL else s[: _MAX_CELL_VAL - 1] + "…"
+
+
+def _is_id_col(k: str) -> bool:
+    kl = k.lower()
+    return kl == "id" or kl.endswith("id")
+
+
 def _table_block(name: str, rows_in: list[dict]) -> UIBlock:
-    cols: list[str] = []
+    all_keys: list[str] = []
     for row in rows_in[:_MAX_ROWS]:
         for k in row.keys():
-            if k not in cols:
-                cols.append(k)
-            if len(cols) >= _MAX_COLS:
-                break
-    rows = [[_fmt(row.get(c)) for c in cols] for row in rows_in[:_MAX_ROWS]]
+            if k not in all_keys:
+                all_keys.append(k)
+    # Prefer human-meaningful columns; push id-like ones to the end so the visible
+    # (capped) set favors names/descriptions over numeric ids.
+    ordered = [k for k in all_keys if not _is_id_col(k)] + [k for k in all_keys if _is_id_col(k)]
+    cols = ordered[:_MAX_COLS]
+    rows = [[_cell(row.get(c)) for c in cols] for row in rows_in[:_MAX_ROWS]]
     block = UIBlock(
         type="table",
         title=_humanize(name),
