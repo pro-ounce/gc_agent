@@ -36,6 +36,22 @@ class PromptExecuteRequest(BaseModel):
 
 # ── Outbound ──────────────────────────────────────────────────────────────────
 
+class UIBlock(BaseModel):
+    """A typed, render-ready piece of an assistant reply. Built deterministically from
+    tool results so the client renders structured data (cards/tables) instead of prose —
+    faster (near-zero LLM generation for data) and accurate (from source, not the model).
+    Clients that don't understand blocks fall back to `ChatResponse.assistant_message`."""
+    type: Literal["text", "fields", "table", "list", "code", "notice"]
+    title: str | None = None
+    text: str | None = None                       # text / notice / code body
+    items: list[Any] | None = None                # fields: [{label,value}] · list: [str]
+    columns: list[str] | None = None              # table header
+    rows: list[list[Any]] | None = None           # table rows
+    level: str | None = None                      # notice: info|success|warn|error
+    language: str | None = None                   # code
+    source_tool: str | None = None                # provenance
+
+
 class ChatMessage(BaseModel):
     role: Literal["user", "assistant", "tool"]
     content: str
@@ -49,6 +65,7 @@ class ChatResponse(BaseModel):
     assistant_message: str
     pending_action: PendingAction | None = None
     tool_calls_made: list[str] = Field(default_factory=list)
+    blocks: list[UIBlock] = Field(default_factory=list)
     model: str = ""
     usage: dict[str, int] | None = None
     finish_reason: str = "stop"

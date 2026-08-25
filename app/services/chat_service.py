@@ -25,6 +25,7 @@ from ..mcp.prompt_registry import prompt_registry
 from ..mcp.tool_registry import is_mutation, tool_registry
 from ..models.chat import ChatResponse, StreamChunk
 from ..models.mcp import PendingAction
+from ..services.ui_blocks import blocks_from_outputs, blocks_to_text
 from ..models.session import Session
 from ..services.llm_service import LLMResponse, ToolCall, llm
 from ..services.session_service import session_service
@@ -139,6 +140,7 @@ class ChatService:
         tool_calls_made: list[str] = []
 
         llm_response: LLMResponse | None = None
+        tool_outputs: list[tuple[str, Any, bool]] = []
 
         for iteration in range(runtime_config.get_int("LLM_MAX_ITERATIONS")):
             messages = session.to_llm_messages()
@@ -161,6 +163,7 @@ class ChatService:
                 llm_text=llm_response.text,
                 tool_calls_made=tool_calls_made,
                 request_headers=request_headers,
+                tool_outputs=tool_outputs,
             )
 
             if pending:
@@ -181,8 +184,14 @@ class ChatService:
                     finish_reason="tool_confirmation_required",
                 )
 
-        # Final assistant message
+        # Final assistant message + structured blocks (rendered from the actual tool
+        # results, not the model's prose — see services/ui_blocks).
         final_text = llm_response.text if llm_response else "I was unable to process your request."
+        blocks = blocks_from_outputs(tool_outputs)
+        # If the model returned no prose but we have data, give a plain-text fallback so
+        # non-block clients aren't left empty.
+        if not final_text.strip() and blocks:
+            final_text = blocks_to_text(blocks)
         session.add_assistant(final_text)
         session_service.save(session)
 
@@ -190,6 +199,7 @@ class ChatService:
             session_id=session_id,
             message_id=str(uuid.uuid4()),
             assistant_message=final_text,
+            blocks=blocks,
             tool_calls_made=tool_calls_made,
             model=llm_response.model if llm_response else "",
             usage=llm_response.usage if llm_response else None,
@@ -542,10 +552,13 @@ class ChatService:
         llm_text: str,
         tool_calls_made: list[str],
         request_headers: dict[str, str] | None,
+        tool_outputs: list[tuple[str, Any, bool]] | None = None,
     ) -> PendingAction | None:
         """
         Execute tool calls sequentially.
         Returns a PendingAction if any tool requires confirmation, else None.
+        `tool_outputs`, when given, collects (name, raw_output, success) per execution
+        so the caller can build structured UIBlocks from the actual tool results.
         """
         import json
 
@@ -587,6 +600,8 @@ class ChatService:
             result = await tool_registry.execute(tc.name, tc.input, request_headers)
             tool_calls_made.append(tc.name)
             output = str(result.output) if result.success else f"Error: {result.error}"
+            if tool_outputs is not None:
+                tool_outputs.append((tc.name, result.output if result.success else result.error, result.success))
 
             # Record assistant tool_call + tool result. Ollama expects arguments as an
             # OBJECT (dict), not a JSON string — a string here 400s the follow-up turn.

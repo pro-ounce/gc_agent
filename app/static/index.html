@@ -520,6 +520,33 @@ html, body { height: 100%; overflow: hidden; font-family: var(--font); backgroun
 
 /* ── Scrollbar (Firefox) ────────────────────────────────────────────── */
 * { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
+/* ── Rich response blocks (cards / tables / lists) ──────────────────── */
+.gc-card { border:1px solid var(--border); border-radius:var(--radius-md); background:rgba(255,255,255,0.02);
+  margin:8px 0; overflow:hidden; }
+.gc-card-t { font-size:11px; font-weight:700; letter-spacing:.04em; text-transform:uppercase;
+  color:var(--txt-secondary); padding:8px 12px; border-bottom:1px solid var(--border); background:rgba(255,255,255,0.02); }
+.gc-f { display:flex; gap:12px; padding:7px 12px; font-size:13px; border-bottom:1px solid rgba(255,255,255,0.04); }
+.gc-f:last-child { border-bottom:0; }
+.gc-fl { flex:0 0 40%; color:var(--txt-secondary); font-weight:600; }
+.gc-fv { flex:1; color:var(--txt-primary); word-break:break-word; }
+.gc-tw { overflow-x:auto; }
+.gc-t { width:100%; border-collapse:collapse; font-size:12.5px; }
+.gc-t th { text-align:left; padding:7px 12px; color:var(--txt-secondary); font-weight:700;
+  border-bottom:1px solid var(--border); white-space:nowrap; }
+.gc-t td { padding:6px 12px; color:var(--txt-primary); border-bottom:1px solid rgba(255,255,255,0.04); vertical-align:top; }
+.gc-t tr:last-child td { border-bottom:0; }
+.gc-ul { margin:6px 0; padding:4px 12px 8px 28px; font-size:13px; color:var(--txt-primary); }
+.gc-ul li { margin:3px 0; }
+.gc-note { font-size:11px; color:var(--txt-muted); padding:6px 12px; }
+.gc-text { font-size:13px; color:var(--txt-primary); white-space:pre-wrap; }
+.gc-code { font-family:ui-monospace,Menlo,monospace; font-size:12px; padding:10px 12px; overflow-x:auto;
+  color:var(--txt-primary); background:rgba(0,0,0,0.25); margin:0; }
+.gc-notice { font-size:13px; padding:9px 12px; border-radius:var(--radius-sm); margin:8px 0; border:1px solid var(--border); }
+.gc-error { color:#fecaca; background:rgba(239,68,68,0.12); border-color:rgba(239,68,68,0.4); }
+.gc-warn  { color:#fde68a; background:rgba(245,158,11,0.12); border-color:rgba(245,158,11,0.4); }
+.gc-success { color:#bbf7d0; background:rgba(16,185,129,0.12); border-color:rgba(16,185,129,0.4); }
+.gc-info  { color:var(--txt-primary); background:rgba(59,130,246,0.10); border-color:rgba(59,130,246,0.35); }
 </style>
 </head>
 <body>
@@ -751,9 +778,13 @@ function renderMsg(m) {
   const isUser = m.role === 'user';
   const rowCls = isUser ? 'user' : 'bot';
   const avatar = isUser ? '👤' : '🤖';
+  const blocksHtml = (!isUser && m.blocks && m.blocks.length) ? renderBlocks(m.blocks) : '';
+  // Rich blocks carry the data; when present they replace the prose (which is the
+  // plain-text fallback for non-block clients). Otherwise render the message text.
+  const botBody = blocksHtml || renderMarkdown(m.content);
   const bubble = isUser
     ? `<div class="msg-bubble">${esc(m.content)}</div>`
-    : `<div class="msg-bubble">${renderMarkdown(m.content)}</div>`;
+    : `<div class="msg-bubble">${botBody}</div>`;
   const tools = (m.tool_calls?.length)
     ? `<div class="tool-pills">${m.tool_calls.map(t => `<span class="tool-pill">⚙️ ${esc(t)}</span>`).join('')}</div>`
     : '';
@@ -773,9 +804,39 @@ function renderMarkdown(text) {
   catch { return esc(text); }
 }
 
-function addMsg(role, content, toolCalls) {
+/* ── Rich response blocks ─────────────────────────────────────────────── */
+function renderBlocks(blocks) {
+  return (blocks || []).map(renderBlock).join('');
+}
+function renderBlock(b) {
+  const card = (inner, title) =>
+    `<div class="gc-card">${title ? `<div class="gc-card-t">${esc(title)}</div>` : ''}${inner}</div>`;
+  switch (b.type) {
+    case 'fields':
+      return card((b.items || []).map(it =>
+        `<div class="gc-f"><span class="gc-fl">${esc(String(it.label ?? ''))}</span>`
+        + `<span class="gc-fv">${esc(String(it.value ?? ''))}</span></div>`).join(''), b.title);
+    case 'table': {
+      const head = `<tr>${(b.columns || []).map(c => `<th>${esc(String(c))}</th>`).join('')}</tr>`;
+      const body = (b.rows || []).map(r =>
+        `<tr>${(r || []).map(c => `<td>${esc(String(c))}</td>`).join('')}</tr>`).join('');
+      const note = b.text ? `<div class="gc-note">${esc(b.text)}</div>` : '';
+      return card(`<div class="gc-tw"><table class="gc-t">${head}${body}</table></div>${note}`, b.title);
+    }
+    case 'list':
+      return card(`<ul class="gc-ul">${(b.items || []).map(i => `<li>${esc(String(i))}</li>`).join('')}</ul>`, b.title);
+    case 'notice':
+      return `<div class="gc-notice gc-${esc(b.level || 'info')}">${esc(b.text || '')}</div>`;
+    case 'code':
+      return card(`<pre class="gc-code">${esc(b.text || '')}</pre>`, b.title);
+    default:
+      return `<div class="gc-text">${esc(b.text || '')}</div>`;
+  }
+}
+
+function addMsg(role, content, toolCalls, blocks) {
   if (!sessionId) return;
-  const m = { role, content, tool_calls: toolCalls || null, ts: Date.now() };
+  const m = { role, content, tool_calls: toolCalls || null, blocks: blocks || null, ts: Date.now() };
   sessions[sessionId].msgs.push(m);
 
   // Update session title from first user message
@@ -875,7 +936,7 @@ async function sendMessage() {
     removeTyping();
 
     const toolCalls = res.tool_calls_made?.length ? res.tool_calls_made : null;
-    addMsg('assistant', res.assistant_message, toolCalls);
+    addMsg('assistant', res.assistant_message, toolCalls, res.blocks);
 
     if (res.pending_action) {
       showConfirmBanner(res.pending_action);
@@ -923,7 +984,7 @@ async function confirmAction(confirmed) {
     });
     removeTyping();
     const toolCalls = res.tool_calls_made?.length ? res.tool_calls_made : null;
-    addMsg('assistant', res.assistant_message, toolCalls);
+    addMsg('assistant', res.assistant_message, toolCalls, res.blocks);
     if (res.pending_action) showConfirmBanner(res.pending_action);
   } catch (err) {
     removeTyping();
