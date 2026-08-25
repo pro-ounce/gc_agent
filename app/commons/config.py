@@ -183,6 +183,10 @@ class AppConfig:
     # Personal-assistant default: a user-scoped tool (has a userId param) called with no user
     # identifier is scoped to the caller — so "my apps/roles" means mine, not everyone's.
     DEFAULT_USER_SCOPE: bool = env_bool("DEFAULT_USER_SCOPE", True)
+    # Master-data (lookup) resolution for user/role/app management runs under the
+    # ADMINISTRATION application (its lookups: USER_ACCOUNT_TYPES, etc.). appId 2 = code
+    # ADMINISTRATION ("Systems Planner"); override if the environment differs.
+    LOOKUP_ADMIN_APP_ID: int = env_int("LOOKUP_ADMIN_APP_ID", 2) or 2
 
     # Session / KV store backend: "opensearch" (default) | "redis" | "memory".
     # We run on OpenSearch (already in the estate); Redis can be added later by flipping this.

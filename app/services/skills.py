@@ -26,6 +26,7 @@ class Skill:
     required: tuple[str, ...] = ()     # fields the model must collect (ask if missing)
     defaults: dict[str, Any] = field(default_factory=dict)  # static fills if omitted
     derived: dict[str, tuple[str, ...]] = field(default_factory=dict)  # target ← join(sources)
+    lookups: dict[str, str] = field(default_factory=dict)   # field → admin lookup code (name→code)
     summary: str = ""                  # short verb phrase used in grounding
 
 
@@ -48,6 +49,14 @@ SKILLS: list[Skill] = [
         },
         # Computed from what the user gave, so the model needn't supply them.
         derived={"ssoUserName": ("userName",), "fullName": ("firstName", "lastName")},
+        # Master-data fields: the user may name a type/category/status; resolved to its
+        # code via the ADMINISTRATION-app lookups (USER_ACCOUNT_*). Defaults above win if
+        # the user says nothing.
+        lookups={
+            "accountType": "USER_ACCOUNT_TYPES",
+            "accountCategory": "USER_ACCOUNT_CATEGORIES",
+            "accountStatus": "USER_ACCOUNT_STATUS",
+        },
         summary="create a new user account",
     ),
 ]
@@ -72,7 +81,7 @@ def by_tool(tool_name: str) -> Skill | None:
 def grounding(s: Skill) -> str:
     """System-prompt snippet appended when a skill is active."""
     req = ", ".join(s.required) if s.required else "(none)"
-    return (
+    g = (
         f"\n\nACTION — the user wants to {s.summary}. Use the '{s.tool}' tool. "
         f"Required fields: {req}. Ask the user ONLY for these — if one is missing, ask a short "
         f"question and do NOT call the tool yet (never invent values). Do NOT ask for any other "
@@ -81,6 +90,13 @@ def grounding(s: Skill) -> str:
         f"with just those; the rest are filled in. The action pauses for the user to confirm "
         f"before it runs."
     )
+    if s.lookups:
+        g += (
+            f" If the user names a type, category, or status (e.g. 'local', 'service', "
+            f"'external'), pass it as-is in the matching field ({', '.join(s.lookups)}) — it "
+            f"is resolved to the correct code automatically."
+        )
+    return g
 
 
 def apply_defaults(tool_name: str, arguments: dict[str, Any]) -> list[str]:

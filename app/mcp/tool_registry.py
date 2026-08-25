@@ -254,6 +254,20 @@ class ToolRegistry:
             log.bind(func="skill_defaults", tool=tool_name, filled=",".join(_filled)).info(
                 f"applied skill defaults on {tool_name}: {_filled}"
             )
+        # Skill lookups: resolve master-data fields (type/category/status) named by the user
+        # to their code, via the ADMINISTRATION-app lookups.
+        _sk = _skills.by_tool(tool_name)
+        if _sk and _sk.lookups:
+            from ..services import lookups as _lookups
+            for _fld, _code in _sk.lookups.items():
+                _raw = arguments.get(_fld)
+                if _raw in (None, ""):
+                    continue
+                _res = await _lookups.resolve(_code, str(_raw), self.execute, request_headers)
+                if _res and str(_res) != str(_raw):
+                    log.bind(func="skill_lookup", tool=tool_name, field=_fld,
+                             frm=str(_raw), to=str(_res)).info(f"resolved {_fld} '{_raw}' → {_res}")
+                    arguments[_fld] = _res
         start = _time.perf_counter()
         try:
             raw = await mcp_client.execute_tool(tool_name, arguments, request_headers)
