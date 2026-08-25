@@ -173,7 +173,7 @@ class AppConfig:
     # Resolver tools always offered alongside the RAG hits — small utility lookups the model
     # needs to turn a name/code into an id (getAllApplications_get → applicationId). Without
     # pinning, a "roles for app X" query may not surface the app lookup, so the chain breaks.
-    TOOL_RAG_PINNED: str = env_str("TOOL_RAG_PINNED", "") or ""
+    TOOL_RAG_PINNED: str = env_str("TOOL_RAG_PINNED", "getUserAppsByUserId_get") or ""
     # Structured-response mode: when read-only tool results already render as UIBlocks,
     # skip the final LLM synthesis call and emit a one-line lead-in + the blocks. Kills the
     # stream-prose-then-table double render and the generation latency for data lookups.
@@ -290,10 +290,10 @@ class AppConfig:
             "application-scoped tool directly and pass the application code or name as "
             "applicationId — the system resolves it to the numeric id automatically. "
             # Self-scope: 'my …' means the current user.
-            "When the user asks about their OWN data ('my applications', 'my roles', 'do I "
-            "have access'), use the user-scoped tool (e.g. getUserAppsByUserId) — NOT the "
-            "getAll… variants that return every user. You may omit userId; the system fills "
-            "in the current user."
+            "When the user asks about their OWN data ('my applications', 'do I have access'), "
+            "prefer a tool that takes a userId (e.g. getUserAppsByUserId) over an all-users "
+            "tool; leave userId blank — the system fills in the current user. Only fall back "
+            "to an all-users tool if no user-scoped option is offered."
         )
     )
 
