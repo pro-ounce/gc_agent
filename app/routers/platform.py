@@ -27,9 +27,34 @@ from ..commons.logger import get_logger
 from ..models.platform import ApiResponse
 from ..rbac.middleware import get_current_user
 from ..rbac.models import User
+import asyncio
+
 from ..services.chat_service import chat_service
 from ..services.session_service import session_service
+from ..services import skills as _skills
+from ..services import task_service
+from ..models.task import Task
+from ..models.chat import StreamChunk
 from ..mcp.tool_registry import tool_registry
+
+# Hold references to spawned background tasks so they aren't garbage-collected mid-run.
+_BG_TASKS: set = set()
+
+
+async def _start_task_if_async(question: str, session_id: str, user: "User", request: Request) -> Task | None:
+    """If the query maps to an async skill, create a Task, spawn its runner, and return it."""
+    sk = _skills.match(question or "")
+    if not sk or not sk.async_task:
+        return None
+    task = Task(user_id=user.id, session_id=session_id, type=sk.name,
+                title=sk.summary[:1].upper() + sk.summary[1:], status="queued")
+    task_service.create(task)
+    fut = asyncio.create_task(
+        chat_service.run_background_task(task.id, sk.tool, {}, _forward_headers(request))
+    )
+    _BG_TASKS.add(fut)
+    fut.add_done_callback(_BG_TASKS.discard)
+    return task
 
 log = get_logger(__name__)
 router = APIRouter(prefix="/ai-service", tags=["platform"])
@@ -153,6 +178,20 @@ async def agent_resume(
     })
 
 
+@router.get("/{agent}/tasks", summary="List the caller's recent background tasks")
+async def agent_tasks(agent: str, request: Request, user: User = Depends(get_current_user)) -> ApiResponse:
+    return ApiResponse.ok(message="ok", data={"tasks": task_service.list_by_user(user.id)})
+
+
+@router.get("/{agent}/tasks/{task_id}", summary="Poll a background task's status + result")
+async def agent_task(agent: str, task_id: str, request: Request,
+                     user: User = Depends(get_current_user)) -> ApiResponse:
+    t = task_service.get(task_id)
+    if not t or (t.user_id and t.user_id != user.id):
+        return ApiResponse.fail("Task not found", status_code=404)
+    return ApiResponse.ok(message="ok", data=t.model_dump())
+
+
 @router.post("/{agent}/reply", summary="Ask an AI agent and get a reply")
 async def agent_reply(
     agent: str,
@@ -172,6 +211,14 @@ async def agent_reply(
 
     # sessionId from the FE (multi-turn / "new chat"), else one conversation per user+agent.
     session_id = body.sessionId or f"{agent}:{user.id}"
+
+    # Long-running action → start a background task and return immediately.
+    task = await _start_task_if_async(body.question, session_id, request=request, user=user)
+    if task:
+        return ApiResponse.ok(message="ok", data={
+            "reply": f"Started: {task.title}. I'll update you here when it's ready.",
+            "task": task.model_dump(), "sessionId": session_id, "agentId": agent, "stub": False,
+        })
 
     scope = (body.scope or "GLOBAL").upper()
     app_code = _resolve_app_code(scope, body.appCode)
@@ -231,6 +278,15 @@ async def agent_reply_stream(
         if spec is None:
             yield {"data": ApiResponse.fail(
                 f"Unknown agent '{agent}'. Available: {', '.join(list_agents())}", 404
+            ).model_dump_json()}
+            return
+        # Long-running action → start a background task, tell the user, and stop the stream.
+        task = await _start_task_if_async(body.question, session_id, request=request, user=user)
+        if task:
+            yield {"data": StreamChunk(
+                type="done", session_id=session_id,
+                content=f"Started: {task.title}. I'll update you here when it's ready.",
+                task=task.model_dump(), finish_reason="task_started",
             ).model_dump_json()}
             return
         async for chunk in chat_service.reply_stream(

@@ -48,6 +48,7 @@ class Skill:
     validate: dict[str, str] = field(default_factory=dict)  # field → regex (format check)
     unique: dict[str, str] = field(default_factory=dict)    # field → check tool (must NOT already exist)
     then: tuple[Step, ...] = ()        # dependency chain run after the entry tool (on confirm)
+    async_task: bool = False           # run in the background (long job) and poll for completion
     summary: str = ""                  # short verb phrase used in grounding
 
 
@@ -88,6 +89,18 @@ SKILLS: list[Skill] = [
                  capture={"userId": "id"}, render=True, label="Loading the new user"),
         ),
         summary="create a new user account",
+    ),
+
+    # ── Background/async example: a report that runs in the background ──────────
+    Skill(
+        name="generate_report",
+        keywords=(
+            "generate report", "generate a report", "user access report", "access report",
+            "report on users", "run a report", "user application report",
+        ),
+        tool="getAllUserApps_get",     # aggregate read → rendered as a table "report"
+        async_task=True,
+        summary="generate a user-access report",
     ),
 ]
 

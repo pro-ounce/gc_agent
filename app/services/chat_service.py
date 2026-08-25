@@ -576,6 +576,37 @@ class ChatService:
         yield StreamChunk(type="done", session_id=session_id, content="",
                           blocks=blocks_from_outputs(tool_outputs), finish_reason="max_iterations")
 
+    # ── Background task runner ────────────────────────────────────────────────
+
+    async def run_background_task(
+        self, task_id: str, tool: str, args: dict[str, Any],
+        request_headers: dict[str, str] | None,
+    ) -> None:
+        """Execute a long-running skill in the background: run the entry tool + its `then`
+        chain, updating the durable Task with progress and the final result blocks."""
+        from ..services import task_service
+        task_service.update(task_id, status="running",
+                            progress={"step": skills.status_label(tool).rstrip("…"), "pct": 15})
+        try:
+            result = await tool_registry.execute(tool, dict(args), request_headers)
+            if not result.success:
+                task_service.update(task_id, status="failed", error=str(result.error))
+                return
+            render_out, render_name = result.output, tool
+            async for ev in self._skill_chain_events(tool, args, result.output, request_headers):
+                if ev[0] == "status":
+                    task_service.update(task_id, progress={"step": str(ev[1]).rstrip("…")})
+                elif ev[0] == "result":
+                    render_out, render_name = ev[1], ev[2]
+            blocks = blocks_from_outputs([(render_name, render_out, True)])
+            task_service.update(task_id, status="succeeded",
+                                result=[b.model_dump() for b in blocks],
+                                progress={"step": "Done", "pct": 100})
+            log.bind(func="task_run", task=task_id).info(f"task {task_id} succeeded")
+        except Exception as exc:  # noqa: BLE001
+            log.exception(f"background task {task_id} failed: {exc}")
+            task_service.update(task_id, status="failed", error=str(exc))
+
     # ── Skill validation & dependency chains ──────────────────────────────────
 
     async def _validate_skill_calls(self, tool_calls, request_headers) -> str | None:

@@ -66,6 +66,7 @@ class ChatResponse(BaseModel):
     pending_action: PendingAction | None = None
     tool_calls_made: list[str] = Field(default_factory=list)
     blocks: list[UIBlock] = Field(default_factory=list)
+    task: dict[str, Any] | None = None   # background task descriptor (id/status/title) to poll
     model: str = ""
     usage: dict[str, int] | None = None
     finish_reason: str = "stop"
@@ -76,6 +77,7 @@ class StreamChunk(BaseModel):
     session_id: str
     content: str = ""
     blocks: list[UIBlock] = Field(default_factory=list)  # populated on the final "done" chunk
+    task: dict[str, Any] | None = None   # background task descriptor (id/status/title) to poll
     pending_action: PendingAction | None = None
     finish_reason: str | None = None
     error: str | None = None

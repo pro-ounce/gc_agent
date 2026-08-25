@@ -127,6 +127,13 @@ def create_app() -> FastAPI:
         async def ui():
             return FileResponse(str(_static / "index.html"))
 
+    # Background tasks whose in-process runner died with a prior process → mark interrupted.
+    try:
+        from .services import task_service
+        task_service.reconcile_interrupted()
+    except Exception:  # noqa: BLE001 — never block startup on reconciliation
+        pass
+
     log.bind(func="create_app").info("Application initialised")
     return app
 
