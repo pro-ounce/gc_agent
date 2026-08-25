@@ -126,11 +126,46 @@ def _table_block(name: str, rows_in: list[dict]) -> UIBlock:
     return block
 
 
+def _is_falsey(v: Any) -> bool:
+    return v in (False, None, "", "false", "False", 0, "0")
+
+
+def _envelope_error(data: Any) -> str | None:
+    """If a GC {success,message,statusCode,errors} envelope signals a business error,
+    return a human message; else None. A tool can return HTTP 200 but success=false."""
+    if not isinstance(data, dict) or not any(k.lower() in _ENVELOPE_SIBLINGS for k in data):
+        return None
+    sc = data.get("statusCode", data.get("status", data.get("code")))
+    try:
+        sc_int = int(str(sc)) if sc is not None else None
+    except (ValueError, TypeError):
+        sc_int = None
+    errors = data.get("errors") or data.get("error")
+    has_errors = bool(errors) and errors not in ("", [], {})
+    failed = ("success" in data and _is_falsey(data.get("success"))) \
+        or (sc_int is not None and sc_int >= 400) or has_errors
+    if not failed:
+        return None
+    msg = data.get("message") or "Request failed"
+    return f"{msg} — {_fmt(errors)}" if has_errors else str(msg)
+
+
 def _block_for(name: str, raw: Any, success: bool) -> UIBlock:
     if not success:
         return UIBlock(type="notice", level="error", title=_humanize(name),
                        text=_fmt(raw), source_tool=name)
-    data = _unwrap(_coerce(raw))
+    coerced = _coerce(raw)
+    err = _envelope_error(coerced)
+    if err:
+        return UIBlock(type="notice", level="error", title=_humanize(name),
+                       text=err, source_tool=name)
+    # A successful GC envelope with no (or empty) payload → show its message as a note,
+    # not a card of {success, statusCode, message} meta.
+    if isinstance(coerced, dict) and any(k.lower() in _ENVELOPE_SIBLINGS for k in coerced):
+        if coerced.get("data") in (None, "", [], {}):
+            return UIBlock(type="notice", level="info", title=_humanize(name),
+                           text=str(coerced.get("message") or "No results found."), source_tool=name)
+    data = _unwrap(coerced)
     if isinstance(data, dict) and data:
         return _fields_block(name, data)
     if isinstance(data, list) and data and all(isinstance(x, dict) for x in data):
