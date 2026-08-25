@@ -116,15 +116,24 @@ def _is_id_col(k: str) -> bool:
     return kl == "id" or kl.endswith("id")
 
 
+_NOISE_COL_HINTS = ("icon", "url", "image", "img", "href", "logo", "avatar", "attribute")
+
+
+def _is_noise_col(k: str) -> bool:
+    kl = k.lower()
+    return any(h in kl for h in _NOISE_COL_HINTS)
+
+
 def _table_block(name: str, rows_in: list[dict]) -> UIBlock:
     all_keys: list[str] = []
     for row in rows_in[:_MAX_ROWS]:
         for k in row.keys():
             if k not in all_keys:
                 all_keys.append(k)
-    # Prefer human-meaningful columns; push id-like ones to the end so the visible
-    # (capped) set favors names/descriptions over numeric ids.
-    ordered = [k for k in all_keys if not _is_id_col(k)] + [k for k in all_keys if _is_id_col(k)]
+    # Drop url/icon/image noise columns (never useful in a chat table), then prefer
+    # human-meaningful columns, pushing id-like ones to the end.
+    keys = [k for k in all_keys if not _is_noise_col(k)] or all_keys
+    ordered = [k for k in keys if not _is_id_col(k)] + [k for k in keys if _is_id_col(k)]
     cols = ordered[:_MAX_COLS]
     rows = [[_cell(row.get(c)) for c in cols] for row in rows_in[:_MAX_ROWS]]
     block = UIBlock(
