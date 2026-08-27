@@ -155,6 +155,10 @@ class AppConfig:
     # HTTP timeout for LLM calls. CPU inference of a large prompt can take minutes, so
     # this must exceed the slowest expected turn (raise it, or move Ollama to a GPU).
     LLM_TIMEOUT_SECONDS: float = env_float("LLM_TIMEOUT_SECONDS", 300.0) or 300.0
+    # How long Ollama keeps the model resident after a call. "-1" = never unload → no cold
+    # reload on the first chat after idle (the model is ~10GB; a reload is seconds of dead air
+    # and can trip proxy timeouts). Combined with the startup warm-up, the model stays hot.
+    LLM_KEEP_ALIVE: str = env_str("LLM_KEEP_ALIVE", "-1") or "-1"
 
     # OLLAMA
     OLLAMA_BASE_URL: str = env_str("OLLAMA_BASE_URL", "http://localhost:11434") or "http://localhost:11434"

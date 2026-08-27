@@ -8,6 +8,7 @@ Usage:
 """
 from __future__ import annotations
 
+import asyncio
 import os
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
@@ -45,6 +46,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await prompt_registry.get_prompts()
     except Exception as exc:
         log.warning(f"MCP pre-warm failed (non-fatal): {exc}")
+
+    # Warm the LLM so the first chat after a (re)start isn't a cold model reload. Fire-and-
+    # forget: it must not delay the server accepting requests, and keep_alive=-1 pins it after.
+    try:
+        from .services.llm_service import llm
+        asyncio.create_task(llm().warm())
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"LLM warm-up scheduling failed (non-fatal): {exc}")
 
     if cfg.DEBUG:
         log.bind(func="lifespan").debug(f"Config: {cfg.to_dict()}")

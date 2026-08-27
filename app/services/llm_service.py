@@ -174,6 +174,29 @@ class OllamaProvider:
             "num_ctx": runtime_config.get_int("LLM_NUM_CTX"),
         }
 
+    def _keep_alive(self):
+        """How long Ollama keeps the model resident after a call. '-1' = never unload, so the
+        model stays warm and users never pay a cold-reload on the first chat after idle.
+        Ollama wants a NUMBER for -1/seconds (a bare '-1' string fails its duration parse); a
+        unit'd duration like '30m' stays a string."""
+        v = (runtime_config.get_str("LLM_KEEP_ALIVE") or "-1").strip()
+        return int(v) if v.lstrip("-").isdigit() else v
+
+    async def warm(self) -> bool:
+        """Pre-load the model into the GPU (called on startup) so the first real chat is fast.
+        A 1-token generate with keep_alive=-1 loads + pins the weights. Best-effort."""
+        try:
+            resp = await self._client.post("/api/generate", json={
+                "model": self.model, "prompt": "ok", "stream": False,
+                "options": {"num_predict": 1}, "keep_alive": self._keep_alive(),
+            })
+            resp.raise_for_status()
+            log.bind(func="warm").info(f"model warmed: {self.model}")
+            return True
+        except Exception as exc:  # noqa: BLE001 — warm-up must never break startup
+            log.bind(func="warm").warning(f"model warm-up failed (non-fatal): {exc}")
+            return False
+
     async def complete(
         self,
         messages: list[dict[str, Any]],
@@ -188,6 +211,7 @@ class OllamaProvider:
             "messages": full_messages,
             "stream": False,
             "options": self._options(),
+            "keep_alive": self._keep_alive(),
         }
         if tools:
             payload["tools"] = tools  # Already in OpenAI format from tool_registry
@@ -276,6 +300,7 @@ class OllamaProvider:
             "messages": full_messages,
             "stream": True,
             "options": self._options(),
+            "keep_alive": self._keep_alive(),
         }
 
         async with self._client.stream("POST", "/api/chat", json=payload) as resp:
@@ -308,6 +333,7 @@ class OllamaProvider:
             "messages": full_messages,
             "stream": True,
             "options": self._options(),
+            "keep_alive": self._keep_alive(),
         }
         if tools:
             payload["tools"] = tools

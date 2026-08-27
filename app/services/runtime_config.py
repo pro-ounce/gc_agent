@@ -44,6 +44,9 @@ def _param_specs() -> list[dict]:
               "Cap on generated tokens per call. Lower = shorter answers, faster.", min=64, max=8192),
         _spec("LLM_NUM_CTX", "Context window", "Model", "int", cfg.LLM_NUM_CTX,
               "Ollama context size (prompt + output tokens).", min=2048, max=65536),
+        _spec("LLM_KEEP_ALIVE", "Keep model warm", "Model", "string", cfg.LLM_KEEP_ALIVE,
+              "How long Ollama keeps the model loaded after a call. '-1' = never unload "
+              "(no cold start on the first chat); or e.g. '30m'."),
         # ── Retrieval ──
         _spec("TOOL_RAG_ENABLED", "Tool-RAG", "Retrieval", "bool", flags.tool_rag_enabled,
               "Retrieve only the top-K relevant tools per query (vs sending all)."),
