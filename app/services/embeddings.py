@@ -31,7 +31,10 @@ async def embed(text: str) -> list[float] | None:
         return None
     try:
         resp = await _http().post(
-            "/api/embeddings", json={"model": cfg.EMBED_MODEL, "prompt": text}
+            # keep_alive=-1 keeps the small embed model resident too, so per-query tool-RAG
+            # retrieval never pays a reload after idle.
+            "/api/embeddings",
+            json={"model": cfg.EMBED_MODEL, "prompt": text, "keep_alive": -1},
         )
         resp.raise_for_status()
         vec = resp.json().get("embedding")

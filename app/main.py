@@ -51,7 +51,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # forget: it must not delay the server accepting requests, and keep_alive=-1 pins it after.
     try:
         from .services.llm_service import llm
+        from .services import embeddings
         asyncio.create_task(llm().warm())
+        asyncio.create_task(embeddings.embed("warm"))   # pin the small tool-RAG embed model too
     except Exception as exc:  # noqa: BLE001
         log.warning(f"LLM warm-up scheduling failed (non-fatal): {exc}")
 
