@@ -176,9 +176,10 @@ def grounding(s: Skill) -> str:
         f"Required fields: {req}. Ask the user ONLY for these — if one is missing, ask a short "
         f"question and do NOT call the tool yet (never invent values). Do NOT ask for any other "
         f"field (password, account type, profile group, etc.); every non-required field is set "
-        f"automatically — never request it. Once you have the required fields, call the tool "
-        f"with just those; the rest are filled in. The action pauses for the user to confirm "
-        f"before it runs."
+        f"automatically — never request it. As soon as you have the required fields, CALL the "
+        f"tool with just those — do NOT restate the values back or ask the user to confirm, and "
+        f"never write 'confirm that this is correct'; the system shows its own confirmation step "
+        f"automatically after you call the tool. The rest of the fields are filled in for you."
     )
     if s.lookups:
         g += (

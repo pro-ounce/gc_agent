@@ -39,7 +39,8 @@ import re
 # without emitting one — qwen sometimes does this and dead-ends the turn. We nudge once.
 _INTENT_RE = re.compile(
     r"\b(i['’]?ll|i will|i am going to|i['’]?m going to|let me|let us|first,? (?:let|i))\b"
-    r"[^.]*\b(fetch|retrieve|look up|look\-up|get|obtain|find|call|use|check|query)\b",
+    r"[^.]*\b(fetch|retrieve|look up|look\-up|get|obtain|find|call|use|check|query|"
+    r"create|add|register|save|update|assign|onboard|set up|deactivate|activate|remove|delete)\b",
     re.IGNORECASE,
 )
 
