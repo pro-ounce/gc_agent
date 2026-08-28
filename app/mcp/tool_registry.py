@@ -192,6 +192,65 @@ class ToolRegistry:
             )
             arguments["applicationId"] = resolved
 
+    async def _resolve_user_id(
+        self, arguments: dict[str, Any], request_headers: dict[str, str] | None
+    ) -> None:
+        """Resolve a userId given as a username (or in a userName field) to the numeric id,
+        so assignment tools can be driven by name."""
+        val = arguments.get("userId")
+        name = None
+        if val is not None and str(val).strip() and not str(val).strip().isdigit():
+            name = str(val).strip()
+        elif not str(val or "").strip():
+            for k in ("userName", "username"):
+                if str(arguments.get(k) or "").strip():
+                    name = str(arguments[k]).strip()
+                    break
+        if not name:
+            return
+        try:
+            res = await self.execute("getUserByUserName_get", {"userName": name}, request_headers)
+            data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+            if isinstance(data, list):
+                data = data[0] if data else None
+            uid = (data or {}).get("id") or (data or {}).get("userId")
+            if uid is not None:
+                arguments["userId"] = uid
+                log.bind(func="resolve_user_id", frm=name, to=str(uid)).info(
+                    f"resolved userId '{name}' → {uid}"
+                )
+        except Exception:  # noqa: BLE001 — resolution is best-effort
+            pass
+
+    async def _resolve_role_id(
+        self, arguments: dict[str, Any], request_headers: dict[str, str] | None
+    ) -> None:
+        """Resolve an applicationRoleId given as a role NAME to its numeric id, using the
+        already-resolved applicationId's role list."""
+        val = arguments.get("applicationRoleId")
+        if val is None or not str(val).strip() or str(val).strip().isdigit():
+            return
+        role_name = str(val).strip().lower()
+        app_id = arguments.get("applicationId")
+        if not str(app_id or "").strip() or not str(app_id).strip().isdigit():
+            return
+        try:
+            res = await self.execute("getApplicationRolesByAppId_get", {"applicationId": app_id}, request_headers)
+            data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+            if isinstance(data, list):
+                for r in data:
+                    nm = str(r.get("roleName") or r.get("role") or r.get("name") or "").strip().lower()
+                    if nm and (nm == role_name or role_name in nm or nm in role_name):
+                        rid = r.get("applicationRoleId") or r.get("id") or r.get("roleId")
+                        if rid is not None:
+                            arguments["applicationRoleId"] = rid
+                            log.bind(func="resolve_role_id", frm=role_name, to=str(rid)).info(
+                                f"resolved role '{role_name}' → {rid}"
+                            )
+                            return
+        except Exception:  # noqa: BLE001
+            pass
+
     @staticmethod
     def _caller_user_id(request_headers: dict[str, str] | None) -> str | None:
         """The current user's id from the caller/forwarded JWT (sub claim)."""
@@ -246,6 +305,10 @@ class ToolRegistry:
         # not by numeric id. If applicationId is non-numeric, resolve it here so any
         # application-scoped tool works without depending on the model to chain a lookup.
         await self._resolve_application_id(arguments, request_headers)
+        # Assignment tools are driven by name → resolve userName/roleName to ids (app id first).
+        if tool_name in ("addUserApplicationAndRole_post", "addUserApplicationRole_post"):
+            await self._resolve_user_id(arguments, request_headers)
+            await self._resolve_role_id(arguments, request_headers)
         await self._apply_default_user_scope(tool_name, arguments, request_headers)
         # Skill defaults: fill safe defaults for an action tool's omitted fields.
         from ..services import skills as _skills

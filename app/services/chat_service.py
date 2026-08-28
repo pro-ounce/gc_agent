@@ -392,6 +392,10 @@ class ChatService:
                     render_out, render_name = _ev[1], _ev[2]
         blocks = blocks_from_outputs([(render_name, render_out if result.success else result.error, result.success)])
         lead = lead_in(blocks) if blocks else (output or "Done.")
+        if result.success:
+            fu = skills.follow_up_for(tool_name, tool_args)
+            if fu:
+                lead = f"{lead}\n\n{fu}"
         session.add_assistant(lead)
         session_service.save(session)
         if turn:

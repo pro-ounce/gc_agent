@@ -181,7 +181,8 @@ class AppConfig:
         "TOOL_RAG_PINNED",
         # getUserByUserName pinned so a named-user lookup ("who is GCADMIN") always has the
         # by-username tool available instead of falling back to an all-users list.
-        "getUserByUserName_get,getUserAppsByUserId_get,getUserAppRoleByUserId_post",
+        "getUserByUserName_get,getUserAppsByUserId_get,getUserAppRoleByUserId_post,"
+        "addUserApplicationAndRole_post,getApplicationRolesByAppId_get,getAllApplications_get",
     ) or ""
     # Structured-response mode: when read-only tool results already render as UIBlocks,
     # skip the final LLM synthesis call and emit a one-line lead-in + the blocks. Kills the

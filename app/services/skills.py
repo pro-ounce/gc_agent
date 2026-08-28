@@ -50,6 +50,8 @@ class Skill:
     then: tuple[Step, ...] = ()        # dependency chain run after the entry tool (on confirm)
     async_task: bool = False           # run in the background (long job) and poll for completion
     summary: str = ""                  # short verb phrase used in grounding
+    hint: str = ""                     # extra grounding note (e.g. how to pass name→id fields)
+    follow_up: str = ""                # suggestion appended after the mutation succeeds ({field} fmt)
 
 
 SKILLS: list[Skill] = [
@@ -89,6 +91,11 @@ SKILLS: list[Skill] = [
                  capture={"userId": "id"}, render=True, label="Loading the new user"),
         ),
         summary="create a new user account",
+        follow_up=(
+            "Would you like to give {userName} access to an application now? Just tell me the "
+            "application and role — for example, “assign FORMULATION with the ADMIN role to "
+            "{userName}”."
+        ),
     ),
 
     # ── Background/async example: a report that runs in the background ──────────
@@ -101,6 +108,30 @@ SKILLS: list[Skill] = [
         tool="getAllUserApps_get",     # aggregate read → rendered as a table "report"
         async_task=True,
         summary="generate a user-access report",
+    ),
+
+    # ── Assign an application + role to a user (drives the tool by NAME; ids resolved) ──
+    Skill(
+        name="assign_access",
+        keywords=(
+            "assign access", "assign application", "assign app", "assign role",
+            "give access", "grant access", "grant role", "add application to user",
+            "add role to user", "provide access", "give the user access",
+            "assign the application", "assign this application",
+        ),
+        tool="addUserApplicationAndRole_post",
+        required=("userId", "applicationId", "applicationRoleId"),
+        defaults={
+            "enabled": "Y", "isDefault": "N", "isFavourite": "N",
+            "displayOrder": 1, "versionNumber": 1,
+        },
+        summary="assign an application and role to a user",
+        hint=(
+            "Collect three things: the user's USERNAME, the APPLICATION (name or code), and the "
+            "ROLE name for that application. Pass the username in userId, the application name/"
+            "code in applicationId, and the role name in applicationRoleId — the system resolves "
+            "each to its numeric id automatically, so never ask the user for an id."
+        ),
     ),
 ]
 
@@ -187,6 +218,8 @@ def grounding(s: Skill) -> str:
             f"'external'), pass it as-is in the matching field ({', '.join(s.lookups)}) — it "
             f"is resolved to the correct code automatically."
         )
+    if s.hint:
+        g += f" {s.hint}"
     return g
 
 
@@ -237,6 +270,23 @@ def confirm_summary(tool_name: str, args: dict[str, Any]) -> str:
             parts.append(f"{_humanize(f).lower()}: {v}")
     detail = f" — {', '.join(parts)}" if parts else ""
     return f"{verb}{detail}. Shall I go ahead?"
+
+
+def follow_up_for(tool_name: str, args: dict[str, Any] | None) -> str:
+    """Suggestion appended after a skill's mutation succeeds (e.g. offer to assign access
+    right after a user is created). Fields in the template are filled from the call args."""
+    s = by_tool(tool_name)
+    if not s or not s.follow_up:
+        return ""
+    try:
+        return s.follow_up.format_map(_SafeDict(args or {}))
+    except Exception:  # noqa: BLE001
+        return s.follow_up
+
+
+class _SafeDict(dict):
+    def __missing__(self, key: str) -> str:  # leave unknown {placeholders} blank-ish
+        return ""
 
 
 def ask_for_required(tool_name: str, missing: list[str]) -> str:

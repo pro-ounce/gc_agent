@@ -58,10 +58,21 @@ def _unwrap(data: Any) -> Any:
     return data
 
 
+# Fields whose auto-Title-Case reads poorly (id-suffixed fields carrying name values in
+# skill flows). Kept small and generic so it improves confirm/ask/table labels everywhere.
+_LABEL_OVERRIDES = {
+    "userId": "User",
+    "applicationId": "Application",
+    "applicationRoleId": "Role",
+}
+
+
 def _humanize(key: str) -> str:
     """firstName / user_profile / getUserProfile_get → readable Title Case."""
     if not key:
         return ""
+    if key in _LABEL_OVERRIDES:
+        return _LABEL_OVERRIDES[key]
     k = key
     for suffix in ("_get", "_post", "_put", "_delete"):
         if k.endswith(suffix):
