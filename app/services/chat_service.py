@@ -23,9 +23,10 @@ from ..services import runtime_config
 from ..commons.logger import get_logger
 from ..mcp.prompt_registry import prompt_registry
 from ..mcp.tool_registry import is_mutation, tool_registry
-from ..models.chat import ChatResponse, StreamChunk, UIBlock
+from ..models.chat import ChatResponse, StreamChunk, Suggestion, UIBlock
 from ..models.mcp import PendingAction
 from ..services import skills
+from ..services import flows
 from ..services.ui_blocks import blocks_from_outputs, blocks_to_text, lead_in
 from ..models.session import Session
 from ..services.llm_service import LLMResponse, ToolCall, llm
@@ -165,6 +166,12 @@ class ChatService:
         session = session_service.get_or_create(session_id, user_id)
         session.add_user(user_message)
         session_service.save(session)
+
+        # Guided flow active (e.g. onboarding)? Advance it deterministically — no LLM.
+        if flows.is_active(session):
+            fr = await flows.handle(session, user_message, request_headers)
+            if fr is not None:
+                return self._flow_response(session, fr)
 
         system = system_prompt or cfg.AGENT_SYSTEM_PROMPT
         # Skill? Pin its backing action tool + ground the model on the required fields.
@@ -314,6 +321,81 @@ class ChatService:
             finish_reason="stop",
         )
 
+    # ── Guided-flow helpers ───────────────────────────────────────────────────
+
+    def _arm_flow_pending(self, session: Session, fr: "flows.FlowResult") -> PendingAction:
+        """Turn a flow's hand-off into a stored pending action (reuses the confirm path)."""
+        p = fr.pending or {}
+        pending = PendingAction(
+            id=str(uuid.uuid4()),
+            session_id=session.session_id,
+            tool_name=p["tool_name"],
+            tool_args=p["tool_args"],
+            description=p.get("summary") or skills.confirm_summary(p["tool_name"], p["tool_args"]),
+        )
+        session.add_assistant(fr.message, tool_calls=[{
+            "id": pending.id, "type": "function",
+            "function": {"name": p["tool_name"], "arguments": p["tool_args"]},
+        }])
+        session.metadata.setdefault("pending_actions", {})[pending.id] = pending.model_dump()
+        session.pending_action_id = pending.id
+        return pending
+
+    def _post_confirm_flow(
+        self, session: Session, tool_name: str, tool_args: dict[str, Any], final_text: str,
+    ) -> tuple[str, list[Suggestion]]:
+        """After a successful confirmed mutation, chain the guided flow:
+        creating a user arms onboarding; an in-flow assign resumes it; otherwise the
+        skill's plain text follow-up (if any) is appended. Returns (text, chips)."""
+        args = tool_args or {}
+        if tool_name == "addUser_post":
+            fr = flows.start_onboarding(session, args.get("firstName"), args.get("userName"))
+            return f"{final_text}\n\n{fr.message}", [Suggestion(**s) for s in fr.suggestions]
+        if flows.is_active(session) and tool_name == "addUserApplicationAndRole_post":
+            fr = flows.after_assign(session)
+            if fr is not None:
+                return f"{final_text}\n\n{fr.message}", [Suggestion(**s) for s in fr.suggestions]
+        fu = skills.follow_up_for(tool_name, args)
+        return (f"{final_text}\n\n{fu}" if fu else final_text), []
+
+    def _flow_response(self, session: Session, fr: "flows.FlowResult") -> ChatResponse:
+        """Render a guided-flow turn (sync). Either a confirm hand-off or a prompt+chips."""
+        sid = session.session_id
+        if fr.pending:
+            pending = self._arm_flow_pending(session, fr)
+            session_service.save(session)
+            return ChatResponse(
+                session_id=sid, message_id=str(uuid.uuid4()),
+                assistant_message=fr.message, pending_action=pending,
+                finish_reason="tool_confirmation_required",
+            )
+        session.add_assistant(fr.message)
+        session_service.save(session)
+        return ChatResponse(
+            session_id=sid, message_id=str(uuid.uuid4()),
+            assistant_message=fr.message,
+            suggestions=[Suggestion(**s) for s in fr.suggestions],
+            finish_reason="stop",
+        )
+
+    def _flow_chunks(self, session: Session, fr: "flows.FlowResult") -> list[StreamChunk]:
+        """Render a guided-flow turn (stream) as chunks to yield."""
+        sid = session.session_id
+        if fr.pending:
+            pending = self._arm_flow_pending(session, fr)
+            session_service.save(session)
+            return [StreamChunk(type="confirm_required", session_id=sid,
+                                content=fr.message, pending_action=pending,
+                                finish_reason="confirm_required")]
+        session.add_assistant(fr.message)
+        session_service.save(session)
+        return [
+            StreamChunk(type="delta", session_id=sid, content=fr.message),
+            StreamChunk(type="done", session_id=sid, content=fr.message,
+                        suggestions=[Suggestion(**s) for s in fr.suggestions],
+                        finish_reason="stop"),
+        ]
+
     async def reply_stream(
         self,
         session_id: str,
@@ -337,6 +419,16 @@ class ChatService:
         session.add_user(user_message)
         session.metadata["last_user_message"] = user_message
         session_service.save(session)
+
+        # Guided flow active (e.g. onboarding)? Advance it deterministically — no LLM.
+        if flows.is_active(session):
+            fr = await flows.handle(session, user_message, request_headers)
+            if fr is not None:
+                for ch in self._flow_chunks(session, fr):
+                    yield ch
+                turn.finish("stop")
+                return
+
         system = system_prompt or cfg.AGENT_SYSTEM_PROMPT
         skill = skills.match(user_message)
         if skill:
@@ -375,6 +467,13 @@ class ChatService:
 
         if not confirmed:
             session.add_tool_result(tc_id, tool_name, "User declined to run this action.")
+            fr = flows.on_decline(session)
+            if fr is not None:
+                for ch in self._flow_chunks(session, fr):
+                    yield ch
+                if turn:
+                    turn.finish("stop")
+                return
             session_service.save(session)
             if turn:
                 turn.finish("cancelled")
@@ -399,16 +498,15 @@ class ChatService:
                     render_out, render_name = _ev[1], _ev[2]
         blocks = blocks_from_outputs([(render_name, render_out if result.success else result.error, result.success)])
         lead = lead_in(blocks) if blocks else (output or "Done.")
+        suggestions: list[Suggestion] = []
         if result.success:
-            fu = skills.follow_up_for(tool_name, tool_args)
-            if fu:
-                lead = f"{lead}\n\n{fu}"
+            lead, suggestions = self._post_confirm_flow(session, tool_name, tool_args, lead)
         session.add_assistant(lead)
         session_service.save(session)
         if turn:
             turn.finish("stop")
         yield StreamChunk(type="done", session_id=session_id, content=lead,
-                          blocks=blocks, finish_reason="stop")
+                          blocks=blocks, suggestions=suggestions, finish_reason="stop")
 
     async def _stream_loop(
         self,
@@ -764,6 +862,10 @@ class ChatService:
 
         if not confirmed:
             session.add_tool_result(action_id, pending.tool_name, "User cancelled this operation.")
+            # If declining an in-flow assign, resume onboarding instead of a dead end.
+            fr = flows.on_decline(session)
+            if fr is not None:
+                return self._flow_response(session, fr)
             session_service.save(session)
             return ChatResponse(
                 session_id=session_id,
@@ -789,10 +891,10 @@ class ChatService:
         # re-run LLM synthesis — which tends to hallucinate on a bare tool-result turn.
         blocks = blocks_from_outputs([(render_name, render_out if result.success else result.error, result.success)])
         final_text = lead_in(blocks) if blocks else output_text
+        suggestions: list[Suggestion] = []
         if result.success:
-            fu = skills.follow_up_for(pending.tool_name, pending.tool_args)
-            if fu:
-                final_text = f"{final_text}\n\n{fu}"
+            final_text, suggestions = self._post_confirm_flow(
+                session, pending.tool_name, pending.tool_args, final_text)
         session.add_assistant(final_text)
         session_service.save(session)
 
@@ -801,6 +903,7 @@ class ChatService:
             message_id=str(uuid.uuid4()),
             assistant_message=final_text,
             blocks=blocks,
+            suggestions=suggestions,
             tool_calls_made=[pending.tool_name],
             finish_reason="stop",
         )

@@ -59,6 +59,14 @@ class ChatMessage(BaseModel):
     tool_results: list[dict[str, Any]] | None = None
 
 
+class Suggestion(BaseModel):
+    """A chip the widget renders under the assistant's message. On click the widget
+    prefills the input with `send` (defaults to `label`) so the user can edit + send."""
+    label: str
+    send: str = ""            # message to prefill on click; falls back to label when blank
+    icon: str | None = None   # optional icon key the widget maps (app, role, check, list, …)
+
+
 class ChatResponse(BaseModel):
     session_id: str
     message_id: str
@@ -66,6 +74,7 @@ class ChatResponse(BaseModel):
     pending_action: PendingAction | None = None
     tool_calls_made: list[str] = Field(default_factory=list)
     blocks: list[UIBlock] = Field(default_factory=list)
+    suggestions: list[Suggestion] = Field(default_factory=list)  # per-turn chips (guided flows)
     task: dict[str, Any] | None = None   # background task descriptor (id/status/title) to poll
     model: str = ""
     usage: dict[str, int] | None = None
@@ -77,6 +86,7 @@ class StreamChunk(BaseModel):
     session_id: str
     content: str = ""
     blocks: list[UIBlock] = Field(default_factory=list)  # populated on the final "done" chunk
+    suggestions: list[Suggestion] = Field(default_factory=list)  # per-turn chips (guided flows)
     task: dict[str, Any] | None = None   # background task descriptor (id/status/title) to poll
     pending_action: PendingAction | None = None
     finish_reason: str | None = None
