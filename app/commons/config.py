@@ -178,7 +178,10 @@ class AppConfig:
     # needs to turn a name/code into an id (getAllApplications_get → applicationId). Without
     # pinning, a "roles for app X" query may not surface the app lookup, so the chain breaks.
     TOOL_RAG_PINNED: str = env_str(
-        "TOOL_RAG_PINNED", "getUserAppsByUserId_get,getUserAppRoleByUserId_post"
+        "TOOL_RAG_PINNED",
+        # getUserByUserName pinned so a named-user lookup ("who is GCADMIN") always has the
+        # by-username tool available instead of falling back to an all-users list.
+        "getUserByUserName_get,getUserAppsByUserId_get,getUserAppRoleByUserId_post",
     ) or ""
     # Structured-response mode: when read-only tool results already render as UIBlocks,
     # skip the final LLM synthesis call and emit a one-line lead-in + the blocks. Kills the
@@ -319,6 +322,12 @@ class AppConfig:
             "When a query is about a named application (e.g. 'FORMULATION'), call the "
             "application-scoped tool directly and pass the application code or name as "
             "applicationId — the system resolves it to the numeric id automatically. "
+            # Named-user lookups → the by-username tool, not an all-users list.
+            "When the user asks about ONE specific user named by their username (e.g. 'who is "
+            "GCADMIN', 'details of jsmith', 'is GCADMIN an admin') call getUserByUserName with "
+            "that username — do NOT call an all-users or list tool for a single named user. Use "
+            "all-users / list tools ONLY for 'how many', 'all users', or an explicitly filtered "
+            "list. "
             # Self-scope: 'my …' means the current user.
             "When the user asks about their OWN data ('my applications', 'do I have access'), "
             "prefer a tool that takes a userId (e.g. getUserAppsByUserId) over an all-users "
