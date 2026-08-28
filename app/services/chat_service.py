@@ -242,7 +242,7 @@ class ChatService:
             blocks = blocks_from_outputs(tool_outputs)
             if (blocks and cfg.SKIP_SYNTHESIS_WITH_BLOCKS
                     and not any(is_mutation(n) for n in tool_calls_made)):
-                lead = lead_in(blocks)
+                lead = await self._synthesize_answer(session, tool_outputs) or lead_in(blocks)
                 session.add_assistant(lead)
                 session_service.save(session)
                 return ChatResponse(
@@ -551,12 +551,14 @@ class ChatService:
                     and not any(is_mutation(tc["name"]) for tc, _ in executed)):
                 sblocks = blocks_from_outputs(tool_outputs)
                 if sblocks:
-                    lead = lead_in(sblocks)
-                    session.add_assistant(lead)
+                    # Reason over the data to answer the actual question (grounded, no tools),
+                    # then attach the card. Falls back to a generic lead-in if synthesis fails.
+                    answer = await self._synthesize_answer(session, tool_outputs) or lead_in(sblocks)
+                    session.add_assistant(answer)
                     session_service.save(session)
                     if turn:
                         turn.finish("stop")
-                    yield StreamChunk(type="done", session_id=session_id, content=lead,
+                    yield StreamChunk(type="done", session_id=session_id, content=answer,
                                       blocks=sblocks, finish_reason="stop")
                     return
 
@@ -622,6 +624,45 @@ class ChatService:
         except Exception as exc:  # noqa: BLE001
             log.exception(f"background task {task_id} failed: {exc}")
             task_service.update(task_id, status="failed", error=str(exc))
+
+    async def _synthesize_answer(self, session: Session, tool_outputs: list[tuple[str, Any, bool]]) -> str:
+        """Answer the user's question from the tool data with ONE focused, no-tools LLM call.
+        This is far more reliable on a small model than re-running the agentic loop over a big
+        result (which derails into "I need more information"). Grounded to GC360, concise."""
+        import json as _json
+        from ..services.ui_blocks import _unwrap
+
+        question = next((m.content for m in reversed(session.messages) if m.role == "user"), "")
+        ctx: list[str] = []
+        for name, output, success in tool_outputs:
+            if not success:
+                ctx.append(f"{name}: ERROR {str(output)[:300]}")
+                continue
+            data = output
+            try:
+                data = _unwrap(output)
+            except Exception:  # noqa: BLE001
+                pass
+            n = len(data) if isinstance(data, list) else None
+            body = _json.dumps(data, default=str)
+            if len(body) > 6000:
+                body = body[:6000] + " …(truncated)"
+            ctx.append(f"{name}{f' returned {n} records' if n is not None else ''}: {body}")
+        sys = (
+            "You answer questions about the GovConnect 360 platform using ONLY the tool data "
+            "provided below — never outside knowledge, never invented values. Answer the user's "
+            "question directly in 1-2 sentences: for 'how many' give the count; for 'does X exist' "
+            "/ 'is there' say yes or no first; for 'who' / 'which' name the specific record; for "
+            "'what is' state the value. Do NOT list every field — the full records are shown to "
+            "the user separately as a card. If the data is empty, say nothing matches."
+        )
+        msgs = [{"role": "user", "content": f"Question: {question}\n\nData:\n" + "\n".join(ctx)}]
+        try:
+            resp = await llm().complete(msgs, [], sys)
+            return (resp.text or "").strip()
+        except Exception as exc:  # noqa: BLE001
+            log.bind(func="synthesize").warning(f"synthesis failed: {exc}")
+            return ""
 
     # ── Skill validation & dependency chains ──────────────────────────────────
 

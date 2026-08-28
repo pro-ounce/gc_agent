@@ -183,10 +183,10 @@ class AppConfig:
     # Structured-response mode: when read-only tool results already render as UIBlocks,
     # skip the final LLM synthesis call and emit a one-line lead-in + the blocks. Kills the
     # stream-prose-then-table double render and the generation latency for data lookups.
-    # False = after a read tool returns, let the model ANSWER the user's question from the
-    # data (count / yes-no / who), then attach the data card. True = skip that and just dump
-    # the card (fast, but doesn't comprehend the question).
-    SKIP_SYNTHESIS_WITH_BLOCKS: bool = env_bool("SKIP_SYNTHESIS_WITH_BLOCKS", False)
+    # True = after read tools return, produce a concise ANSWER via a dedicated no-tools
+    # synthesis call (count / yes-no / who), grounded in the data, then attach the data card —
+    # WITHOUT re-running the agentic loop (which a small model derails on big tables).
+    SKIP_SYNTHESIS_WITH_BLOCKS: bool = env_bool("SKIP_SYNTHESIS_WITH_BLOCKS", True)
     # Stream partial assistant text token-by-token. Default OFF: hold the model's text and
     # reveal only the final answer (or the result blocks) — so a tool/confirm/validation
     # outcome never has to erase a half-shown "I'll create the user…" line. Status chunks
