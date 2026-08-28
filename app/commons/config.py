@@ -183,7 +183,10 @@ class AppConfig:
     # Structured-response mode: when read-only tool results already render as UIBlocks,
     # skip the final LLM synthesis call and emit a one-line lead-in + the blocks. Kills the
     # stream-prose-then-table double render and the generation latency for data lookups.
-    SKIP_SYNTHESIS_WITH_BLOCKS: bool = env_bool("SKIP_SYNTHESIS_WITH_BLOCKS", True)
+    # False = after a read tool returns, let the model ANSWER the user's question from the
+    # data (count / yes-no / who), then attach the data card. True = skip that and just dump
+    # the card (fast, but doesn't comprehend the question).
+    SKIP_SYNTHESIS_WITH_BLOCKS: bool = env_bool("SKIP_SYNTHESIS_WITH_BLOCKS", False)
     # Stream partial assistant text token-by-token. Default OFF: hold the model's text and
     # reveal only the final answer (or the result blocks) — so a tool/confirm/validation
     # outcome never has to erase a half-shown "I'll create the user…" line. Status chunks
@@ -295,10 +298,19 @@ class AppConfig:
         env_str("AGENT_SYSTEM_PROMPT")
         or (
             "You are an intelligent enterprise assistant with access to a set of tools. "
-            "Use them to answer user queries accurately. "
+            "Understand what the user actually means, then use the tools to answer — do not "
+            "just pattern-match a keyword to a tool. "
             "Always confirm before executing HIGH or MEDIUM risk operations. "
             "Answer concisely and directly: no preamble, no restating the question, no filler. "
-            "Return only the facts the user asked for, as a short sentence or compact list. "
+            # The key behaviour: reason over the data, don't dump it.
+            "After a tool returns data, ANSWER the user's real question from it: for 'how many' "
+            "give the number; for 'does X exist' / 'is there …' answer yes or no first; for "
+            "'who' / 'which' name the specific item; for 'what is …' state it. The full records "
+            "are already shown to the user as a card, so DON'T repeat every field — give a "
+            "short, direct answer (1-2 sentences), never a raw data dump. If a tool returns "
+            "nothing, say so plainly (e.g. 'No user named jsmith exists'). Use ONLY the data the "
+            "tools return; never invent values. If the request is ambiguous, ask one short "
+            "clarifying question instead of guessing. "
             # ID resolution is handled by the system: the model may pass an application code or
             # name directly and it is resolved to the numeric id before the call.
             "When a query is about a named application (e.g. 'FORMULATION'), call the "
