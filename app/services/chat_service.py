@@ -172,8 +172,10 @@ class ChatService:
         if skill:
             system = system + skills.grounding(skill)
         # Tool-RAG: pick only tools relevant to this query (falls back to all — see select_tools).
+        # For a mutation skill, offer ONLY its action tool so a weaker model can't read-and-stop.
+        only = [skill.tool] if (skill and is_mutation(skill.tool)) else None
         tools = await tool_registry.select_tools(
-            user_message, request_headers, extra=[skill.tool] if skill else None
+            user_message, request_headers, extra=[skill.tool] if skill else None, only=only
         )
         _log_prompt(session_id, user_id, user_message, tools, mode="sync")
         tool_calls_made: list[str] = []
@@ -337,9 +339,10 @@ class ChatService:
         skill = skills.match(user_message)
         if skill:
             system = system + skills.grounding(skill)
+        only = [skill.tool] if (skill and is_mutation(skill.tool)) else None
         with turn.phase("retrieval"):
             tools = await tool_registry.select_tools(
-                user_message, request_headers, extra=[skill.tool] if skill else None
+                user_message, request_headers, extra=[skill.tool] if skill else None, only=only
             )
         _log_prompt(session_id, user_id, user_message, tools, mode="stream")
         async for chunk in self._stream_loop(session, tools, system, request_headers, turn):

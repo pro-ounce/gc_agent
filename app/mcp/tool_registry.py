@@ -120,13 +120,22 @@ class ToolRegistry:
 
     async def select_tools(
         self, query: str, request_headers: dict[str, str] | None = None,
-        extra: list[str] | None = None,
+        extra: list[str] | None = None, only: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         """Return OpenAI schemas for only the tools relevant to `query` (tool-RAG).
         Falls back to ALL tools when: the flag is off, the catalog is small
-        (≤ TOOL_RAG_MIN_TOOLS), or retrieval fails — so it never breaks chat."""
+        (≤ TOOL_RAG_MIN_TOOLS), or retrieval fails — so it never breaks chat.
+
+        `only` narrows the offered set to exactly those tool names (used when a mutation
+        skill is active: hiding the read tools stops a weaker model from looking data up
+        and then declining the action — the id lookups it needs still run server-side)."""
         tools = await self.get_tools(request_headers=request_headers)
         total_all = len(tools)
+        if only:
+            keep = set(only)
+            picked = [t for t in tools if t.name in keep]
+            if picked:
+                return _log_schema_cost([_to_tool_schema(t) for t in picked], len(tools))
         if runtime_config.get_bool("CHATBOT_READ_ONLY"):
             # Never OFFER mutations to the model — it can't call what it can't see.
             tools = [t for t in tools if _is_read_only(t.name)]
