@@ -457,11 +457,10 @@ class ChatService:
                     tool_calls = [{"id": f"tc_{c.name}", "name": c.name, "input": c.input} for c in recovered]
                     text = cleaned
 
-            # Flush the stream gate: drop held tool-call JSON if a tool was called this turn,
-            # otherwise (false alarm) emit the held text so nothing legitimate is lost.
+            # Flush the stream gate. If a tool was called, or we're about to nudge on a false-
+            # start intent ("I will fetch…"), the held text is a non-answer → DROP it (don't
+            # leak it as the reply). Only a genuine final answer flushes its tail.
             tail = gate.close(bool(tool_calls))
-            if tail:
-                yield StreamChunk(type="delta", session_id=session_id, content=tail)
 
             if not tool_calls:
                 # Model announced a tool call ("I will fetch…") but didn't emit one → nudge it
@@ -474,7 +473,9 @@ class ChatService:
                         "Do not just restate that you will."
                     )
                     session_service.save(session)
-                    continue
+                    continue  # drop the tail — it's a false-start, not the answer
+                if tail:
+                    yield StreamChunk(type="delta", session_id=session_id, content=tail)
                 sblocks = blocks_from_outputs(tool_outputs)
                 text = (text or "").strip() or ("" if sblocks else _EMPTY_FALLBACK)
                 session.add_assistant(text)
