@@ -127,10 +127,13 @@ SKILLS: list[Skill] = [
         },
         summary="assign an application and role to a user",
         hint=(
-            "Collect three things: the user's USERNAME, the APPLICATION (name or code), and the "
+            "You need three things: the user's USERNAME, the APPLICATION (name or code), and the "
             "ROLE name for that application. Pass the username in userId, the application name/"
-            "code in applicationId, and the role name in applicationRoleId — the system resolves "
-            "each to its numeric id automatically, so never ask the user for an id."
+            "code in applicationId, and the role name in applicationRoleId EXACTLY as the user "
+            "gave them — the system resolves each name to its numeric id automatically. Do NOT "
+            "look up the user, the application, or the role to 'find ids' first, and do NOT ask "
+            "the user for any id: call addUserApplicationAndRole_post directly with the three "
+            "names. Only ask a question if one of the three (user, application, or role) is missing."
         ),
     ),
 ]
@@ -210,7 +213,11 @@ def grounding(s: Skill) -> str:
         f"automatically — never request it. As soon as you have the required fields, CALL the "
         f"tool with just those — do NOT restate the values back or ask the user to confirm, and "
         f"never write 'confirm that this is correct'; the system shows its own confirmation step "
-        f"automatically after you call the tool. The rest of the fields are filled in for you."
+        f"automatically after you call the tool. The rest of the fields are filled in for you. "
+        f"This is a fully supported in-scope GovConnect 360 action: NEVER decline it, NEVER say "
+        f"to use 'platform administration' or another system, and NEVER just read/look up data "
+        f"and stop — you perform it yourself by calling '{s.tool}'. Any lookup you do is only to "
+        f"gather a required value; once you have the required fields, call the tool in the SAME turn."
     )
     if s.lookups:
         g += (
