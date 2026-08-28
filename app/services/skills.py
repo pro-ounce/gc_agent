@@ -52,6 +52,7 @@ class Skill:
     summary: str = ""                  # short verb phrase used in grounding
     hint: str = ""                     # extra grounding note (e.g. how to pass name→id fields)
     follow_up: str = ""                # suggestion appended after the mutation succeeds ({field} fmt)
+    schema: dict[str, Any] | None = None  # slim param schema shown to the model (names, not ids)
 
 
 SKILLS: list[Skill] = [
@@ -126,6 +127,29 @@ SKILLS: list[Skill] = [
             "displayOrder": 1, "versionNumber": 1,
         },
         summary="assign an application and role to a user",
+        # Slim schema shown to the model: three NAME strings, not the real integer-id fields
+        # (which make a weak model try to look ids up and stall). Registry resolves them.
+        schema={
+            "type": "object",
+            "properties": {
+                "userId": {
+                    "type": "string",
+                    "description": "The user's username exactly as given (e.g. GCADMIN). "
+                                   "Pass the name — it is resolved to the id automatically.",
+                },
+                "applicationId": {
+                    "type": "string",
+                    "description": "The application name or code (e.g. FORMULATION). "
+                                   "Pass the name — it is resolved to the id automatically.",
+                },
+                "applicationRoleId": {
+                    "type": "string",
+                    "description": "The role name for that application (e.g. ADMIN). "
+                                   "Pass the name — it is resolved to the id automatically.",
+                },
+            },
+            "required": ["userId", "applicationId", "applicationRoleId"],
+        },
         hint=(
             "You need three things: the user's USERNAME, the APPLICATION (name or code), and the "
             "ROLE name for that application. Pass the username in userId, the application name/"

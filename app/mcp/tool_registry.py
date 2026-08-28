@@ -121,6 +121,7 @@ class ToolRegistry:
     async def select_tools(
         self, query: str, request_headers: dict[str, str] | None = None,
         extra: list[str] | None = None, only: list[str] | None = None,
+        slim: dict[str, dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """Return OpenAI schemas for only the tools relevant to `query` (tool-RAG).
         Falls back to ALL tools when: the flag is off, the catalog is small
@@ -135,7 +136,9 @@ class ToolRegistry:
             keep = set(only)
             picked = [t for t in tools if t.name in keep]
             if picked:
-                return _log_schema_cost([_to_tool_schema(t) for t in picked], len(tools))
+                schemas = [_to_tool_schema(t) for t in picked]
+                _apply_slim(schemas, slim)
+                return _log_schema_cost(schemas, len(tools))
         if runtime_config.get_bool("CHATBOT_READ_ONLY"):
             # Never OFFER mutations to the model — it can't call what it can't see.
             tools = [t for t in tools if _is_read_only(t.name)]
@@ -495,6 +498,20 @@ def _strip_injected(schema: dict[str, Any]) -> dict[str, Any]:
     if isinstance(req, list):
         out["required"] = [r for r in req if r.lower() not in _INJECTED_PARAMS]
     return out
+
+
+def _apply_slim(schemas: list[dict[str, Any]], slim: dict[str, dict[str, Any]] | None) -> None:
+    """Replace a tool's exposed parameter schema with a skill-provided slim one (in place).
+    Used for mutation skills: the real schema types ids as integers, which makes a weak model
+    try to 'find the id' and stall. The slim schema exposes just the name fields as strings —
+    the registry still fills the defaults and resolves names→ids at execute time."""
+    if not slim:
+        return
+    for s in schemas:
+        fn = s.get("function", {})
+        override = slim.get(fn.get("name"))
+        if override:
+            fn["parameters"] = override
 
 
 def _to_tool_schema(tool: Tool) -> dict[str, Any]:
