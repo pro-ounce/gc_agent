@@ -789,6 +789,10 @@ class ChatService:
         # re-run LLM synthesis — which tends to hallucinate on a bare tool-result turn.
         blocks = blocks_from_outputs([(render_name, render_out if result.success else result.error, result.success)])
         final_text = lead_in(blocks) if blocks else output_text
+        if result.success:
+            fu = skills.follow_up_for(pending.tool_name, pending.tool_args)
+            if fu:
+                final_text = f"{final_text}\n\n{fu}"
         session.add_assistant(final_text)
         session_service.save(session)
 
