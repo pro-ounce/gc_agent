@@ -50,9 +50,18 @@ def _chip(label: str, send: str | None = None, icon: str | None = None) -> dict[
     return {"label": label, "send": send if send is not None else label, "icon": icon}
 
 
+_FLOWS = ("onboard", "create_user")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+# Mandatory basic account fields collected one-by-one. Chip labels resolve to codes via
+# the admin lookups at execute time ("Local"→L inside "Local Account"), so we pass names.
+TYPE_CHIPS = ["Local", "External", "Global", "Stale"]
+CAT_CHIPS = ["Core", "Temporary", "Service", "API", "Customer", "Maintenance", "Testing", "Help & Support"]
+
+
 def is_active(session: Any) -> bool:
     f = session.metadata.get("flow")
-    return isinstance(f, dict) and f.get("name") == "onboard"
+    return isinstance(f, dict) and f.get("name") in _FLOWS
 
 
 # ── data helpers ──────────────────────────────────────────────────────────────
@@ -133,23 +142,42 @@ def start_onboarding(session: Any, first_name: str | None, user_name: str, user_
     )
 
 
+def maybe_start(session: Any, message: str) -> FlowResult | None:
+    """Start a guided flow from a fresh intent (when none is active). Currently: a
+    create-user request WITHOUT enough detail (no email present) opens the guided intake;
+    a fully-detailed 'create user … email …' message is left to the normal skill path."""
+    if is_active(session):
+        return None
+    from ..services import skills
+    sk = skills.match(message or "")
+    if sk and sk.name == "create_user" and not re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", message or ""):
+        return start_create(session)
+    return None
+
+
 async def handle(session: Any, message: str, headers: dict[str, str] | None) -> FlowResult | None:
     """Advance the active flow for this turn. Returns None if no flow is active (fall
     through to normal routing) — including when the user pivots to another known task."""
     if not is_active(session):
         return None
     flow = session.metadata["flow"]
+    name = flow.get("name")
     msg = (message or "").strip()
 
-    # Pivot escape: an unrelated known task (create another user, run a report) ends
-    # onboarding and falls through to normal routing.
-    from ..services import skills
-    other = skills.match(msg)
-    if other and other.name in ("create_user", "generate_report"):
-        session.metadata.pop("flow", None)
-        return None
+    if name == "onboard":
+        # Pivot escape: an unrelated known task (create another user, run a report) ends
+        # onboarding and falls through to normal routing.
+        from ..services import skills
+        other = skills.match(msg)
+        if other and other.name in ("create_user", "generate_report"):
+            session.metadata.pop("flow", None)
+            return None
+        return await _onboard(session, flow, msg, headers)
 
-    return await _onboard(session, flow, msg, headers)
+    if name == "create_user":
+        return await _create(session, flow, msg, headers)
+
+    return None
 
 
 async def _onboard(session: Any, flow: dict[str, Any], msg: str, headers: dict[str, str] | None) -> FlowResult:
@@ -245,6 +273,132 @@ def _finish(session: Any, flow: dict[str, Any]) -> FlowResult:
         message=f"All done — **{who}**'s account is ready. You can assign access anytime just by asking.",
         done=True,
     )
+
+
+# ── create-user guided intake ───────────────────────────────────────────────
+
+async def _user_exists(user_name: str, headers: dict[str, str] | None) -> bool:
+    try:
+        res = await tool_registry.execute("getUserByUserName_get", {"userName": user_name}, headers)
+        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        if isinstance(data, list):
+            return bool(data)
+        return bool(data)
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def start_create(session: Any) -> FlowResult:
+    """Begin creating a user — first offer HOW: all at once, or one question at a time."""
+    session.metadata["flow"] = {"name": "create_user", "stage": "mode", "data": {}}
+    return FlowResult(
+        message=("Let's set up a new user. You can give me everything in one message, or I can "
+                 "ask one question at a time — whichever you prefer."),
+        suggestions=[_chip("One question at a time", "one at a time", icon="list"),
+                     _chip("I'll give it all at once", "all at once", icon="app")],
+    )
+
+
+async def _create(session: Any, flow: dict[str, Any], msg: str, headers: dict[str, str] | None) -> FlowResult:
+    stage = flow.get("stage")
+    data = flow.setdefault("data", {})
+
+    if stage == "mode":
+        low = msg.lower()
+        if any(w in low for w in ("all at once", "one message", "everything", "at once", "bulk", "paste")):
+            flow["stage"] = "bulk_wait"
+            return FlowResult(message=(
+                "Great — send it all in one message: **first name, last name, username, email, "
+                "account type, and account category**.\n\n"
+                "_Example: “Jane Doe, username JDOE, jane@agency.gov, Local account, Core account”._"))
+        # default → guided one-by-one
+        flow["stage"] = "first"
+        return FlowResult(message="Let's begin. What's the new user's **first name**?")
+
+    if stage == "bulk_wait":
+        # Hand the detailed message to the normal skill path (LLM collects + validates).
+        session.metadata.pop("flow", None)
+        return None  # type: ignore[return-value]
+
+    if stage == "first":
+        if not msg:
+            return FlowResult(message="What's the new user's **first name**?")
+        data["firstName"] = msg
+        flow["stage"] = "last"
+        return FlowResult(message=f"Thanks. And **{msg}**'s **last name**?")
+
+    if stage == "last":
+        if not msg:
+            return FlowResult(message="What's the **last name**?")
+        data["lastName"] = msg
+        flow["stage"] = "username"
+        suggested = (data.get("firstName", "")[:1] + msg).upper().replace(" ", "")
+        return FlowResult(
+            message=f"What **username** should they sign in with? _(e.g. {suggested})_")
+
+    if stage == "username":
+        uname = msg.strip().upper().replace(" ", "")
+        if not uname:
+            return FlowResult(message="Please give me a **username**.")
+        if await _user_exists(uname, headers):
+            return FlowResult(message=f"**{uname}** is already taken. Please pick a different username.")
+        data["userName"] = uname
+        flow["stage"] = "email"
+        return FlowResult(message=f"Got it — **{uname}**. What's their **email address**?")
+
+    if stage == "email":
+        email = msg.strip()
+        if not _EMAIL_RE.match(email):
+            return FlowResult(message="That doesn't look like a valid email. Please enter a valid **email address**.")
+        data["emailAddress"] = email
+        flow["stage"] = "type"
+        return FlowResult(
+            message=("What **account type**? _Local = internal staff · External = outside partner · "
+                     "Global = cross-tenant · Stale = dormant._"),
+            suggestions=[_chip(t, t, icon="app") for t in TYPE_CHIPS])
+
+    if stage == "type":
+        choice = _pick_label(msg, TYPE_CHIPS)
+        if not choice:
+            return FlowResult(message="Please pick an **account type**:",
+                              suggestions=[_chip(t, t, icon="app") for t in TYPE_CHIPS])
+        data["accountType"] = choice
+        flow["stage"] = "category"
+        return FlowResult(
+            message=("And the **account category**? _Core = standard user · Service/API = system "
+                     "accounts · Temporary/Testing = short-lived · Help & Support = support desk._"),
+            suggestions=[_chip(c, c, icon="role") for c in CAT_CHIPS])
+
+    if stage == "category":
+        choice = _pick_label(msg, CAT_CHIPS)
+        if not choice:
+            return FlowResult(message="Please pick an **account category**:",
+                              suggestions=[_chip(c, c, icon="role") for c in CAT_CHIPS])
+        data["accountCategory"] = choice
+        flow["stage"] = "confirm"
+        who = f"{data.get('firstName','')} {data.get('lastName','')}".strip()
+        summary = (f"Create user **{who}** — username **{data['userName']}**, {data['emailAddress']}, "
+                   f"**{data['accountType']}** / **{data['accountCategory']}**. Shall I go ahead?")
+        return FlowResult(message=summary,
+                          pending={"tool_name": "addUser_post", "tool_args": dict(data), "summary": summary})
+
+    # stage == "confirm" (awaiting the Confirm/Cancel buttons)
+    return FlowResult(message="Please use **Confirm** or **Cancel** above to finish creating the user.")
+
+
+def _pick_label(msg: str, labels: list[str]) -> str | None:
+    m = msg.strip().lower()
+    if not m:
+        return None
+    for lb in labels:
+        if lb.lower() == m or lb.lower() in m or m in lb.lower():
+            return lb
+    # first word match (e.g. "local account" → "Local")
+    first = m.split()[0] if m.split() else ""
+    for lb in labels:
+        if first and lb.lower().startswith(first):
+            return lb
+    return None
 
 
 # ── confirm-step callbacks (called by chat_service after the assign confirm) ────

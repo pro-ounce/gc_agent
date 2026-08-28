@@ -64,9 +64,11 @@ SKILLS: list[Skill] = [
             "create account", "create an account", "set up a user",
         ),
         tool="addUser_post",
-        # The user provides these; the model asks for any that are missing.
-        required=("userName", "firstName", "lastName", "emailAddress"),
+        # The user provides these mandatory basic fields; the model asks for any missing.
+        required=("userName", "firstName", "lastName", "emailAddress",
+                  "accountType", "accountCategory"),
         # Backend-mandatory fields with safe platform defaults (verified against addUser).
+        # accountType/accountCategory stay here as a fallback but are now collected.
         defaults={
             "emailFlag": "N", "accountType": "L", "accountStatus": "A",
             "accountCategory": "C", "loginType": "L", "enabled": "Y", "adminFlag": "N",
@@ -92,6 +94,13 @@ SKILLS: list[Skill] = [
                  capture={"userId": "id"}, render=True, label="Loading the new user"),
         ),
         summary="create a new user account",
+        hint=(
+            "Account type is one of: Local (internal staff), External (outside partner), "
+            "Global (cross-tenant), Stale (dormant). Account category is one of: Core "
+            "(standard user), Temporary, Maintenance, Customer, Testing, API, Service, "
+            "Help & Support. Ask for the type and category by these names if the user hasn't "
+            "given them; pass whatever name the user says — it is resolved to the code."
+        ),
         follow_up=(
             "Would you like to give {userName} access to an application now? Just tell me the "
             "application and role — for example, “assign FORMULATION with the ADMIN role to "

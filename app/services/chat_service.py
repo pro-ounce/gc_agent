@@ -168,10 +168,15 @@ class ChatService:
         session_service.save(session)
 
         # Guided flow active (e.g. onboarding)? Advance it deterministically — no LLM.
+        # Or a fresh intent (create user without full detail) may START a guided intake.
         if flows.is_active(session):
             fr = await flows.handle(session, user_message, request_headers)
             if fr is not None:
                 return self._flow_response(session, fr)
+        else:
+            started = flows.maybe_start(session, user_message)
+            if started is not None:
+                return self._flow_response(session, started)
 
         system = system_prompt or cfg.AGENT_SYSTEM_PROMPT
         # Skill? Pin its backing action tool + ground the model on the required fields.
@@ -421,10 +426,18 @@ class ChatService:
         session_service.save(session)
 
         # Guided flow active (e.g. onboarding)? Advance it deterministically — no LLM.
+        # Or a fresh intent (create user without full detail) may START a guided intake.
         if flows.is_active(session):
             fr = await flows.handle(session, user_message, request_headers)
             if fr is not None:
                 for ch in self._flow_chunks(session, fr):
+                    yield ch
+                turn.finish("stop")
+                return
+        else:
+            started = flows.maybe_start(session, user_message)
+            if started is not None:
+                for ch in self._flow_chunks(session, started):
                     yield ch
                 turn.finish("stop")
                 return
