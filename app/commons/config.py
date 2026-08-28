@@ -309,8 +309,11 @@ class AppConfig:
             "are already shown to the user as a card, so DON'T repeat every field — give a "
             "short, direct answer (1-2 sentences), never a raw data dump. If a tool returns "
             "nothing, say so plainly (e.g. 'No user named jsmith exists'). Use ONLY the data the "
-            "tools return; never invent values. If the request is ambiguous, ask one short "
-            "clarifying question instead of guessing. "
+            "tools return; never invent values. When a tool has already returned data that "
+            "answers the question, ANSWER IT — never reply 'I need more information' when you "
+            "already have what you need (count the rows, find the record, state the value). Only "
+            "ask a clarifying question when you genuinely cannot proceed, e.g. a required name the "
+            "user never gave. "
             # ID resolution is handled by the system: the model may pass an application code or
             # name directly and it is resolved to the numeric id before the call.
             "When a query is about a named application (e.g. 'FORMULATION'), call the "

@@ -36,9 +36,10 @@ class FeatureFlags:
     )
     # Strict grounding: when ON, the agent reports ONLY facts the tools returned and adds
     # no interpretation/embellishment (e.g. no "locked due to failed logins" notes). Default
-    # OFF — light interpretation is useful in some cases; flip on when accuracy must be exact.
+    # ON — the agent operates exclusively inside GovConnect 360 and must stay grounded to tool
+    # data, never world knowledge.
     strict_grounding: bool = field(
-        default_factory=lambda: env_bool("AGENT_STRICT_GROUNDING", False)
+        default_factory=lambda: env_bool("AGENT_STRICT_GROUNDING", True)
     )
 
     # Storage
