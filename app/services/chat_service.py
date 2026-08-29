@@ -755,6 +755,12 @@ class ChatService:
         import json as _json
         from ..services.ui_blocks import _unwrap
 
+        # Every tool call failed → this is an ERROR, not an empty result. Never let the model
+        # report it as "no matching …"; state the failure plainly (detail shows in the card).
+        if tool_outputs and all(not ok for _, _, ok in tool_outputs):
+            return ("I couldn't complete that — the request to the platform failed. "
+                    "Please try again in a moment.")
+
         question = next((m.content for m in reversed(session.messages) if m.role == "user"), "")
         ctx: list[str] = []
         for name, output, success in tool_outputs:
@@ -777,7 +783,9 @@ class ChatService:
             "question directly in 1-2 sentences: for 'how many' give the count; for 'does X exist' "
             "/ 'is there' say yes or no first; for 'who' / 'which' name the specific record; for "
             "'what is' state the value. Do NOT list every field — the full records are shown to "
-            "the user separately as a card. If the data is empty, say nothing matches."
+            "the user separately as a card. If the data is empty, say nothing matches. If a tool "
+            "returned an ERROR, say the request could not be completed due to an error — NEVER "
+            "describe an error as 'no results' or 'nothing matches'."
         )
         msgs = [{"role": "user", "content": f"Question: {question}\n\nData:\n" + "\n".join(ctx)}]
         try:
