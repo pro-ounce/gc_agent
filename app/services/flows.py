@@ -55,6 +55,41 @@ _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _SKILL_INTENT_RE = re.compile(
     r"\b(create|add|make|build|teach|define|register)\b.{0,20}\bskill\b", re.I)
 
+# ── Fail-safe: universal exit commands, honoured at ANY stage of ANY flow ───────
+# Standalone commands (whole message ≈ one of these) always cancel.
+_CANCEL_STANDALONE = {
+    "cancel", "stop", "abort", "quit", "exit", "discard", "nevermind", "never mind",
+    "forget it", "start over", "scrap it", "scrap this", "back out", "get me out",
+    "cancel this", "cancel that", "cancel it",
+}
+# A leading cancel verb + a flow-referring object ("cancel the skill", "stop this") cancels;
+# "cancel a subscription" (no flow object) does NOT, so it can still be a keyword/value.
+_CANCEL_LEAD = re.compile(
+    r"^\s*(?:please\s+|let'?s\s+|just\s+|i\s+want\s+to\s+|can\s+(?:you|we)\s+)?"
+    r"(cancel|stop|abort|quit|exit|discard|forget|scrap|start\s+over|back\s+out)\b", re.I)
+_CANCEL_OBJ = re.compile(
+    r"\b(skill|user|onboard\w*|flow|creation|process|intake|this|that|it|everything|here)\b", re.I)
+
+
+def _is_cancel(msg: str) -> bool:
+    m = msg.strip().lower().rstrip("!. ")
+    if m in _CANCEL_STANDALONE:
+        return True
+    return bool(_CANCEL_LEAD.match(msg) and _CANCEL_OBJ.search(msg))
+
+
+def _cancel_flow(session: Any, flow: dict[str, Any]) -> FlowResult:
+    """Fail-safe exit: drop the flow and any armed confirm; nothing is written."""
+    name = flow.get("name")
+    session.metadata.pop("flow", None)
+    session.pending_action_id = None
+    session.metadata.pop("pending_actions", None)
+    what = {"onboard": "onboarding", "create_user": "creating the user",
+            "create_skill": "creating the skill"}.get(name, "that")
+    return FlowResult(
+        message=f"Okay — I've cancelled {what}. Nothing was saved. What would you like to do next?",
+        done=True)
+
 # Mandatory basic account fields collected one-by-one. Chip labels resolve to codes via
 # the admin lookups at execute time ("Local"→L inside "Local Account"), so we pass names.
 TYPE_CHIPS = ["Local", "External", "Global", "Stale"]
@@ -168,6 +203,10 @@ async def handle(session: Any, message: str, headers: dict[str, str] | None) -> 
     flow = session.metadata["flow"]
     name = flow.get("name")
     msg = (message or "").strip()
+
+    # FAIL-SAFE: a cancel/abort/stop command exits ANY flow at ANY stage, cleanly.
+    if _is_cancel(msg):
+        return _cancel_flow(session, flow)
 
     if name == "onboard":
         # Pivot escape: an unrelated known task (create another user, run a report) ends

@@ -27,6 +27,7 @@ from ..models.chat import ChatResponse, StreamChunk, Suggestion, UIBlock
 from ..models.mcp import PendingAction
 from ..services import skills
 from ..services import flows
+from ..services import meta
 from ..services.ui_blocks import blocks_from_outputs, blocks_to_text, lead_in
 from ..models.session import Session
 from ..services.llm_service import LLMResponse, ToolCall, llm
@@ -174,6 +175,9 @@ class ChatService:
             if fr is not None:
                 return self._flow_response(session, fr)
         else:
+            mr = await meta.handle(user_message, request_headers)
+            if mr is not None:
+                return self._flow_response(session, mr)
             started = flows.maybe_start(session, user_message)
             if started is not None:
                 return self._flow_response(session, started)
@@ -435,7 +439,8 @@ class ChatService:
                 turn.finish("stop")
                 return
         else:
-            started = flows.maybe_start(session, user_message)
+            mr = await meta.handle(user_message, request_headers)
+            started = mr or flows.maybe_start(session, user_message)
             if started is not None:
                 for ch in self._flow_chunks(session, started):
                     yield ch
