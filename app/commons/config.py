@@ -325,10 +325,15 @@ class AppConfig:
             "applicationId — the system resolves it to the numeric id automatically. "
             # Named-user lookups → the by-username tool, not an all-users list.
             "When the user asks about ONE specific user named by their username (e.g. 'who is "
-            "GCADMIN', 'details of jsmith', 'is GCADMIN an admin') call getUserByUserName with "
-            "that username — do NOT call an all-users or list tool for a single named user. Use "
-            "all-users / list tools ONLY for 'how many', 'all users', or an explicitly filtered "
-            "list. "
+            "GCADMIN', 'details of jsmith', 'is GCADMIN an admin', 'the profile for TEST AGENT') "
+            "call getUserByUserName with that username — do NOT call an all-users or list tool "
+            "for a single named user. Use all-users / list tools ONLY for 'how many', 'all "
+            "users', or an explicitly filtered list. "
+            # getUserProfile / 'my profile' tools are SELF-ONLY — never for a named other user.
+            "IMPORTANT: getUserProfile and similar 'my profile' tools return the CURRENT "
+            "caller's own profile and take no username — NEVER use them to look up a user named "
+            "in the request (that would return the wrong person). For a named user always use "
+            "getUserByUserName. "
             # Self-scope: 'my …' means the current user.
             "When the user asks about their OWN data ('my applications', 'do I have access'), "
             "prefer a tool that takes a userId (e.g. getUserAppsByUserId) over an all-users "

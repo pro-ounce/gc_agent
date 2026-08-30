@@ -753,23 +753,30 @@ class ChatService:
         This is far more reliable on a small model than re-running the agentic loop over a big
         result (which derails into "I need more information"). Grounded to GC360, concise."""
         import json as _json
-        from ..services.ui_blocks import _unwrap
-
-        # Every tool call failed → this is an ERROR, not an empty result. Never let the model
-        # report it as "no matching …"; state the failure plainly (detail shows in the card).
-        if tool_outputs and all(not ok for _, _, ok in tool_outputs):
-            return ("I couldn't complete that — the request to the platform failed. "
-                    "Please try again in a moment.")
+        from ..services.ui_blocks import _unwrap, _coerce, _envelope_error
 
         question = next((m.content for m in reversed(session.messages) if m.role == "user"), "")
         ctx: list[str] = []
+        total = errored = 0
         for name, output, success in tool_outputs:
-            if not success:
-                ctx.append(f"{name}: ERROR {str(output)[:300]}")
+            total += 1
+            # Detect errors the SAME way the rendered card does (transport failure OR a GC
+            # envelope carrying a business error) so the lead never contradicts the card:
+            # a successful envelope with an empty "errors" field is DATA, not an error.
+            coerced = output
+            if success:
+                try:
+                    coerced = _coerce(output)
+                except Exception:  # noqa: BLE001
+                    coerced = output
+            err = str(output) if not success else _envelope_error(coerced)
+            if err:
+                errored += 1
+                ctx.append(f"{name}: ERROR — {str(err)[:300]}")
                 continue
-            data = output
+            data = coerced
             try:
-                data = _unwrap(output)
+                data = _unwrap(coerced)
             except Exception:  # noqa: BLE001
                 pass
             n = len(data) if isinstance(data, list) else None
@@ -777,15 +784,22 @@ class ChatService:
             if len(body) > 6000:
                 body = body[:6000] + " …(truncated)"
             ctx.append(f"{name}{f' returned {n} records' if n is not None else ''}: {body}")
+
+        # Every tool errored → state the failure plainly (detail shows in the card); never let
+        # the model report an error as "no matching …". A mix keeps the successful data.
+        if total and errored == total:
+            return ("I couldn't complete that — the request to the platform failed. "
+                    "Please try again in a moment.")
         sys = (
             "You answer questions about the GovConnect 360 platform using ONLY the tool data "
             "provided below — never outside knowledge, never invented values. Answer the user's "
             "question directly in 1-2 sentences: for 'how many' give the count; for 'does X exist' "
             "/ 'is there' say yes or no first; for 'who' / 'which' name the specific record; for "
             "'what is' state the value. Do NOT list every field — the full records are shown to "
-            "the user separately as a card. If the data is empty, say nothing matches. If a tool "
-            "returned an ERROR, say the request could not be completed due to an error — NEVER "
-            "describe an error as 'no results' or 'nothing matches'."
+            "the user separately as a card. If the data is empty, say nothing matches. Only an "
+            "entry explicitly marked 'ERROR' means a tool failed — for those say the request "
+            "could not be completed (NEVER call an error 'no results'); ignore empty 'errors' "
+            "fields inside otherwise-valid data, and answer from the data that did come back."
         )
         msgs = [{"role": "user", "content": f"Question: {question}\n\nData:\n" + "\n".join(ctx)}]
         try:
