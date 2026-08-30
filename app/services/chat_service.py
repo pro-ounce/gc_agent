@@ -28,6 +28,7 @@ from ..models.mcp import PendingAction
 from ..services import skills
 from ..services import flows
 from ..services import meta
+from ..agents.registry import STRICT_GROUNDING_INSTRUCTION
 from ..services.ui_blocks import blocks_from_outputs, blocks_to_text, lead_in
 from ..models.session import Session
 from ..services.llm_service import LLMResponse, ToolCall, llm
@@ -154,6 +155,15 @@ def _log_prompt(session_id: str, user_id: str | None, question: str,
 class ChatService:
     """Stateless orchestrator — all state lives in the Session object (Redis)."""
 
+    @staticmethod
+    def _ground(system: str) -> str:
+        """Enforce the air-gap on EVERY entry point: append the strict GC360 grounding to the
+        system prompt (idempotent) whenever AGENT_STRICT_GROUNDING is on. Centralised here so
+        /api/chat and the platform/gateway path are equally confined — no world knowledge."""
+        if runtime_config.get_bool("AGENT_STRICT_GROUNDING") and STRICT_GROUNDING_INSTRUCTION not in system:
+            return f"{system}{STRICT_GROUNDING_INSTRUCTION}"
+        return system
+
     # ── Non-streaming chat ────────────────────────────────────────────────────
 
     async def chat(
@@ -182,7 +192,7 @@ class ChatService:
             if started is not None:
                 return self._flow_response(session, started)
 
-        system = system_prompt or cfg.AGENT_SYSTEM_PROMPT
+        system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT)
         # Skill? Pin its backing action tool + ground the model on the required fields.
         skill = skills.match(user_message)
         if skill:
@@ -311,7 +321,7 @@ class ChatService:
         session.add_user(user_message)
         session_service.save(session)
 
-        system = system_prompt or cfg.AGENT_SYSTEM_PROMPT
+        system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT)
         tools = await tool_registry.as_tools()
         messages = session.to_llm_messages()
 
@@ -447,7 +457,7 @@ class ChatService:
                 turn.finish("stop")
                 return
 
-        system = system_prompt or cfg.AGENT_SYSTEM_PROMPT
+        system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT)
         skill = skills.match(user_message)
         if skill:
             system = system + skills.grounding(skill)
