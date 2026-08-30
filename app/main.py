@@ -47,6 +47,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         log.warning(f"MCP pre-warm failed (non-fatal): {exc}")
 
+    # Load user-created skills (persisted in OpenSearch KV + flat file) and register them live.
+    try:
+        from .services.skill_store import load_custom_skills
+        load_custom_skills()
+    except Exception as exc:  # noqa: BLE001 — never block startup on custom skills
+        log.warning(f"custom skill load failed (non-fatal): {exc}")
+
     # Warm the LLM so the first chat after a (re)start isn't a cold model reload. Fire-and-
     # forget: it must not delay the server accepting requests, and keep_alive=-1 pins it after.
     try:

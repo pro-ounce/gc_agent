@@ -50,8 +50,10 @@ def _chip(label: str, send: str | None = None, icon: str | None = None) -> dict[
     return {"label": label, "send": send if send is not None else label, "icon": icon}
 
 
-_FLOWS = ("onboard", "create_user")
+_FLOWS = ("onboard", "create_user", "create_skill")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+_SKILL_INTENT_RE = re.compile(
+    r"\b(create|add|make|build|teach|define|register)\b.{0,20}\bskill\b", re.I)
 
 # Mandatory basic account fields collected one-by-one. Chip labels resolve to codes via
 # the admin lookups at execute time ("Local"→L inside "Local Account"), so we pass names.
@@ -148,6 +150,9 @@ def maybe_start(session: Any, message: str) -> FlowResult | None:
     a fully-detailed 'create user … email …' message is left to the normal skill path."""
     if is_active(session):
         return None
+    # Skill authoring intent takes precedence ("create a skill" must not read as create-user).
+    if _SKILL_INTENT_RE.search(message or ""):
+        return start_create_skill(session)
     from ..services import skills
     sk = skills.match(message or "")
     if sk and sk.name == "create_user" and not re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", message or ""):
@@ -176,6 +181,9 @@ async def handle(session: Any, message: str, headers: dict[str, str] | None) -> 
 
     if name == "create_user":
         return await _create(session, flow, msg, headers)
+
+    if name == "create_skill":
+        return await _create_skill(session, flow, msg, headers)
 
     return None
 
@@ -399,6 +407,123 @@ def _pick_label(msg: str, labels: list[str]) -> str | None:
         if first and lb.lower().startswith(first):
             return lb
     return None
+
+
+# ── create-skill guided intake (author a new skill at runtime) ─────────────────
+
+def _slug(text: str) -> str:
+    from . import skills as _sk
+    base = re.sub(r"[^a-z0-9]+", "_", (text or "skill").strip().lower()).strip("_")[:32] or "skill"
+    name, i = base, 2
+    existing = {s.name for s in _sk.SKILLS}
+    while name in existing:
+        name, i = f"{base}_{i}", i + 1
+    return name
+
+
+def start_create_skill(session: Any) -> FlowResult:
+    session.metadata["flow"] = {"name": "create_skill", "stage": "purpose", "data": {}}
+    return FlowResult(message=(
+        "Let's teach me a new skill. In one sentence, what should it **do**? "
+        "_(e.g. “deactivate a user account”, “add a license to an organization”)_"))
+
+
+def _skill_confirm(data: dict[str, Any]) -> FlowResult:
+    req = ", ".join(data.get("required", [])) or "nothing extra"
+    kws = ", ".join(data.get("keywords", []))
+    return FlowResult(
+        message=(f"Ready to create this skill:\n"
+                 f"• **Does:** {data.get('summary','')}\n"
+                 f"• **Triggers on:** {kws}\n"
+                 f"• **Runs:** {data.get('tool','')}\n"
+                 f"• **Asks the user for:** {req}\n\nCreate it?"),
+        suggestions=[_chip("Create skill", "create skill", icon="check"),
+                     _chip("Cancel", "cancel", icon="skip")])
+
+
+def _finish_skill(session: Any, spec: dict[str, Any] | None) -> FlowResult:
+    session.metadata.pop("flow", None)
+    if not spec:
+        return FlowResult(message="No problem — I didn't create the skill.", done=True)
+    kw = (spec.get("keywords") or [spec["name"]])[0]
+    return FlowResult(message=(f"✅ Done — I learned **{spec['name']}**. "
+                               f"Try it by saying “{kw}”."), done=True)
+
+
+async def _create_skill(session: Any, flow: dict[str, Any], msg: str, headers: dict[str, str] | None) -> FlowResult:
+    from . import skill_store
+    stage = flow.get("stage")
+    data = flow.setdefault("data", {})
+
+    if stage == "purpose":
+        if not msg:
+            return FlowResult(message="Describe in one sentence what the skill should do.")
+        data["summary"] = msg.strip().rstrip(".")
+        flow["stage"] = "keywords"
+        return FlowResult(message=(f"Got it — “{data['summary']}”. What words or phrases should "
+                                   "**trigger** it? List a few, comma-separated. "
+                                   "_(e.g. deactivate user, disable account)_"))
+
+    if stage == "keywords":
+        kws = [k.strip().lower() for k in re.split(r"[,;]", msg) if k.strip()]
+        if not kws:
+            return FlowResult(message="Give me at least one trigger phrase (comma-separated).")
+        data["keywords"] = kws
+        flow["stage"] = "tool"
+        sugg = await skill_store.suggest_tools(data.get("summary", ""), 6)
+        data["_sugg"] = [s["name"] for s in sugg]
+        if not sugg:
+            return FlowResult(message="Which MCP tool should it run? Type the exact tool name.")
+        lines = "\n".join(f"• **{s['name']}** — {s['desc']}" for s in sugg)
+        return FlowResult(
+            message=f"Which action should it run? The closest tools I found:\n{lines}\n\nPick one, or type a tool name.",
+            suggestions=[_chip(s["name"], s["name"], icon="app") for s in sugg])
+
+    if stage == "tool":
+        picked = await skill_store.find_tool(msg)
+        if not picked:
+            return FlowResult(
+                message=f"I couldn't find a tool called “{msg}”. Pick one below, or type an exact tool name.",
+                suggestions=[_chip(n, n, icon="app") for n in data.get("_sugg", [])])
+        data["tool"] = picked
+        data["required"] = await skill_store.tool_required_fields(picked)
+        flow["stage"] = "review"
+        reqtxt = ", ".join(data["required"]) if data["required"] else "nothing extra"
+        return FlowResult(
+            message=f"Using **{picked}**. It will ask the user for: **{reqtxt}**. Look right?",
+            suggestions=[_chip("Looks good", "looks good", icon="check"),
+                         _chip("Change the fields", "change fields", icon="list")])
+
+    if stage == "review":
+        low = msg.lower()
+        if any(w in low for w in ("change", "adjust", "edit", "different")):
+            flow["stage"] = "edit_fields"
+            return FlowResult(message="Type the fields it should ask the user for, comma-separated _(or say “none”)_.")
+        flow["stage"] = "confirm"
+        return _skill_confirm(data)
+
+    if stage == "edit_fields":
+        if msg.strip().lower() in ("none", "no", ""):
+            data["required"] = []
+        else:
+            data["required"] = [f.strip() for f in re.split(r"[,;]", msg) if f.strip()]
+        flow["stage"] = "confirm"
+        return _skill_confirm(data)
+
+    if stage == "confirm":
+        low = msg.lower()
+        if any(w in low for w in ("cancel", "stop", "start over", "no")):
+            return _finish_skill(session, None)
+        spec = {
+            "name": _slug(data.get("summary") or (data.get("keywords") or ["skill"])[0]),
+            "keywords": data.get("keywords", []), "tool": data["tool"],
+            "required": data.get("required", []), "summary": data.get("summary", ""),
+            "hint": "", "defaults": {},
+        }
+        skill_store.save_custom_skill(spec)
+        return _finish_skill(session, spec)
+
+    return _skill_confirm(data)
 
 
 # ── confirm-step callbacks (called by chat_service after the assign confirm) ────

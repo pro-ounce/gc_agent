@@ -51,3 +51,6 @@ logs/
 
 # local agent/editor config
 .claude/
+
+# Runtime user-created skills (persisted on the box; never committed)
+custom_skills.json
