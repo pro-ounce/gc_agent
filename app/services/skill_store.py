@@ -113,7 +113,7 @@ def save_custom_skill(d: dict[str, Any]) -> Skill:
     items.append(dd)
     _write_file(items)
     register(skill)
-    log.bind(func="save_custom_skill", name=skill.name, tool=skill.tool).info("custom skill saved")
+    log.bind(func="save_custom_skill", skill=skill.name, tool=skill.tool).info("custom skill saved")
     return skill
 
 
