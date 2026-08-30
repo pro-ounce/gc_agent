@@ -152,7 +152,7 @@ def maybe_start(session: Any, message: str) -> FlowResult | None:
         return None
     # Skill authoring intent takes precedence ("create a skill" must not read as create-user).
     if _SKILL_INTENT_RE.search(message or ""):
-        return start_create_skill(session)
+        return start_create_skill(session, message or "")
     from ..services import skills
     sk = skills.match(message or "")
     if sk and sk.name == "create_user" and not re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", message or ""):
@@ -421,8 +421,17 @@ def _slug(text: str) -> str:
     return name
 
 
-def start_create_skill(session: Any) -> FlowResult:
+def start_create_skill(session: Any, message: str = "") -> FlowResult:
     session.metadata["flow"] = {"name": "create_skill", "stage": "purpose", "data": {}}
+    # Capture an inline purpose ("create a skill TO look up a license") so we don't re-ask.
+    m = re.search(r"\bskill\b\s+(?:to|for|that|which|:)?\s*(.+)$", message or "", re.I)
+    purpose = (m.group(1).strip().rstrip(".") if m else "")
+    if len(purpose) >= 4:
+        flow = session.metadata["flow"]
+        flow["data"]["summary"] = purpose
+        flow["stage"] = "keywords"
+        return FlowResult(message=(f"Got it — a skill to **{purpose}**. What words or phrases "
+                                   "should **trigger** it? List a few, comma-separated."))
     return FlowResult(message=(
         "Let's teach me a new skill. In one sentence, what should it **do**? "
         "_(e.g. “deactivate a user account”, “add a license to an organization”)_"))
