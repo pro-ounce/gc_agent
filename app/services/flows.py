@@ -483,17 +483,40 @@ async def _create_skill(session: Any, flow: dict[str, Any], msg: str, headers: d
         data["_sugg"] = [s["name"] for s in sugg]
         if not sugg:
             return FlowResult(message="Which MCP tool should it run? Type the exact tool name.")
-        lines = "\n".join(f"• **{s['name']}** — {s['desc']}" for s in sugg)
+        lines = "\n".join(
+            f"• **{s['name']}** — {s['desc'] or 'No description available.'}"
+            + (f"  \n  _needs: {', '.join(s['required'])}_" if s.get("required") else "")
+            for s in sugg)
         return FlowResult(
-            message=f"Which action should it run? The closest tools I found:\n{lines}\n\nPick one, or type a tool name.",
+            message=(f"Which action should it run?\n\n{lines}\n\n"
+                     "Tap a tool to use it, or type **about <tool>** to see full details first."),
             suggestions=[_chip(s["name"], s["name"], icon="app") for s in sugg])
 
     if stage == "tool":
+        sugg_names = data.get("_sugg", [])
+        # "about <tool>" / "details <tool>" / "what is <tool>" → show full detail, don't pick yet.
+        m = re.match(r"^\s*(?:about|details?|more(?:\s+about)?|explain|what\s*'?s?\s*is|tell me about)\s+(.+)$",
+                     msg, re.I)
+        if m:
+            tn = await skill_store.find_tool(m.group(1).strip())
+            det = await skill_store.tool_detail(tn) if tn else None
+            if det:
+                needs = ", ".join(det["required"]) or "nothing extra"
+                allp = ", ".join(det["params"]) or "—"
+                others = [_chip(n, n, icon="app") for n in sugg_names if n != det["name"]]
+                return FlowResult(
+                    message=(f"**{det['name']}**\n{det['desc'] or 'No description available.'}\n\n"
+                             f"_Required inputs: {needs}_\n_All inputs: {allp}_\n\n"
+                             "Use this tool, or pick another below."),
+                    suggestions=[_chip(f"Use {det['name']}", det["name"], icon="check")] + others)
+            return FlowResult(message=f"I couldn't find a tool called “{m.group(1).strip()}”. Pick one below.",
+                              suggestions=[_chip(n, n, icon="app") for n in sugg_names])
         picked = await skill_store.find_tool(msg)
         if not picked:
             return FlowResult(
-                message=f"I couldn't find a tool called “{msg}”. Pick one below, or type an exact tool name.",
-                suggestions=[_chip(n, n, icon="app") for n in data.get("_sugg", [])])
+                message=(f"I couldn't find a tool called “{msg}”. Pick one below, type an exact "
+                         "tool name, or type **about <tool>** for details."),
+                suggestions=[_chip(n, n, icon="app") for n in sugg_names])
         data["tool"] = picked
         data["required"] = await skill_store.tool_required_fields(picked)
         flow["stage"] = "review"

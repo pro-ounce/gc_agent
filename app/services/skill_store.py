@@ -117,19 +117,56 @@ def save_custom_skill(d: dict[str, Any]) -> Skill:
     return skill
 
 
-async def suggest_tools(query: str, k: int = 6) -> list[dict[str, str]]:
-    """Candidate MCP tools for a natural-language purpose (tool-RAG), with short descriptions,
-    for the create-skill flow to offer as chips."""
-    from ..mcp.tool_registry import tool_registry
+import re as _re
+
+# Boilerplate appended to every MCP tool description — noise for a human choosing a tool.
+_DESC_BOILERPLATE = _re.compile(
+    r"\s*(use this tool only|only use this tool|use this only)\b.*$", _re.I | _re.S)
+
+
+def _clean_desc(desc: str) -> str:
+    """Strip the standard grounding boilerplate and tidy punctuation so the real, full
+    description shows — a functional consultant shouldn't have to guess from the tool name."""
+    d = (desc or "").strip()
+    d = _DESC_BOILERPLATE.sub("", d)
+    d = _re.sub(r"\.{2,}", ".", d).strip()          # "type.." → "type."
+    return d.rstrip(".").strip()
+
+
+def _params_of(tool: Any, injected: frozenset[str]) -> list[str]:
+    sch = getattr(tool, "input_schema", None) or {}
+    if isinstance(sch, dict) and isinstance(sch.get("required"), list):
+        return [str(r) for r in sch["required"] if str(r).lower() not in injected]
+    return [p.name for p in getattr(tool, "parameters", [])
+            if getattr(p, "required", False) and p.name.lower() not in injected]
+
+
+async def suggest_tools(query: str, k: int = 6) -> list[dict[str, Any]]:
+    """Candidate MCP tools for a natural-language purpose (tool-RAG) with FULL cleaned
+    descriptions + the fields each needs, so the create-skill picker is self-explanatory."""
+    from ..mcp.tool_registry import tool_registry, _INJECTED_PARAMS
     from ..mcp.tool_index import tool_index
     names = await tool_index.search(query, k) or []
     by = {t.name: t for t in await tool_registry.get_tools()}
-    out: list[dict[str, str]] = []
+    out: list[dict[str, Any]] = []
     for n in names:
         t = by.get(n)
         if t:
-            out.append({"name": n, "desc": (getattr(t, "description", "") or "")[:90]})
+            out.append({"name": n, "desc": _clean_desc(getattr(t, "description", "") or ""),
+                        "required": _params_of(t, _INJECTED_PARAMS)})
     return out
+
+
+async def tool_detail(tool_name: str) -> dict[str, Any] | None:
+    """Full detail for ONE tool (cleaned description + required + all params), so the user can
+    ask for more before choosing."""
+    from ..mcp.tool_registry import tool_registry, _INJECTED_PARAMS
+    t = next((x for x in await tool_registry.get_tools() if x.name == tool_name), None)
+    if not t:
+        return None
+    allp = [p.name for p in getattr(t, "parameters", []) if p.name.lower() not in _INJECTED_PARAMS]
+    return {"name": tool_name, "desc": _clean_desc(getattr(t, "description", "") or ""),
+            "required": _params_of(t, _INJECTED_PARAMS), "params": allp}
 
 
 async def tool_required_fields(tool_name: str) -> list[str]:
