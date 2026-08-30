@@ -176,6 +176,7 @@ async def agent_questions(
     agent: str,
     request: Request,
     taskId: str = "",
+    module: str = "",
     user: User = Depends(get_current_user),
 ) -> ApiResponse:
     """Everything the widget needs when it opens, in ONE call: suggestion chips, the
@@ -194,8 +195,13 @@ async def agent_questions(
         resume = _resume_hint(user)
     except Exception:  # noqa: BLE001 — never fail the bootstrap on a resume lookup
         resume = {"hasHistory": False}
+    # Context-aware balloons for the module/screen the widget is currently on.
+    from ..services.suggestions import module_suggestions
+    balloons = module_suggestions(module) if module else []
     return ApiResponse.ok(message="ok", data={
         "questions": list(_SUGGESTIONS),
+        "balloons": balloons,
+        "module": module,
         "displayName": ident["displayName"],
         "firstName": ident["firstName"],
         "userName": ident["userName"],
