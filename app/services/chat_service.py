@@ -864,8 +864,12 @@ class ChatService:
         )
         level = (session.metadata.get("detail") or "standard").lower()
         if level == "concise":
-            sys += (" CONCISE MODE: answer in ONE short sentence — the direct fact only, no "
-                    "elaboration (there is no card in this mode, so include the single key value).")
+            sys += (" CONCISE MODE: there is NO card shown in this mode, so your text must carry "
+                    "the information the user asked for. Give the specific values requested, "
+                    "compactly — e.g. for 'account details for X' include the key fields (name, "
+                    "id, email, account type, status) as a short inline list or one tight "
+                    "sentence. Be brief, but NEVER reduce it to a bare 'exists'/yes-no when the "
+                    "user asked for details; include the actual values from the data.")
         elif level == "detailed":
             sys += (" DETAILED MODE: give a fuller answer (2-4 sentences) — state the direct "
                     "answer, then note the most relevant supporting fields and any related "
