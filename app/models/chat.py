@@ -20,6 +20,8 @@ class ChatRequest(BaseModel):
     stream: bool = Field(False, description="Enable SSE streaming")
     # Optional: override system prompt per-request
     system_prompt: str | None = Field(None, description="Override default system prompt")
+    # Output verbosity: concise | standard | detailed
+    detail: str | None = Field(None, description="Output level: concise|standard|detailed")
 
 
 class ConfirmRequest(BaseModel):

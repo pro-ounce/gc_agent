@@ -173,9 +173,11 @@ class ChatService:
         user_id: str | None = None,
         system_prompt: str | None = None,
         request_headers: dict[str, str] | None = None,
+        detail: str | None = None,
     ) -> ChatResponse:
         session = session_service.get_or_create(session_id, user_id)
         session.add_user(user_message)
+        session.metadata["detail"] = (detail or "standard").lower()
         session_service.save(session)
 
         # Guided flow active (e.g. onboarding)? Advance it deterministically — no LLM.
@@ -273,6 +275,7 @@ class ChatService:
             if (blocks and cfg.SKIP_SYNTHESIS_WITH_BLOCKS
                     and not any(is_mutation(n) for n in tool_calls_made)):
                 lead = await self._synthesize_answer(session, tool_outputs) or lead_in(blocks)
+                blocks = await self._apply_detail(session, blocks, tool_outputs, request_headers)
                 session.add_assistant(lead)
                 session_service.save(session)
                 return ChatResponse(
@@ -422,6 +425,7 @@ class ChatService:
         user_id: str | None = None,
         system_prompt: str | None = None,
         request_headers: dict[str, str] | None = None,
+        detail: str | None = None,
     ) -> AsyncIterator[StreamChunk]:
         """
         Agentic streaming with a CONFIRMATION GATE. Read-only tools run inline; a
@@ -437,6 +441,7 @@ class ChatService:
         session = session_service.get_or_create(session_id, user_id)
         session.add_user(user_message)
         session.metadata["last_user_message"] = user_message
+        session.metadata["detail"] = (detail or "standard").lower()
         session_service.save(session)
 
         # Guided flow active (e.g. onboarding)? Advance it deterministically — no LLM.
@@ -692,6 +697,7 @@ class ChatService:
                     # Reason over the data to answer the actual question (grounded, no tools),
                     # then attach the card. Falls back to a generic lead-in if synthesis fails.
                     answer = await self._synthesize_answer(session, tool_outputs) or lead_in(sblocks)
+                    sblocks = await self._apply_detail(session, sblocks, tool_outputs, request_headers)
                     session.add_assistant(answer)
                     session_service.save(session)
                     if turn:
@@ -763,6 +769,46 @@ class ChatService:
             log.exception(f"background task {task_id} failed: {exc}")
             task_service.update(task_id, status="failed", error=str(exc))
 
+    async def _apply_detail(
+        self, session: Session, blocks: list, tool_outputs: list[tuple[str, Any, bool]],
+        request_headers: dict[str, str] | None,
+    ) -> list:
+        """Shape structured output to the requested verbosity:
+        concise → drop the card (answer only) · standard → the card · detailed → card + related."""
+        level = (session.metadata.get("detail") or "standard").lower()
+        if level == "concise":
+            return []
+        if level == "detailed":
+            return blocks + await self._detailed_extras(tool_outputs, request_headers)
+        return blocks
+
+    async def _detailed_extras(
+        self, tool_outputs: list[tuple[str, Any, bool]], request_headers: dict[str, str] | None,
+    ) -> list:
+        """Detailed level: auto-pull closely-related data. For a user lookup, also fetch that
+        user's applications + roles and render them as extra cards."""
+        from ..services.ui_blocks import _unwrap
+        extras: list = []
+        for name, output, ok in tool_outputs:
+            if not ok or name != "getUserByUserName_get":
+                continue
+            try:
+                data = _unwrap(output)
+            except Exception:  # noqa: BLE001
+                data = output
+            rec = data[0] if isinstance(data, list) and data else data
+            uid = (rec.get("id") or rec.get("userId")) if isinstance(rec, dict) else None
+            if not uid:
+                continue
+            for tool in ("getUserAppsByUserId_get", "getUserAppRoleByUserId_post"):
+                try:
+                    res = await tool_registry.execute(tool, {"userId": uid}, request_headers)
+                    if getattr(res, "success", False):
+                        extras += blocks_from_outputs([(tool, res.output, True)])
+                except Exception:  # noqa: BLE001 — extras are best-effort
+                    pass
+        return extras
+
     async def _synthesize_answer(self, session: Session, tool_outputs: list[tuple[str, Any, bool]]) -> str:
         """Answer the user's question from the tool data with ONE focused, no-tools LLM call.
         This is far more reliable on a small model than re-running the agentic loop over a big
@@ -816,6 +862,14 @@ class ChatService:
             "could not be completed (NEVER call an error 'no results'); ignore empty 'errors' "
             "fields inside otherwise-valid data, and answer from the data that did come back."
         )
+        level = (session.metadata.get("detail") or "standard").lower()
+        if level == "concise":
+            sys += (" CONCISE MODE: answer in ONE short sentence — the direct fact only, no "
+                    "elaboration (there is no card in this mode, so include the single key value).")
+        elif level == "detailed":
+            sys += (" DETAILED MODE: give a fuller answer (2-4 sentences) — state the direct "
+                    "answer, then note the most relevant supporting fields and any related "
+                    "context from the data. Still never invent anything beyond the tool data.")
         msgs = [{"role": "user", "content": f"Question: {question}\n\nData:\n" + "\n".join(ctx)}]
         try:
             resp = await llm().complete(msgs, [], sys)

@@ -77,6 +77,7 @@ async def chat(
             user_id=user.id,
             system_prompt=body.system_prompt,
             request_headers=_request_headers(request),
+            detail=body.detail,
         )
         M.chat_requests_total.labels("sync", "success").inc()
         return result

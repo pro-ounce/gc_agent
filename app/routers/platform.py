@@ -75,6 +75,11 @@ class AgentQuery(BaseModel):
     scope: str | None = "GLOBAL"
     # Application code, meaningful only for APPLICATION scope (mirrors ChatAgentRequest.appCode).
     appCode: str | None = Field(None, max_length=100)
+    # Output verbosity: "concise" = answer only · "standard" = answer + card (default) ·
+    # "detailed" = richer answer + card + related data.
+    detail: str | None = None
+    # The module/screen the widget is on, for context-aware handling.
+    module: str | None = None
 
 
 def _resolve_app_code(scope: str, app_code: str | None) -> str | None:
@@ -195,9 +200,11 @@ async def agent_questions(
         resume = _resume_hint(user)
     except Exception:  # noqa: BLE001 — never fail the bootstrap on a resume lookup
         resume = {"hasHistory": False}
-    # Context-aware balloons for the module/screen the widget is currently on.
+    # Context-aware balloons for the module/screen the widget is currently on. Always return
+    # a set (module_suggestions falls back to a sensible default when the module is unknown or
+    # the gateway drops the query param), so the widget's popups are never empty.
     from ..services.suggestions import module_suggestions
-    balloons = module_suggestions(module) if module else []
+    balloons = module_suggestions(module)
     return ApiResponse.ok(message="ok", data={
         "questions": list(_SUGGESTIONS),
         "balloons": balloons,
@@ -290,6 +297,7 @@ async def agent_reply(
             user_id=user.id,
             system_prompt=system_prompt,
             request_headers=_forward_headers(request),
+            detail=body.detail,
         )
     except Exception as exc:  # noqa: BLE001 — surface a clean envelope, never a 500 HTML
         log.exception(f"agent_reply failed: {exc}")
@@ -349,6 +357,7 @@ async def agent_reply_stream(
             user_id=user.id,
             system_prompt=system_prompt,
             request_headers=_forward_headers(request),
+            detail=body.detail,
         ):
             yield {"data": chunk.model_dump_json()}
             if chunk.type in ("done", "error"):
