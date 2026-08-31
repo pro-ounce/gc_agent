@@ -53,9 +53,42 @@ class Skill:
     hint: str = ""                     # extra grounding note (e.g. how to pass name→id fields)
     follow_up: str = ""                # suggestion appended after the mutation succeeds ({field} fmt)
     schema: dict[str, Any] | None = None  # slim param schema shown to the model (names, not ids)
+    focused: bool = False              # offer ONLY this tool (even for reads) so the model can't
+                                       # get distracted by a similar-but-wrong tool
 
 
 SKILLS: list[Skill] = [
+    # Named-user lookup — force getUserByUserName for any "details/account/info/profile for
+    # <user>" phrasing (the model otherwise reaches for the self-only getUserProfile or stalls).
+    Skill(
+        name="user_lookup",
+        keywords=(
+            "account details", "user details", "details for", "details of", "details about",
+            "who is", "look up user", "lookup user", "look up the user", "show me user",
+            "show me the user", "profile for", "info for", "information for", "account for",
+            "user info", "find user", "get user",
+        ),
+        tool="getUserByUserName_get",
+        required=("userName",),
+        focused=True,
+        schema={
+            "type": "object",
+            "properties": {
+                "userName": {
+                    "type": "string",
+                    "description": "The username the user named (e.g. GCADMIN). Pass it as given.",
+                },
+            },
+            "required": ["userName"],
+        },
+        summary="look up a user's details by username",
+        hint=(
+            "Take the username from the request and pass it as userName, then call "
+            "getUserByUserName immediately. NEVER use getUserProfile (that returns the caller's "
+            "own profile, not the named user). 'account details for GCADMIN' → "
+            "getUserByUserName(userName='GCADMIN')."
+        ),
+    ),
     Skill(
         name="create_user",
         keywords=(

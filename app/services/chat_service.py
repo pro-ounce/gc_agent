@@ -201,7 +201,7 @@ class ChatService:
             system = system + skills.grounding(skill)
         # Tool-RAG: pick only tools relevant to this query (falls back to all — see select_tools).
         # For a mutation skill, offer ONLY its action tool so a weaker model can't read-and-stop.
-        only = [skill.tool] if (skill and is_mutation(skill.tool)) else None
+        only = [skill.tool] if (skill and (is_mutation(skill.tool) or skill.focused)) else None
         slim = {skill.tool: skill.schema} if (skill and skill.schema) else None
         tools = await tool_registry.select_tools(
             user_message, request_headers, extra=[skill.tool] if skill else None,
@@ -466,7 +466,7 @@ class ChatService:
         skill = skills.match(user_message)
         if skill:
             system = system + skills.grounding(skill)
-        only = [skill.tool] if (skill and is_mutation(skill.tool)) else None
+        only = [skill.tool] if (skill and (is_mutation(skill.tool) or skill.focused)) else None
         slim = {skill.tool: skill.schema} if (skill and skill.schema) else None
         with turn.phase("retrieval"):
             tools = await tool_registry.select_tools(
