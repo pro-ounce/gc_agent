@@ -298,6 +298,7 @@ class ChatService:
         if not final_text.strip() and blocks:
             final_text = blocks_to_text(blocks)
         session.add_assistant(final_text)
+        self._log_answer(session_id, final_text, blocks)
         session_service.save(session)
 
         return ChatResponse(
@@ -621,6 +622,7 @@ class ChatService:
                 sblocks = blocks_from_outputs(tool_outputs)
                 text = (text or "").strip() or ("" if sblocks else _EMPTY_FALLBACK)
                 session.add_assistant(text)
+                self._log_answer(session_id, text, sblocks)
                 session_service.save(session)
                 if turn:
                     turn.finish("stop")
@@ -699,6 +701,7 @@ class ChatService:
                     answer = await self._synthesize_answer(session, tool_outputs) or lead_in(sblocks)
                     sblocks = await self._apply_detail(session, sblocks, tool_outputs, request_headers)
                     session.add_assistant(answer)
+                    self._log_answer(session_id, answer, sblocks)
                     session_service.save(session)
                     if turn:
                         turn.finish("stop")
@@ -808,6 +811,16 @@ class ChatService:
                 except Exception:  # noqa: BLE001 — extras are best-effort
                     pass
         return extras
+
+    def _log_answer(self, session_id: str, answer: str, blocks: Any, outcome: str = "stop") -> None:
+        """Record the turn's answer snippet in the log ring (request_id auto-attaches) so the
+        admin 'Activity' feed can show prompt→answer + errors for validity analysis."""
+        try:
+            log.bind(event="chat_answer", session_id=session_id,
+                     answer=(answer or "")[:240], blocks=len(blocks or []),
+                     outcome=outcome).info("chat answer")
+        except Exception:  # noqa: BLE001 — telemetry must never break a turn
+            pass
 
     async def _synthesize_answer(self, session: Session, tool_outputs: list[tuple[str, Any, bool]]) -> str:
         """Answer the user's question from the tool data with ONE focused, no-tools LLM call.

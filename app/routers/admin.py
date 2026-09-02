@@ -18,7 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse
 
 from ..commons.logger import get_logger, recent_logs
 from ..routers.health import _guard  # reuse the actuator IP allow-list guard
-from ..services import backup_service, runtime_config
+from ..services import backup_service, runtime_config, system_metrics
 
 log = get_logger(__name__)
 
@@ -76,6 +76,56 @@ async def admin_logs(request: Request):
     event = request.query_params.get("event") or None
     level = request.query_params.get("level") or None
     return {"logs": recent_logs(limit=limit, event=event, level=level)}
+
+
+@router.get("/admin/system", summary="Host CPU/GPU/memory/disk + LLM device placement")
+async def admin_system(request: Request):
+    _guard(request)
+    import asyncio
+    # snapshot() shells out to nvidia-smi + reads /proc + hits Ollama — off the event loop.
+    return await asyncio.to_thread(system_metrics.snapshot)
+
+
+@router.get("/admin/turns", summary="Recent chat turns: prompt, answer, metrics, errors")
+async def admin_turns(request: Request):
+    """Correlates the in-memory log ring by request_id into one record per chat turn —
+    prompt, answer snippet, latency/token/tool metrics, and any errors — for live
+    performance + response-validity analysis without shell access."""
+    _guard(request)
+    limit = int(request.query_params.get("limit", "40"))
+    return {"turns": _recent_turns(limit)}
+
+
+def _recent_turns(limit: int = 40) -> list[dict]:
+    turns: dict[str, dict] = {}
+    order: list[str] = []
+    for r in recent_logs(limit=800):          # newest-first
+        f = r.get("fields") or {}
+        rid = f.get("request_id")
+        if not rid:
+            continue
+        t = turns.get(rid)
+        if t is None:
+            t = {"request_id": rid, "ts": r.get("ts"), "errors": []}
+            turns[rid] = t
+            order.append(rid)
+        ev = f.get("event")
+        if ev == "chat_prompt":
+            t.update({"question": f.get("question"), "session_id": f.get("session_id"),
+                      "user_id": f.get("user_id"), "mode": f.get("mode"), "ts": r.get("ts")})
+        elif ev == "turn_summary":
+            t.update({"total_ms": f.get("total_ms"), "llm_ms": f.get("llm_ms"),
+                      "tools_ms": f.get("tools_ms"), "retrieval_ms": f.get("retrieval_ms"),
+                      "tokens_in": f.get("prompt_tokens"), "tokens_out": f.get("completion_tokens"),
+                      "iterations": f.get("iterations"), "tools": f.get("tools_used"),
+                      "outcome": f.get("outcome")})
+        elif ev == "chat_answer":
+            t.update({"answer": f.get("answer"), "blocks": f.get("blocks")})
+            if f.get("error"):
+                t["errors"].append(str(f.get("error")))
+        if r.get("level") == "ERROR" and r.get("msg"):
+            t["errors"].append(r.get("msg"))
+    return [turns[rid] for rid in order][:limit]
 
 
 @router.get("/admin/backup", summary="Backup overview — repo, schedule, snapshots, stats")

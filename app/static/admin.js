@@ -58,14 +58,15 @@
     var groups = [];
     params.forEach(function(p){ if(groups.indexOf(p.group)<0) groups.push(p.group); });
     elTabs.innerHTML = groups.map(function(g,i){ return tabBtn(g,g,i===0); }).join("")
-      + tabBtn("Backups","__backups__",false)
       + tabBtn("Metrics","__metrics__",false)
+      + tabBtn("Activity","__activity__",false)
+      + tabBtn("Backups","__backups__",false)
       + tabBtn("Logs","__logs__",false);
     elSections.innerHTML = groups.map(function(g,i){
       var cards = params.filter(function(p){return p.group===g;}).map(cardFor).join("");
       return '<section class="admin-section'+(i===0?" active":"")+'" data-tab="'+esc(g)+'" role="tabpanel"'
         +' id="panel-'+sid(g)+'" aria-labelledby="tab-'+sid(g)+'" tabindex="0"><div class="cards">'+cards+'</div></section>';
-    }).join("") + backupsSectionHTML() + metricsSectionHTML() + logsSectionHTML();
+    }).join("") + metricsSectionHTML() + activitySectionHTML() + backupsSectionHTML() + logsSectionHTML();
     // tab switching — WAI-ARIA tabs: roving tabindex, arrow/Home/End keys, aria-selected.
     var tabEls = Array.prototype.slice.call(elTabs.children);
     function selectTab(btn){
@@ -109,6 +110,7 @@
     });
     initBackups();
     initMetrics();
+    initActivity();
     initLogs();
   }
 
@@ -236,38 +238,182 @@
     loadBackups();
   }
 
-  // ── Metrics tab (renders /actuator/info) ──
+  function ms(v){ if(v==null) return "—"; return v>=1000?(v/1000).toFixed(2)+"s":Math.round(v)+"ms"; }
+  function num(v){ return v==null?"—":Number(v).toLocaleString("en-US"); }
+  function tile(label, val, foot){
+    return '<div class="card"><div class="def" style="margin:0">'+esc(label)+'</div>'
+      +'<div class="big" style="margin-top:4px">'+esc(val)+'</div>'
+      +(foot?'<div class="def">'+esc(foot)+'</div>':'')+'</div>';
+  }
+
+  // ── Metrics tab (live system dashboard: inference device, CPU/GPU/mem, charts, ticker) ──
+  function gaugeCard(label,id,keyRight){
+    return '<div class="card"><div class="top"><span class="lbl">'+label+'</span><span class="big" id="'+id+'-val">—</span></div>'
+      +'<div class="gauge"><div class="bar"><div class="fill" id="'+id+'-fill"></div></div></div>'
+      +'<div class="def" id="'+id+'-sub" style="margin-top:8px">—</div></div>';
+  }
+  function chartCard(label,id,unit){
+    return '<div class="card"><div class="top"><span class="lbl">'+label+'</span><span class="big" style="font-size:18px" id="'+id+'-cur">—</span></div>'
+      +'<canvas class="chart" id="'+id+'"></canvas></div>';
+  }
   function metricsSectionHTML(){
     return '<section class="admin-section" data-tab="__metrics__" role="tabpanel" id="panel-__metrics__" aria-labelledby="tab-__metrics__" tabindex="0">'
-      +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Runtime</span>'
-      +'<button id="mx-refresh" class="btn" style="padding:5px 11px">Refresh</button></div>'
+      +'<div class="ticker-wrap" aria-hidden="true"><div id="mx-ticker" class="ticker-track">loading…</div></div>'
+      +'<div class="admin-header" style="margin-bottom:10px"><span class="lbl" id="mx-device">Checking inference device…</span>'
+      +'<span class="btns"><label class="switch" style="gap:6px"><input type="checkbox" id="mx-auto" checked aria-label="Auto-refresh metrics">'
+      +'<span class="track" aria-hidden="true"><span class="knob"></span></span><span class="state" style="font-size:12px">live</span></label>'
+      +'<button id="mx-refresh" class="btn" style="padding:5px 11px">Refresh</button></span></div>'
+      +'<div class="cards" style="margin-bottom:14px">'+gaugeCard("CPU","mx-cpu")+gaugeCard("Memory","mx-mem")
+      +'<div class="card"><div class="top"><span class="lbl">GPU <span class="key mono" id="mx-gpu-name"></span></span><span class="big" id="mx-gpu-val">—</span></div>'
+      +'<div class="gauge"><div class="bar"><div class="fill" id="mx-gpu-fill"></div></div></div>'
+      +'<div class="def" id="mx-gpu-sub" style="margin-top:8px">—</div></div></div>'
+      +'<div class="cards" style="margin-bottom:14px">'+chartCard("CPU load %","mx-c-cpu")+chartCard("GPU utilisation %","mx-c-gpu")+chartCard("Tokens / sec","mx-c-tok")+'</div>'
+      +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Runtime</span></div>'
       +'<div id="mx-runtime" class="def" role="status" aria-live="polite" style="margin-top:8px">loading…</div></div>'
       +'<div id="mx-cards" class="cards"></div></section>';
   }
-  function tile(label, val, foot){
-    return '<div class="card"><div class="def" style="margin:0">'+esc(label)+'</div>'
-      +'<div style="font-size:26px;font-weight:600;margin-top:4px" class="mono">'+esc(val)+'</div>'
-      +(foot?'<div class="def">'+esc(foot)+'</div>':'')+'</div>';
+
+  // Rolling time-series + last token counter for the derived tokens/sec.
+  var mxSeries={cpu:[],gpu:[],tok:[]}, mxLast={tok:null,ts:null}, mxTimer=null;
+  function pushSeries(a,v){ a.push(v); if(a.length>60) a.shift(); }
+
+  function drawChart(id, data, opts){
+    var cv=document.getElementById(id); if(!cv) return; opts=opts||{};
+    var dpr=Math.min(2,window.devicePixelRatio||1), w=cv.clientWidth||300, h=cv.clientHeight||84;
+    cv.width=w*dpr; cv.height=h*dpr; var g=cv.getContext("2d"); g.setTransform(dpr,0,0,dpr,0,0); g.clearRect(0,0,w,h);
+    var pad=4, n=data.length, col=opts.color||"#7c3aed";
+    var max=opts.max!=null?opts.max:Math.max.apply(null,data.concat([1])); if(max<=0)max=1;
+    g.strokeStyle="rgba(17,24,39,.06)"; g.lineWidth=1;
+    g.beginPath(); g.moveTo(pad,pad+(h-2*pad)*0.5); g.lineTo(w-pad,pad+(h-2*pad)*0.5); g.stroke();
+    if(n<2) return;
+    var X=function(i){return pad+(w-2*pad)*(i/(n-1));}, Y=function(v){return pad+(h-2*pad)*(1-Math.max(0,Math.min(max,v))/max);};
+    g.beginPath(); g.moveTo(X(0),h-pad); for(var i=0;i<n;i++) g.lineTo(X(i),Y(data[i])); g.lineTo(X(n-1),h-pad); g.closePath();
+    var grad=g.createLinearGradient(0,pad,0,h); grad.addColorStop(0,col+"33"); grad.addColorStop(1,col+"05"); g.fillStyle=grad; g.fill();
+    g.beginPath(); for(i=0;i<n;i++){ i?g.lineTo(X(i),Y(data[i])):g.moveTo(X(i),Y(data[i])); } g.strokeStyle=col; g.lineWidth=1.8; g.stroke();
+    g.beginPath(); g.arc(X(n-1),Y(data[n-1]),2.6,0,7); g.fillStyle=col; g.fill();
   }
-  function ms(v){ if(v==null) return "—"; return v>=1000?(v/1000).toFixed(2)+"s":Math.round(v)+"ms"; }
-  function num(v){ return v==null?"—":Number(v).toLocaleString("en-US"); }
+  function setGauge(id, pct, big, sub){
+    var f=document.getElementById(id+"-fill"); if(!f) return;
+    var p=Math.max(0,Math.min(100,pct||0));
+    f.style.width=p+"%"; f.className="fill"+(p>=90?" crit":p>=70?" warn":"");
+    var v=document.getElementById(id+"-val"); if(v) v.textContent=big;
+    var s=document.getElementById(id+"-sub"); if(s) s.textContent=sub;
+  }
+  function tkItem(k,v){ return '<span class="tk">'+esc(k)+' <b>'+esc(v)+'</b></span>'; }
+  function buildTicker(sys, info){
+    var c=sys.cpu||{}, m=sys.mem||{}, gp=(sys.gpu||[])[0]||{}, inf=sys.inference||{};
+    var r=info.runtime||{}, met=info.metrics||{}, llm=met.llm||{}, turn=met.turn||{};
+    var dev=(inf.models||[]).length? (inf.models[0].device+" "+(inf.models[0].gpu_percent)+"%") : "—";
+    var items=[["Inference",dev],["CPU",(c.percent!=null?c.percent+"%":"—")],["Load",(c.load&&c.load[0]!=null?c.load[0].toFixed(2):"—")],
+      ["Mem",(m.percent!=null?m.percent+"%":"—")],["GPU",(gp.util!=null?gp.util+"%":"—")],["GPU °C",(gp.temp!=null?Math.round(gp.temp)+"°":"—")],
+      ["GPU W",(gp.power!=null?gp.power.toFixed(1):"—")],["Model",(r.llm||{}).model||"?"],["Turns",num(turn.count)],
+      ["LLM avg",ms(llm.avg_ms)],["Tokens",num((((llm.tokens||{}).input)||0)+(((llm.tokens||{}).output)||0))],["Sessions",num(r.sessions)]];
+    var chunk=items.map(function(kv){return tkItem(kv[0],kv[1]);}).join(""); return chunk+chunk;
+  }
+  function renderDevice(inf){
+    var el=document.getElementById("mx-device"); if(!el) return;
+    var mods=(inf&&inf.models)||[];
+    if(!inf||!inf.available||!mods.length){ el.innerHTML='<span class="badge-dev cpu">No model loaded</span>'; return; }
+    el.innerHTML = mods.map(function(mo){
+      var cls=mo.device==="GPU"?"gpu":(mo.device==="CPU"?"cpu":"split");
+      var icon=mo.device==="GPU"?"⚡":(mo.device==="CPU"?"⚠":"◑");
+      return '<span class="badge-dev '+cls+'" style="margin-right:8px">'+icon+' '+esc(mo.name)+' — '+esc(mo.device)+' '+mo.gpu_percent+'%</span>';
+    }).join("");
+  }
+  function renderMetrics(info, sys){
+    info=info||{}; sys=sys||{};
+    var r=info.runtime||{}, m=info.metrics||{}, llm=m.llm||{}, turn=m.turn||{}, tools=m.tools||{}, mcp=m.mcp||{}, http=m.http||{};
+    // device badge + ticker
+    renderDevice(sys.inference);
+    var tk=document.getElementById("mx-ticker"); if(tk) tk.innerHTML=buildTicker(sys, info);
+    // gauges
+    var c=sys.cpu||{}, mem=sys.mem||{}, gp=(sys.gpu||[])[0]||{};
+    setGauge("mx-cpu", c.percent, (c.percent!=null?c.percent+"%":"—"), (c.cores||"?")+" cores · load "+((c.load&&c.load.length)?c.load.map(function(x){return x.toFixed(2);}).join(" "):"—"));
+    setGauge("mx-mem", mem.percent, (mem.percent!=null?mem.percent+"%":"—"), num(mem.used_mb)+" / "+num(mem.total_mb)+" MB"+(mem.swap_total_mb?(" · swap "+num(mem.swap_used_mb)+"/"+num(mem.swap_total_mb)):""));
+    var gname=document.getElementById("mx-gpu-name"); if(gname) gname.textContent=gp.name||"—";
+    // GB10 unified memory → nvidia-smi mem is N/A; show system RAM as the GPU's (unified) memory.
+    var gmem = gp.mem_total_mb ? (num(gp.mem_used_mb)+" / "+num(gp.mem_total_mb)+" MB") : (num(mem.used_mb)+" / "+num(mem.total_mb)+" MB (unified)");
+    setGauge("mx-gpu", gp.util, (gp.util!=null?gp.util+"%":"—"), (gp.temp!=null?Math.round(gp.temp)+"°C":"—")+" · "+(gp.power!=null?gp.power.toFixed(1)+"W":"—")+" · "+gmem);
+    // charts
+    pushSeries(mxSeries.cpu, c.percent||0); pushSeries(mxSeries.gpu, gp.util||0);
+    var tok=(((llm.tokens||{}).input)||0)+(((llm.tokens||{}).output)||0), now=sys.ts||Date.now();
+    if(mxLast.tok!=null && now>mxLast.ts){ var tps=(tok-mxLast.tok)/((now-mxLast.ts)/1000); pushSeries(mxSeries.tok, tps>0?tps:0); }
+    mxLast.tok=tok; mxLast.ts=now;
+    drawChart("mx-c-cpu", mxSeries.cpu, {max:100,color:"#7c3aed"}); drawChart("mx-c-gpu", mxSeries.gpu, {max:100,color:"#16a34a"}); drawChart("mx-c-tok", mxSeries.tok, {color:"#2563eb"});
+    var cc=document.getElementById("mx-c-cpu-cur"); if(cc) cc.textContent=(c.percent!=null?c.percent+"%":"—");
+    var gc=document.getElementById("mx-c-gpu-cur"); if(gc) gc.textContent=(gp.util!=null?gp.util+"%":"—");
+    var tc=document.getElementById("mx-c-tok-cur"); if(tc){ var last=mxSeries.tok[mxSeries.tok.length-1]; tc.textContent=(last!=null?last.toFixed(1):"—"); }
+    // runtime line + tiles
+    var up=r.uptime_seconds||0, uph=up>=3600?(up/3600).toFixed(1)+"h":Math.round(up/60)+"m";
+    var rt=document.getElementById("mx-runtime"); if(rt) rt.innerHTML=
+      "model <b class=mono>"+esc((r.llm||{}).model||"?")+"</b> · tools <b>"+num(r.tools_loaded)+"</b> · sessions <b>"+num(r.sessions)+"</b> · uptime <b>"+esc(uph)+"</b> · store <b>"+esc(r.store_backend||"?")+"</b>";
+    var mc=document.getElementById("mx-cards"); if(mc) mc.innerHTML=
+      tile("Turns", num(turn.count), "avg "+ms(turn.avg_ms)+(turn.avg_tools!=null?" · "+Number(turn.avg_tools).toFixed(1)+" tools/turn":""))
+     +tile("LLM calls", num(llm.calls), "avg "+ms(llm.avg_ms)+" / call")
+     +tile("LLM tokens", num(tok), num((llm.tokens||{}).input)+" in · "+num((llm.tokens||{}).output)+" out")
+     +tile("Tool execs", num(tools.executions), "avg "+ms(tools.avg_ms))
+     +tile("MCP requests", num(mcp.requests), "avg "+ms(mcp.avg_ms))
+     +tile("HTTP requests", num(http.requests), "avg "+ms(http.avg_ms));
+  }
   function loadMetrics(){
-    var rt=document.getElementById("mx-runtime"); if(rt) rt.textContent="loading…";
-    fetch(ROOT+"/actuator/info",{cache:"no-store"}).then(function(r){return r.json();}).then(function(d){
-      var r=d.runtime||{}, m=d.metrics||{}, llm=m.llm||{}, turn=m.turn||{}, tools=m.tools||{}, mcp=m.mcp||{}, http=m.http||{}, chat=m.chat||{};
-      var up=r.uptime_seconds||0, uph=up>=3600?(up/3600).toFixed(1)+"h":Math.round(up/60)+"m";
-      document.getElementById("mx-runtime").innerHTML =
-        "model <b class=mono>"+esc((r.llm||{}).model||"?")+"</b> · tools loaded <b>"+num(r.tools_loaded)+"</b> · sessions <b>"+num(r.sessions)+"</b> · uptime <b>"+esc(uph)+"</b> · store <b>"+esc(r.store_backend||"?")+"</b>";
-      document.getElementById("mx-cards").innerHTML =
-        tile("Turns", num(turn.count), "avg "+ms(turn.avg_ms)+" · "+ (turn.avg_tools!=null?Number(turn.avg_tools).toFixed(1)+" tools/turn":""))
-       +tile("LLM calls", num(llm.calls), "avg "+ms(llm.avg_ms)+" / call")
-       +tile("LLM tokens", num((((llm.tokens||{}).input)||0)+(((llm.tokens||{}).output)||0)), num((llm.tokens||{}).input)+" in · "+num((llm.tokens||{}).output)+" out")
-       +tile("Tool execs", num(tools.executions), "avg "+ms(tools.avg_ms))
-       +tile("MCP requests", num(mcp.requests), "avg "+ms(mcp.avg_ms))
-       +tile("HTTP requests", num(http.requests), "avg "+ms(http.avg_ms));
-    }).catch(function(e){ document.getElementById("mx-runtime").innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; });
+    return Promise.all([
+      fetch(ROOT+"/actuator/info",{cache:"no-store"}).then(function(r){return r.json();}).catch(function(){return {};}),
+      fetch(API+"/system",{cache:"no-store"}).then(function(r){return r.json();}).catch(function(){return {};})
+    ]).then(function(res){ renderMetrics(res[0], res[1]); })
+      .catch(function(e){ var rt=document.getElementById("mx-runtime"); if(rt) rt.innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; });
   }
-  function initMetrics(){ var b=document.getElementById("mx-refresh"); if(!b) return; b.addEventListener("click",loadMetrics); loadMetrics(); }
+  function metricsActive(){ var s=document.querySelector('[data-tab="__metrics__"]'); return s&&s.classList.contains("active"); }
+  function initMetrics(){
+    var b=document.getElementById("mx-refresh"); if(!b) return;
+    b.addEventListener("click",loadMetrics);
+    if(mxTimer){clearInterval(mxTimer);}
+    mxTimer=setInterval(function(){ var a=document.getElementById("mx-auto"); if(a&&a.checked&&metricsActive()) loadMetrics(); }, 2500);
+    loadMetrics();
+  }
+
+  // ── Activity tab (live chat turns: prompt, answer, metrics, errors) ──
+  function activitySectionHTML(){
+    return '<section class="admin-section" data-tab="__activity__" role="tabpanel" id="panel-__activity__" aria-labelledby="tab-__activity__" tabindex="0">'
+      +'<div class="card"><div class="top"><span class="lbl">Live activity <span id="ac-count" class="key"></span></span>'
+      +'<span class="btns"><label class="switch" style="gap:6px"><input type="checkbox" id="ac-auto" checked aria-label="Auto-refresh activity">'
+      +'<span class="track" aria-hidden="true"><span class="knob"></span></span><span class="state" style="font-size:12px">live</span></label>'
+      +'<label class="switch" style="gap:6px"><input type="checkbox" id="ac-erronly" aria-label="Errors only"><span class="track" aria-hidden="true"><span class="knob"></span></span><span class="state" style="font-size:12px">errors</span></label>'
+      +'<button id="ac-refresh" class="btn" style="padding:5px 11px">Refresh</button></span></div>'
+      +'<div id="ac-list" style="margin-top:8px;max-height:66vh;overflow:auto">loading…</div></div></section>';
+  }
+  function turnRow(t){
+    var err=(t.errors&&t.errors.length)?t.errors:[];
+    var toks=(t.tokens_in!=null||t.tokens_out!=null)?(num(t.tokens_in)+"→"+num(t.tokens_out)+" tok"):"";
+    var tools=(t.tools&&t.tools.length)?t.tools.map(function(x){return '<span class="pill">'+esc(x)+'</span>';}).join(" "):'<span class="def">no tools</span>';
+    var meta=[t.ts?'<span class="mono">'+esc(t.ts)+'</span>':'', t.user_id?"user "+esc(t.user_id):'',
+      t.total_ms!=null?'<span class="mono">'+ms(t.total_ms)+'</span> total':'',
+      t.llm_ms!=null?"llm "+ms(t.llm_ms):'', t.tools_ms!=null?"tools "+ms(t.tools_ms):'',
+      toks, t.outcome?'outcome <span class="mono">'+esc(t.outcome)+'</span>':''].filter(Boolean).join('<span style="opacity:.4">·</span>');
+    return '<div class="turn'+(err.length?' err':'')+'">'
+      +'<div class="q">'+(t.question?esc(t.question):'<span class="def">(no prompt captured)</span>')+'</div>'
+      +(t.answer?'<div class="a">↳ '+esc(t.answer)+(t.blocks?' <span class="pill">'+t.blocks+' card'+(t.blocks>1?'s':'')+'</span>':'')+'</div>':'')
+      +err.map(function(e){return '<div class="errline">⚠ '+esc(e)+'</div>';}).join('')
+      +'<div class="meta">'+tools+meta+'</div></div>';
+  }
+  function loadTurns(){
+    var el=document.getElementById("ac-list"); if(!el) return;
+    var errOnly=(document.getElementById("ac-erronly")||{}).checked;
+    fetch(API+"/turns?limit=60",{cache:"no-store"}).then(function(r){return r.json();}).then(function(d){
+      var turns=(d.turns||[]).filter(function(t){ return errOnly ? (t.errors&&t.errors.length) : true; });
+      var cnt=document.getElementById("ac-count"); if(cnt) cnt.textContent="("+turns.length+")";
+      el.innerHTML = turns.length ? turns.map(turnRow).join("") : '<div class="def" style="padding:12px 2px">No chat turns captured yet.</div>';
+    }).catch(function(e){ el.innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; });
+  }
+  var _acTimer=null;
+  function activityActive(){ var s=document.querySelector('[data-tab="__activity__"]'); return s&&s.classList.contains("active"); }
+  function initActivity(){
+    var b=document.getElementById("ac-refresh"); if(!b) return;
+    b.addEventListener("click",loadTurns);
+    document.getElementById("ac-erronly").addEventListener("change",loadTurns);
+    if(_acTimer){clearInterval(_acTimer);}
+    _acTimer=setInterval(function(){ var a=document.getElementById("ac-auto"); if(a&&a.checked&&activityActive()) loadTurns(); }, 3000);
+    loadTurns();
+  }
 
   // ── Logs tab (recent in-memory logs) ──
   function logsSectionHTML(){
