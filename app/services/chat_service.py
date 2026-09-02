@@ -72,6 +72,19 @@ _EMPTY_FALLBACK = (
     "for example the application, user, or exactly what you'd like me to do?"
 )
 
+# A count question ("how many users") wants the NUMBER, not a dump of every row. The
+# synthesized answer already states the count, so drop a big table for these.
+_COUNT_RE = re.compile(r"\b(how many|how much|number of|count of|total (?:number|count)|no\.? of)\b", re.I)
+
+
+def _trim_count_dump(session: "Session", blocks: list) -> list:
+    """For a count intent, drop large row-dumps — the one-line answer is what was asked."""
+    q = next((m.content for m in reversed(session.messages) if m.role == "user"), "")
+    if not _COUNT_RE.search(q or ""):
+        return blocks
+    return [b for b in blocks
+            if not (getattr(b, "type", "") == "table" and len(getattr(b, "rows", None) or []) > 8)]
+
 def _friendly_status(tool_name: str) -> str:
     """Human 'working on it' line for a tool call — never exposes the method name.
     Delegates to skills.status_label (curated tool labels + generic verb fallback)."""
@@ -276,6 +289,7 @@ class ChatService:
                     and not any(is_mutation(n) for n in tool_calls_made)):
                 lead = await self._synthesize_answer(session, tool_outputs) or lead_in(blocks)
                 blocks = await self._apply_detail(session, blocks, tool_outputs, request_headers)
+                blocks = _trim_count_dump(session, blocks)
                 session.add_assistant(lead)
                 self._log_answer(session_id, lead, blocks)
                 session_service.save(session)
@@ -702,6 +716,7 @@ class ChatService:
                     # then attach the card. Falls back to a generic lead-in if synthesis fails.
                     answer = await self._synthesize_answer(session, tool_outputs) or lead_in(sblocks)
                     sblocks = await self._apply_detail(session, sblocks, tool_outputs, request_headers)
+                    sblocks = _trim_count_dump(session, sblocks)
                     session.add_assistant(answer)
                     self._log_answer(session_id, answer, sblocks)
                     session_service.save(session)
