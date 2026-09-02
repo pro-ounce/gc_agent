@@ -381,6 +381,20 @@ class ToolRegistry:
                 ]
                 output = "\n".join(texts) if texts else str(output)
 
+            # A tool can return HTTP 200 while the ENVELOPE signals a business error
+            # ({success:false, statusCode:500, errors:…}). Transport succeeded, so success
+            # stays True (the UI/synthesis handle it), but log it as a tool_error so it is
+            # visible in /admin/logs + the Activity feed instead of looking like a clean call.
+            try:
+                from ..services.ui_blocks import _coerce, _envelope_error
+                _ee = _envelope_error(_coerce(output))
+            except Exception:  # noqa: BLE001
+                _ee = None
+            if _ee:
+                M.tool_exec_total.labels(tool_name, "business_error").inc()
+                log.bind(func="execute_tool", event="tool_error", tool=tool_name).warning(
+                    f"{tool_name} returned a business error: {str(_ee)[:200]}"
+                )
             return ToolResult(
                 tool_name=tool_name,
                 success=True,

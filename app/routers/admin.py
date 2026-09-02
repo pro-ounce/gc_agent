@@ -123,6 +123,8 @@ def _recent_turns(limit: int = 40) -> list[dict]:
             t.update({"answer": f.get("answer"), "blocks": f.get("blocks")})
             if f.get("error"):
                 t["errors"].append(str(f.get("error")))
+        elif ev == "tool_error" and r.get("msg"):
+            t["errors"].append(r.get("msg"))          # HTTP-200 envelope business error
         if r.get("level") == "ERROR" and r.get("msg"):
             t["errors"].append(r.get("msg"))
     # Only real chat turns (a captured prompt or answer) — drop bare health/admin request ids.
