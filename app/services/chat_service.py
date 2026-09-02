@@ -20,7 +20,7 @@ from ..commons import metrics as M
 from ..commons.config import cfg
 from ..commons.flags import flags
 from ..services import runtime_config
-from ..commons.logger import get_logger
+from ..commons.logger import get_logger, get_request_id
 from ..mcp.prompt_registry import prompt_registry
 from ..mcp.tool_registry import is_mutation, tool_registry
 from ..models.chat import ChatResponse, StreamChunk, Suggestion, UIBlock
@@ -277,6 +277,7 @@ class ChatService:
                 lead = await self._synthesize_answer(session, tool_outputs) or lead_in(blocks)
                 blocks = await self._apply_detail(session, blocks, tool_outputs, request_headers)
                 session.add_assistant(lead)
+                self._log_answer(session_id, lead, blocks)
                 session_service.save(session)
                 return ChatResponse(
                     session_id=session_id,
@@ -438,6 +439,7 @@ class ChatService:
             agent=session_id.split(":", 1)[0] or "chatbot",
             session_id=session_id,
             user_id=str(user_id or ""),
+            request_id=get_request_id(),   # correlate turn_summary with chat_prompt/answer
         )
         session = session_service.get_or_create(session_id, user_id)
         session.add_user(user_message)

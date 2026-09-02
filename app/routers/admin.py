@@ -125,7 +125,9 @@ def _recent_turns(limit: int = 40) -> list[dict]:
                 t["errors"].append(str(f.get("error")))
         if r.get("level") == "ERROR" and r.get("msg"):
             t["errors"].append(r.get("msg"))
-    return [turns[rid] for rid in order][:limit]
+    # Only real chat turns (a captured prompt or answer) — drop bare health/admin request ids.
+    out = [turns[rid] for rid in order if turns[rid].get("question") or turns[rid].get("answer")]
+    return out[:limit]
 
 
 @router.get("/admin/backup", summary="Backup overview — repo, schedule, snapshots, stats")
