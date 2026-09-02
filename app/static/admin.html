@@ -27,6 +27,7 @@
     .admin-tab{padding:8px 14px;border:1px solid var(--line);border-radius:9px;background:var(--panel);
       cursor:pointer;font:inherit;font-size:13.5px;color:var(--ink-2)}
     .admin-tab.active{background:var(--accent-wash);border-color:var(--accent-line);color:var(--accent);font-weight:600}
+    .admin-tab:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
     .admin-section{display:none} .admin-section.active{display:block}
     .cards{display:grid;grid-template-columns:1fr 1fr;gap:14px}
     @media (max-width:760px){.cards{grid-template-columns:1fr}}
@@ -47,6 +48,7 @@
       box-shadow:0 1px 2px rgba(0,0,0,.3);transition:left .15s}
     .switch input:checked + .track{background:var(--accent)}
     .switch input:checked + .track .knob{left:23px}
+    .switch input:focus-visible + .track{outline:2px solid var(--accent);outline-offset:2px}
     .switch .state{font-size:13px;color:var(--ink-2);min-width:22px}
     .ovr{display:inline-block;font-size:10.5px;font-weight:600;letter-spacing:.03em;text-transform:uppercase;
       color:var(--amber);background:var(--amber-wash);border:1px solid #f3ddc0;border-radius:999px;padding:1px 7px;margin-left:8px}
@@ -73,9 +75,9 @@
     <div class="admin-header">
       <h2>Settings</h2>
       <div class="btns">
-        <span id="status"></span>
+        <span id="status" role="status" aria-live="polite"></span>
         <button id="btn-reset" class="btn">Reset to defaults</button>
-        <button id="btn-save" class="btn primary" disabled>Save</button>
+        <button id="btn-save" class="btn primary" disabled aria-label="Save changes">Save</button>
       </div>
     </div>
     <nav class="admin-tabs" id="tabs" role="tablist"></nav>

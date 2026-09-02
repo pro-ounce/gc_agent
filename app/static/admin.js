@@ -8,6 +8,8 @@
   var elTabs = $("#tabs"), elSections = $("#sections"), elStatus = $("#status");
   var btnSave = $("#btn-save"), btnReset = $("#btn-reset");
   var esc = function(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});};
+  // Safe DOM id from an arbitrary config key/group (used to wire aria-labelledby / tabs).
+  var sid = function(s){return String(s==null?"":s).replace(/[^\w-]/g,"_");};
   var params = [];       // from server
   var pending = {};       // key -> new value (dirty)
 
@@ -17,53 +19,75 @@
 
   function ctlFor(p){
     var v = (p.key in pending) ? pending[p.key] : p.value;
+    // Associate every control with its parameter name (+ description) so assistive tech
+    // announces a meaningful accessible name, and expose the current state textually.
+    var lab = ' aria-labelledby="lbl-'+sid(p.key)+' desc-'+sid(p.key)+'"';
     if(p.type==="bool"){
       var on = !!v;
-      return '<label class="switch"><input type="checkbox" data-key="'+p.key+'"'+(on?" checked":"")+'>'
-        +'<span class="track"><span class="knob"></span></span><span class="state">'+(on?"On":"Off")+'</span></label>';
+      return '<label class="switch"><input type="checkbox" data-key="'+esc(p.key)+'"'+(on?" checked":"")+lab+'>'
+        +'<span class="track" aria-hidden="true"><span class="knob"></span></span><span class="state">'+(on?"On":"Off")+'</span></label>';
     }
     if(p.type==="select"){
       var opts=(p.options||[]).map(function(o){return '<option value="'+esc(o)+'"'+(String(o)===String(v)?" selected":"")+'>'+esc(o)+'</option>';}).join("");
-      return '<div class="ctl"><select data-key="'+p.key+'">'+opts+'</select></div>';
+      return '<div class="ctl"><select data-key="'+esc(p.key)+'"'+lab+'>'+opts+'</select></div>';
     }
     if(p.type==="int"||p.type==="float"){
       var step = p.type==="float" ? (p.step||0.1) : 1;
       var mn = ("min" in p)?' min="'+p.min+'"':"", mx=("max" in p)?' max="'+p.max+'"':"";
-      return '<div class="ctl"><input type="number" data-key="'+p.key+'" value="'+esc(v)+'" step="'+step+'"'+mn+mx+'></div>';
+      return '<div class="ctl"><input type="number" data-key="'+esc(p.key)+'" value="'+esc(v)+'" step="'+step+'"'+mn+mx+lab+'></div>';
     }
-    return '<div class="ctl"><input type="text" data-key="'+p.key+'" value="'+esc(v)+'"></div>';
+    return '<div class="ctl"><input type="text" data-key="'+esc(p.key)+'" value="'+esc(v)+'"'+lab+'></div>';
   }
 
   function cardFor(p){
     var ovr = p.overridden ? '<span class="ovr">overridden</span>' : '';
-    return '<div class="card"><div class="top"><span class="lbl">'+esc(p.label)+ovr+'</span>'
+    return '<div class="card"><div class="top"><span class="lbl" id="lbl-'+sid(p.key)+'">'+esc(p.label)+ovr+'</span>'
       +'<span class="key mono">'+esc(p.key)+'</span></div>'
-      +'<div class="desc">'+esc(p.description)+'</div>'
+      +'<div class="desc" id="desc-'+sid(p.key)+'">'+esc(p.description)+'</div>'
       + ctlFor(p)
       +'<div class="def">default: <span class="mono">'+esc(p.default)+'</span></div></div>';
+  }
+
+  function tabBtn(label, key, active){
+    return '<button class="admin-tab'+(active?" active":"")+'" data-tab="'+esc(key)+'" role="tab"'
+      +' id="tab-'+sid(key)+'" aria-controls="panel-'+sid(key)+'" aria-selected="'+(active?"true":"false")+'"'
+      +' tabindex="'+(active?"0":"-1")+'">'+esc(label)+'</button>';
   }
 
   function render(){
     var groups = [];
     params.forEach(function(p){ if(groups.indexOf(p.group)<0) groups.push(p.group); });
-    elTabs.innerHTML = groups.map(function(g,i){
-      return '<button class="admin-tab'+(i===0?" active":"")+'" data-tab="'+esc(g)+'" role="tab">'+esc(g)+'</button>';
-    }).join("")
-      + '<button class="admin-tab" data-tab="__backups__" role="tab">Backups</button>'
-      + '<button class="admin-tab" data-tab="__metrics__" role="tab">Metrics</button>'
-      + '<button class="admin-tab" data-tab="__logs__" role="tab">Logs</button>';
+    elTabs.innerHTML = groups.map(function(g,i){ return tabBtn(g,g,i===0); }).join("")
+      + tabBtn("Backups","__backups__",false)
+      + tabBtn("Metrics","__metrics__",false)
+      + tabBtn("Logs","__logs__",false);
     elSections.innerHTML = groups.map(function(g,i){
       var cards = params.filter(function(p){return p.group===g;}).map(cardFor).join("");
-      return '<section class="admin-section'+(i===0?" active":"")+'" data-tab="'+esc(g)+'"><div class="cards">'+cards+'</div></section>';
+      return '<section class="admin-section'+(i===0?" active":"")+'" data-tab="'+esc(g)+'" role="tabpanel"'
+        +' id="panel-'+sid(g)+'" aria-labelledby="tab-'+sid(g)+'" tabindex="0"><div class="cards">'+cards+'</div></section>';
     }).join("") + backupsSectionHTML() + metricsSectionHTML() + logsSectionHTML();
-    // tab switching
-    Array.prototype.forEach.call(elTabs.children, function(btn){
-      btn.addEventListener("click", function(){
-        Array.prototype.forEach.call(elTabs.children, function(b){b.classList.remove("active");});
-        btn.classList.add("active");
-        Array.prototype.forEach.call(elSections.children, function(s){
-          s.classList.toggle("active", s.getAttribute("data-tab")===btn.getAttribute("data-tab"));
-        });
+    // tab switching — WAI-ARIA tabs: roving tabindex, arrow/Home/End keys, aria-selected.
+    var tabEls = Array.prototype.slice.call(elTabs.children);
+    function selectTab(btn){
+      tabEls.forEach(function(b){
+        var on = b===btn;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-selected", on?"true":"false");
+        b.tabIndex = on?0:-1;
+      });
+      Array.prototype.forEach.call(elSections.children, function(s){
+        s.classList.toggle("active", s.getAttribute("data-tab")===btn.getAttribute("data-tab"));
+      });
+    }
+    tabEls.forEach(function(btn, idx){
+      btn.addEventListener("click", function(){ selectTab(btn); });
+      btn.addEventListener("keydown", function(e){
+        var i=null;
+        if(e.key==="ArrowRight"||e.key==="ArrowDown") i=(idx+1)%tabEls.length;
+        else if(e.key==="ArrowLeft"||e.key==="ArrowUp") i=(idx-1+tabEls.length)%tabEls.length;
+        else if(e.key==="Home") i=0;
+        else if(e.key==="End") i=tabEls.length-1;
+        if(i!==null){ e.preventDefault(); tabEls[i].focus(); selectTab(tabEls[i]); }
       });
     });
     // input wiring
@@ -99,7 +123,7 @@
   }
 
   function backupsSectionHTML(){
-    return '<section class="admin-section" data-tab="__backups__">'
+    return '<section class="admin-section" data-tab="__backups__" role="tabpanel" id="panel-__backups__" aria-labelledby="tab-__backups__" tabindex="0">'
       // repo + stats
       +'<div class="cards" style="margin-bottom:14px">'
       +'<div class="card"><div class="top"><span class="lbl">Repository</span><span id="bk-repo-verify"></span></div>'
@@ -115,14 +139,14 @@
       +'<div class="form-row" style="display:flex;gap:12px;flex-wrap:wrap;align-items:flex-end">'
       +'<label style="flex:1;min-width:180px">cron<br><input type="text" id="bk-sch-cron" placeholder="0 2 * * *" style="width:100%;font:inherit;font-size:14px;padding:9px 11px;border:1px solid var(--line);border-radius:9px" class="mono"></label>'
       +'<label style="width:150px">retention (days)<br><input type="number" id="bk-sch-ret" min="1" max="365" style="width:100%;font:inherit;font-size:14px;padding:9px 11px;border:1px solid var(--line);border-radius:9px"></label>'
-      +'<button id="bk-sch-save" class="btn primary">Save schedule</button><span id="bk-sch-status" style="font-size:13px"></span></div>'
+      +'<button id="bk-sch-save" class="btn primary">Save schedule</button><span id="bk-sch-status" role="status" aria-live="polite" style="font-size:13px"></span></div>'
       +'<div class="def" id="bk-sch-runs" style="margin-top:10px"></div></div>'
       // manual
       +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Take a snapshot now</span></div>'
       +'<div class="desc">Trigger a snapshot immediately — do this before a major push. Scheduled snapshots keep running regardless.</div>'
       +'<div style="display:flex;gap:9px;align-items:center;flex-wrap:wrap">'
-      +'<input type="text" id="bk-label" placeholder="label (optional, e.g. pre-v1.5-deploy)" style="flex:1;min-width:220px;font:inherit;font-size:14px;padding:9px 11px;border:1px solid var(--line);border-radius:9px">'
-      +'<button id="bk-take" class="btn primary">Take snapshot now</button><span id="bk-status" style="font-size:13px"></span></div></div>'
+      +'<input type="text" id="bk-label" aria-label="Snapshot label (optional)" placeholder="label (optional, e.g. pre-v1.5-deploy)" style="flex:1;min-width:220px;font:inherit;font-size:14px;padding:9px 11px;border:1px solid var(--line);border-radius:9px">'
+      +'<button id="bk-take" class="btn primary">Take snapshot now</button><span id="bk-status" role="status" aria-live="polite" style="font-size:13px"></span></div></div>'
       // snapshots table
       +'<div class="card"><div class="top"><span class="lbl">Recent snapshots</span>'
       +'<button id="bk-refresh" class="btn" style="padding:5px 11px">Refresh</button></div>'
@@ -168,8 +192,8 @@
     }).join("");
     el.innerHTML = '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
       +'<thead><tr style="text-align:left;color:var(--ink-2);font-size:11.5px;text-transform:uppercase;letter-spacing:.04em">'
-      +'<th style="padding:0 6px 6px">Snapshot</th><th style="padding:0 6px 6px">State</th><th style="padding:0 6px 6px">Trigger</th>'
-      +'<th style="padding:0 6px 6px">Started</th><th style="padding:0 6px 6px">Duration</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
+      +'<th scope="col" style="padding:0 6px 6px">Snapshot</th><th scope="col" style="padding:0 6px 6px">State</th><th scope="col" style="padding:0 6px 6px">Trigger</th>'
+      +'<th scope="col" style="padding:0 6px 6px">Started</th><th scope="col" style="padding:0 6px 6px">Duration</th></tr></thead><tbody>'+rows+'</tbody></table></div>';
   }
 
   function loadBackups(){
@@ -214,10 +238,10 @@
 
   // ── Metrics tab (renders /actuator/info) ──
   function metricsSectionHTML(){
-    return '<section class="admin-section" data-tab="__metrics__">'
+    return '<section class="admin-section" data-tab="__metrics__" role="tabpanel" id="panel-__metrics__" aria-labelledby="tab-__metrics__" tabindex="0">'
       +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Runtime</span>'
       +'<button id="mx-refresh" class="btn" style="padding:5px 11px">Refresh</button></div>'
-      +'<div id="mx-runtime" class="def" style="margin-top:8px">loading…</div></div>'
+      +'<div id="mx-runtime" class="def" role="status" aria-live="polite" style="margin-top:8px">loading…</div></div>'
       +'<div id="mx-cards" class="cards"></div></section>';
   }
   function tile(label, val, foot){
@@ -247,12 +271,12 @@
 
   // ── Logs tab (recent in-memory logs) ──
   function logsSectionHTML(){
-    return '<section class="admin-section" data-tab="__logs__">'
+    return '<section class="admin-section" data-tab="__logs__" role="tabpanel" id="panel-__logs__" aria-labelledby="tab-__logs__" tabindex="0">'
       +'<div class="card"><div class="top"><span class="lbl">Recent logs</span>'
-      +'<span class="btns"><select id="lg-filter" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line);border-radius:8px">'
+      +'<span class="btns"><select id="lg-filter" aria-label="Filter logs by event type" style="font:inherit;font-size:13px;padding:6px 9px;border:1px solid var(--line);border-radius:8px">'
       +'<option value="">all</option><option value="turn_summary">turn_summary</option><option value="chat_prompt">chat_prompt</option>'
       +'<option value="turn_step">turn_step</option><option value="__err">errors</option></select>'
-      +'<label class="switch" style="gap:6px"><input type="checkbox" id="lg-auto"><span class="track"><span class="knob"></span></span><span class="state" style="font-size:12px">auto</span></label>'
+      +'<label class="switch" style="gap:6px"><input type="checkbox" id="lg-auto" aria-label="Auto-refresh logs"><span class="track" aria-hidden="true"><span class="knob"></span></span><span class="state" style="font-size:12px">auto</span></label>'
       +'<button id="lg-refresh" class="btn" style="padding:5px 11px">Refresh</button></span></div>'
       +'<div id="lg-list" class="def" style="margin-top:10px;max-height:60vh;overflow:auto">loading…</div></div></section>';
   }
