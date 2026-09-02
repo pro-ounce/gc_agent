@@ -263,6 +263,8 @@
       +'<span class="btns"><label class="switch" style="gap:6px"><input type="checkbox" id="mx-auto" checked aria-label="Auto-refresh metrics">'
       +'<span class="track" aria-hidden="true"><span class="knob"></span></span><span class="state" style="font-size:12px">live</span></label>'
       +'<button id="mx-refresh" class="btn" style="padding:5px 11px">Refresh</button></span></div>'
+      +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Performance health</span><span id="mx-verdict" class="badge-dev">assessing…</span></div>'
+      +'<div id="mx-kpis" class="cards" style="margin-top:12px"></div></div>'
       +'<div class="cards" style="margin-bottom:14px">'+gaugeCard("CPU","mx-cpu")+gaugeCard("Memory","mx-mem")
       +'<div class="card"><div class="top"><span class="lbl">GPU <span class="key mono" id="mx-gpu-name"></span></span><span class="big" id="mx-gpu-val">—</span></div>'
       +'<div class="gauge"><div class="bar"><div class="fill" id="mx-gpu-fill"></div></div></div>'
@@ -355,11 +357,54 @@
      +tile("MCP requests", num(mcp.requests), "avg "+ms(mcp.avg_ms))
      +tile("HTTP requests", num(http.requests), "avg "+ms(http.avg_ms));
   }
+  // Performance assessment — grade recent turns against thresholds tuned for a 14B model
+  // on the GB10 (num_ctx 8192). 'lower is better' unless better==='hi'.
+  function grade(v, good, warn, better){
+    if(v==null) return "warn";
+    if(better==="hi") return v>=good?"good":(v>=warn?"warn":"bad");
+    return v<=good?"good":(v<=warn?"warn":"bad");
+  }
+  function assessPerf(turns, sys){
+    turns=turns||[];
+    var done=turns.filter(function(t){return t.total_ms!=null;}), n=done.length;
+    function sum(f){ return done.reduce(function(a,t){return a+(f(t)||0);},0); }
+    var outTok=sum(function(t){return t.tokens_out;}), llms=sum(function(t){return t.llm_ms;}),
+        tot=sum(function(t){return t.total_ms;}), inTok=sum(function(t){return t.tokens_in;}),
+        toolms=sum(function(t){return t.tools_ms;});
+    var errN=turns.filter(function(t){return t.errors&&t.errors.length;}).length;
+    var dev=(sys.inference&&sys.inference.models&&sys.inference.models[0])||null;
+    var k=[];
+    if(dev && dev.device!=="GPU") k.push(["Inference", dev.device+" "+dev.gpu_percent+"%", dev.device==="CPU"?"bad":"warn", "model not fully on GPU"]);
+    // Total-token throughput (prompt+gen ÷ LLM time) is the clearest health signal: a healthy
+    // GPU runs in the hundreds of tok/s; a CPU fallback / degraded box collapses to tens.
+    var tps=llms>0?(inTok+outTok)/(llms/1000):null;
+    k.push(["Token throughput", tps!=null?Math.round(tps)+" tok/s":"—", grade(tps,80,30,"hi"), "prompt+gen ÷ LLM time"]);
+    var avgTot=n?tot/n:null;   k.push(["Avg turn latency", avgTot!=null?ms(avgTot):"—", grade(avgTot,6000,15000), n+" turns"]);
+    var avgLlm=n?llms/n:null;  k.push(["LLM latency", avgLlm!=null?ms(avgLlm):"—", grade(avgLlm,5000,12000), "per turn"]);
+    var avgIn=n?inTok/n:null, load=avgIn!=null?100*avgIn/8192:null;
+    k.push(["Prompt load", load!=null?Math.round(load)+"%":"—", grade(load,50,85), "avg "+num(Math.round(avgIn||0))+" / 8192 ctx"]);
+    var toolPct=tot>0?100*toolms/tot:null; k.push(["Tool overhead", toolPct!=null?Math.round(toolPct)+"%":"—", grade(toolPct,40,70), "tools ÷ total"]);
+    var errPct=turns.length?100*errN/turns.length:0; k.push(["Error rate", Math.round(errPct)+"%", grade(errPct,0.5,10), errN+" / "+turns.length+" turns"]);
+    var st=k.map(function(x){return x[2];});
+    var verdict = st.indexOf("bad")>=0 ? ["Needs attention","bad"] : (st.indexOf("warn")>=0 ? ["Degraded","warn"] : ["Optimal","ok"]);
+    return {kpis:k, verdict:verdict, n:n};
+  }
+  function renderPerf(turns, sys){
+    var a=assessPerf(turns, sys||{});
+    var vb=document.getElementById("mx-verdict");
+    if(vb){ vb.className="badge-dev "+a.verdict[1]; vb.textContent=(a.verdict[1]==="ok"?"✓ ":a.verdict[1]==="warn"?"◑ ":"⚠ ")+a.verdict[0]+(a.n?" · "+a.n+" turns":" · no data yet"); }
+    var el=document.getElementById("mx-kpis"); if(!el) return;
+    el.innerHTML=a.kpis.map(function(x){
+      return '<div class="card"><div class="def" style="margin:0">'+esc(x[0])+' <span class="dot dot-'+x[2]+'"></span></div>'
+        +'<div class="big" style="font-size:20px;margin-top:2px">'+esc(x[1])+'</div><div class="def">'+esc(x[3])+'</div></div>';
+    }).join("");
+  }
   function loadMetrics(){
     return Promise.all([
       fetch(ROOT+"/actuator/info",{cache:"no-store"}).then(function(r){return r.json();}).catch(function(){return {};}),
-      fetch(API+"/system",{cache:"no-store"}).then(function(r){return r.json();}).catch(function(){return {};})
-    ]).then(function(res){ renderMetrics(res[0], res[1]); })
+      fetch(API+"/system",{cache:"no-store"}).then(function(r){return r.json();}).catch(function(){return {};}),
+      fetch(API+"/turns?limit=40",{cache:"no-store"}).then(function(r){return r.json();}).catch(function(){return {turns:[]};})
+    ]).then(function(res){ renderMetrics(res[0], res[1]); renderPerf((res[2]||{}).turns||[], res[1]); })
       .catch(function(e){ var rt=document.getElementById("mx-runtime"); if(rt) rt.innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; });
   }
   function metricsActive(){ var s=document.querySelector('[data-tab="__metrics__"]'); return s&&s.classList.contains("active"); }
