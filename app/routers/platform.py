@@ -176,6 +176,10 @@ def _resume_hint(user: "User", session_id: str = "") -> dict:
             "lastQuestion": last_q, "messageCount": len(sess.messages)}
 
 
+# Served under BOTH paths on purpose: the gateway forwards only the agent's `/reply/**`
+# family, so the widget must reach the bootstrap at `/reply/questions` (governed, through
+# the gateway). `/questions` is kept for direct/ops access.
+@router.get("/{agent}/reply/questions", summary="Widget bootstrap (gateway-routed under /reply)")
 @router.get("/{agent}/questions", summary="Widget bootstrap: suggestions + greeting name + resume hint")
 async def agent_questions(
     agent: str,
