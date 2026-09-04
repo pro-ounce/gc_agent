@@ -15,6 +15,8 @@ middleware (PLATFORM_AUTH_MODE=gateway); that same token is forwarded to MCP.
 """
 from __future__ import annotations
 
+import base64
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sse_starlette.sse import EventSourceResponse
@@ -179,6 +181,22 @@ def _resume_hint(user: "User", session_id: str = "") -> dict:
 # Served under BOTH paths on purpose: the gateway forwards only the agent's `/reply/**`
 # family, so the widget must reach the bootstrap at `/reply/questions` (governed, through
 # the gateway). `/questions` is kept for direct/ops access.
+def _module_from_header(request: Request) -> str:
+    """The current application/module from the X-Selected-App header (btoa of
+    SELECTED_APPLICATION_CODE) — the shared FE client sends it on every request, so it
+    survives even when the gateway drops the ?module= query param. Lower-cased for matching."""
+    raw = (request.headers.get("x-selected-app") or "").strip()
+    if not raw or raw.lower() == "null":
+        return ""
+    try:
+        dec = base64.b64decode(raw + "==", validate=False).decode("utf-8", "ignore").strip()
+        if dec:
+            return dec.lower()
+    except Exception:  # noqa: BLE001 — header may already be plaintext
+        pass
+    return raw.lower()
+
+
 @router.get("/{agent}/reply/questions", summary="Widget bootstrap (gateway-routed under /reply)")
 @router.get("/{agent}/questions", summary="Widget bootstrap: suggestions + greeting name + resume hint")
 async def agent_questions(
@@ -204,11 +222,15 @@ async def agent_questions(
         resume = _resume_hint(user)
     except Exception:  # noqa: BLE001 — never fail the bootstrap on a resume lookup
         resume = {"hasHistory": False}
-    # Context-aware balloons for the module/screen the widget is currently on. Always return
-    # a set (module_suggestions falls back to a sensible default when the module is unknown or
-    # the gateway drops the query param), so the widget's popups are never empty.
+    # Context-aware balloons for the module/screen the widget is currently on. The ?module=
+    # query param is dropped by the gateway on some paths, so fall back to the X-Selected-App
+    # header (sent on every request). Always returns a set (default when module is unknown).
+    module = (module or "").strip() or _module_from_header(request)
     from ..services.suggestions import module_suggestions
     balloons = module_suggestions(module)
+    log.bind(func="questions", module=module or "(none)", balloons=len(balloons),
+             src="query" if request.query_params.get("module") else "header").info(
+        f"bootstrap balloons: module={module or '(none)'} → {len(balloons)} balloons")
     return ApiResponse.ok(message="ok", data={
         "questions": list(_SUGGESTIONS),
         "balloons": balloons,
