@@ -228,7 +228,7 @@ async def agent_questions(
     module = (module or "").strip() or _module_from_header(request)
     from ..services.suggestions import module_suggestions
     balloons = module_suggestions(module)
-    log.bind(func="questions", module=module or "(none)", balloons=len(balloons),
+    log.bind(func="questions", mod=module or "(none)", balloons=len(balloons),
              src="query" if request.query_params.get("module") else "header").info(
         f"bootstrap balloons: module={module or '(none)'} → {len(balloons)} balloons")
     return ApiResponse.ok(message="ok", data={
