@@ -202,6 +202,38 @@ SKILLS: list[Skill] = [
             "names. Only ask a question if one of the three (user, application, or role) is missing."
         ),
     ),
+
+    # ── Formulation: set up a data call (create → then guide attendees + reminder) ──
+    Skill(
+        name="create_data_call",
+        keywords=(
+            "create a data call", "create data call", "new data call", "set up a data call",
+            "setup a data call", "start a data call", "add a data call", "schedule a data call",
+        ),
+        tool="saveDataCalls_post",
+        required=("title", "fiscalYear", "fundGroupId"),
+        defaults={"applicationId": 3, "enabled": "Y"},   # applicationId 3 = FORMULATION
+        derived={"purpose": ("title",), "description": ("title",)},
+        schema={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string", "description": "The data call's title/name."},
+                "fiscalYear": {"type": "integer", "description": "Fiscal year, e.g. 2026."},
+                "fundGroupId": {
+                    "type": "string",
+                    "description": "Fund group NAME or code (e.g. Appropriated / A) — resolved to its id.",
+                },
+            },
+            "required": ["title", "fiscalYear", "fundGroupId"],
+        },
+        summary="set up a data call",
+        hint=(
+            "Collect three things: the data call TITLE, the FISCAL YEAR, and the FUND GROUP "
+            "(name or code, e.g. Appropriated). Pass the fund group name in fundGroupId — the "
+            "system resolves it to the id. The application is Formulation (filled automatically). "
+            "Do NOT ask for ids or any other field."
+        ),
+    ),
 ]
 
 

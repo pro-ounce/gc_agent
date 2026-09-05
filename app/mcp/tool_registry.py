@@ -35,6 +35,9 @@ _CATALOG_KEY = "mcp:tools:catalog"
 # Cache for deterministic application code/name → id resolution (see _resolve_application_id).
 _APP_MAP_CACHE: dict[str, Any] = {"map": None, "ts": 0.0}
 _APP_MAP_TTL = 300.0  # seconds
+# Cached name→id maps for skill resolvers (fund groups, distribution groups).
+_FG_MAP_CACHE: dict[str, Any] = {"map": None, "ts": 0.0}
+_DG_MAP_CACHE: dict[str, Any] = {"map": None, "ts": 0.0}
 
 # Name prefixes that read state (safe for a read-only chatbot). Everything else —
 # _put/_delete/_patch, and _post whose verb isn't a read (activate/deactivate/delete/
@@ -190,6 +193,51 @@ class ToolRegistry:
         cache["map"], cache["ts"] = amap, now
         return amap
 
+    async def _named_map(
+        self, cache: dict[str, Any], tool: str, key_fields: tuple[str, ...],
+        id_field: str, request_headers: dict[str, str] | None,
+    ) -> dict[str, Any]:
+        """Cached {name|code (lower) → id} from a list tool, for name→id skill resolvers."""
+        import time as _t
+        now = _t.monotonic()
+        if cache["map"] is not None and (now - cache["ts"]) < _APP_MAP_TTL:
+            return cache["map"]
+        amap: dict[str, Any] = {}
+        try:
+            res = await self.execute(tool, {}, request_headers)
+            out = res.output if res.success else None
+            data = out.get("data") if isinstance(out, dict) else out
+            for r in (data or []):
+                if not isinstance(r, dict):
+                    continue
+                rid = r.get(id_field)
+                if rid in (None, ""):
+                    continue
+                for kf in key_fields:
+                    v = r.get(kf)
+                    if v:
+                        amap[str(v).strip().lower()] = rid
+        except Exception as exc:  # noqa: BLE001 — resolution is best-effort
+            log.bind(func="named_map", tool=tool).warning(f"map load failed: {exc}")
+        cache["map"], cache["ts"] = amap, now
+        return amap
+
+    async def _resolve_named_id(
+        self, arguments: dict[str, Any], field: str, cache: dict[str, Any],
+        tool: str, key_fields: tuple[str, ...], id_field: str,
+        request_headers: dict[str, str] | None,
+    ) -> None:
+        """If arguments[field] is a name/code (non-numeric), replace it with the numeric id."""
+        val = arguments.get(field)
+        if val is None or str(val).strip() == "" or str(val).strip().isdigit():
+            return
+        resolved = (await self._named_map(cache, tool, key_fields, id_field, request_headers)).get(
+            str(val).strip().lower())
+        if resolved is not None:
+            log.bind(func="resolve_named", field=field, frm=str(val), to=str(resolved)).info(
+                f"resolved {field} '{val}' → {resolved}")
+            arguments[field] = resolved
+
     async def _resolve_application_id(
         self, arguments: dict[str, Any], request_headers: dict[str, str] | None
     ) -> None:
@@ -321,6 +369,14 @@ class ToolRegistry:
         if tool_name in ("addUserApplicationAndRole_post", "addUserApplicationRole_post"):
             await self._resolve_user_id(arguments, request_headers)
             await self._resolve_role_id(arguments, request_headers)
+        # Data-call flow: fund group + distribution group driven by name/code.
+        if tool_name in ("saveDataCalls_post", "updateDataCalls_post"):
+            await self._resolve_named_id(arguments, "fundGroupId", _FG_MAP_CACHE,
+                "getAllFundGroups_get", ("code", "name"), "fundGroupId", request_headers)
+        if tool_name in ("saveDataCallDistributions_post", "addOrgDistributionGroup_post"):
+            await self._resolve_named_id(arguments, "distributionGroupId", _DG_MAP_CACHE,
+                "getAllDistributionGroups_get", ("groupcode", "groupname", "groupCode", "groupName"),
+                "distributionGroupId", request_headers)
         await self._apply_default_user_scope(tool_name, arguments, request_headers)
         # Skill defaults: fill safe defaults for an action tool's omitted fields.
         from ..services import skills as _skills
