@@ -621,23 +621,37 @@ async def fetch_data_call_id(tool_args: dict[str, Any], headers: dict[str, str] 
         return None
 
 
-async def _dist_groups(headers: dict[str, str] | None) -> list[dict[str, Any]]:
+async def _dist_groups(headers: dict[str, str] | None,
+                       application_id: Any = None) -> list[dict[str, Any]]:
+    """Distribution groups, scoped to the data call's application when known (groups are
+    per-application; offering another app's groups would be a mistake). Falls back to all
+    groups if the scope yields nothing (so the flow never dead-ends)."""
     out: list[dict[str, Any]] = []
+    app = str(application_id) if application_id not in (None, "") else None
     try:
         res = await tool_registry.execute("getAllDistributionGroups_get", {}, headers)
         data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        scoped: list[dict[str, Any]] = []
         for r in (data or []):
             if not isinstance(r, dict) or str(r.get("enabled", "Y")).upper() == "N":
                 continue
             name = str(r.get("groupName") or r.get("groupCode") or "").strip()
-            if name and r.get("distributionGroupId") not in (None, ""):
-                out.append({"id": r["distributionGroupId"], "name": name})
+            if not name or r.get("distributionGroupId") in (None, ""):
+                continue
+            entry = {"id": r["distributionGroupId"], "name": name,
+                     "app": str(r.get("applicationId") or "")}
+            out.append(entry)
+            if app and entry["app"] == app:
+                scoped.append(entry)
+        if app and scoped:
+            return scoped
     except Exception as exc:  # noqa: BLE001
         log.bind(func="dist_groups").warning(f"group list failed: {exc}")
     return out
 
 
-def start_data_call(session: Any, data_call_id: Any, title: str | None) -> FlowResult:
+def start_data_call(session: Any, data_call_id: Any, title: str | None,
+                    application_id: Any = None) -> FlowResult:
     """Armed after a data call is created — guide adding attendees + a reminder."""
     who = title or "the data call"
     if not data_call_id:   # couldn't resolve the id → can't guide the rest; just confirm
@@ -645,7 +659,7 @@ def start_data_call(session: Any, data_call_id: Any, title: str | None) -> FlowR
         return FlowResult(message=f"✅ **{who}** is set up.", done=True)
     session.metadata["flow"] = {
         "name": "data_call", "dataCallId": data_call_id, "title": who,
-        "stage": "offer_attendees", "added": [],
+        "applicationId": application_id, "stage": "offer_attendees", "added": [],
     }
     return FlowResult(
         message=f"✅ Data call **{who}** created. Would you like to add attendees (a distribution group)?",
@@ -656,7 +670,7 @@ def start_data_call(session: Any, data_call_id: Any, title: str | None) -> FlowR
 
 async def _prompt_groups(flow: dict[str, Any], headers: dict[str, str] | None,
                          groups: list[dict[str, Any]] | None = None) -> FlowResult:
-    groups = groups if groups is not None else await _dist_groups(headers)
+    groups = groups if groups is not None else await _dist_groups(headers, flow.get("applicationId"))
     if not groups:
         return FlowResult(message=f"Which distribution group should attend **{flow['title']}**? Type its name.",
                           suggestions=[_chip("Not now", "not now", icon="skip")])
@@ -690,7 +704,7 @@ async def _data_call(session: Any, flow: dict[str, Any], msg: str, headers: dict
         return await _prompt_groups(flow, headers)
 
     if stage == "pick_group":
-        groups = await _dist_groups(headers)
+        groups = await _dist_groups(headers, flow.get("applicationId"))
         if _NO.search(msg) and not _match(msg, groups):
             return _dc_offer_reminder(flow, prefix="No problem. ")
         g = _match(msg, groups)
