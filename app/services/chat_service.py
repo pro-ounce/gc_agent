@@ -379,20 +379,36 @@ class ChatService:
         session.pending_action_id = pending.id
         return pending
 
-    def _post_confirm_flow(
+    async def _post_confirm_flow(
         self, session: Session, tool_name: str, tool_args: dict[str, Any], final_text: str,
+        request_headers: dict[str, str] | None = None,
     ) -> tuple[str, list[Suggestion]]:
         """After a successful confirmed mutation, chain the guided flow:
-        creating a user arms onboarding; an in-flow assign resumes it; otherwise the
-        skill's plain text follow-up (if any) is appended. Returns (text, chips)."""
+        creating a user arms onboarding; a data call arms its attendees/reminder flow; an
+        in-flow step resumes it; otherwise the skill's plain follow-up is appended."""
         args = tool_args or {}
-        if tool_name == "addUser_post":
-            fr = flows.start_onboarding(session, args.get("firstName"), args.get("userName"))
+
+        def _fr(fr):
             return f"{final_text}\n\n{fr.message}", [Suggestion(**s) for s in fr.suggestions]
+
+        if tool_name == "addUser_post":
+            return _fr(flows.start_onboarding(session, args.get("firstName"), args.get("userName")))
         if flows.is_active(session) and tool_name == "addUserApplicationAndRole_post":
             fr = flows.after_assign(session)
             if fr is not None:
-                return f"{final_text}\n\n{fr.message}", [Suggestion(**s) for s in fr.suggestions]
+                return _fr(fr)
+        # ── Formulation data-call flow ──
+        if tool_name == "saveDataCalls_post":
+            dcid = await flows.fetch_data_call_id(args, request_headers)
+            return _fr(flows.start_data_call(session, dcid, args.get("title")))
+        if flows.is_active(session) and tool_name == "saveDataCallDistributions_post":
+            fr = flows.dc_after_attendee(session)
+            if fr is not None:
+                return _fr(fr)
+        if flows.is_active(session) and tool_name == "saveDataCallReminder_post":
+            fr = flows.dc_after_reminder(session)
+            if fr is not None:
+                return _fr(fr)
         fu = skills.follow_up_for(tool_name, args)
         return (f"{final_text}\n\n{fu}" if fu else final_text), []
 
@@ -550,7 +566,7 @@ class ChatService:
         lead = lead_in(blocks) if blocks else (output or "Done.")
         suggestions: list[Suggestion] = []
         if result.success:
-            lead, suggestions = self._post_confirm_flow(session, tool_name, tool_args, lead)
+            lead, suggestions = await self._post_confirm_flow(session, tool_name, tool_args, lead, request_headers)
         session.add_assistant(lead)
         session_service.save(session)
         if turn:
@@ -1031,8 +1047,8 @@ class ChatService:
         final_text = lead_in(blocks) if blocks else output_text
         suggestions: list[Suggestion] = []
         if result.success:
-            final_text, suggestions = self._post_confirm_flow(
-                session, pending.tool_name, pending.tool_args, final_text)
+            final_text, suggestions = await self._post_confirm_flow(
+                session, pending.tool_name, pending.tool_args, final_text, request_headers)
         session.add_assistant(final_text)
         session_service.save(session)
 

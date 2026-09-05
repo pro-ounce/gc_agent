@@ -50,7 +50,7 @@ def _chip(label: str, send: str | None = None, icon: str | None = None) -> dict[
     return {"label": label, "send": send if send is not None else label, "icon": icon}
 
 
-_FLOWS = ("onboard", "create_user", "create_skill")
+_FLOWS = ("onboard", "create_user", "create_skill", "data_call")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _SKILL_INTENT_RE = re.compile(
     r"\b(create|add|make|build|teach|define|register)\b.{0,20}\bskill\b", re.I)
@@ -223,6 +223,9 @@ async def handle(session: Any, message: str, headers: dict[str, str] | None) -> 
 
     if name == "create_skill":
         return await _create_skill(session, flow, msg, headers)
+
+    if name == "data_call":
+        return await _data_call(session, flow, msg, headers)
 
     return None
 
@@ -597,6 +600,157 @@ async def _create_skill(session: Any, flow: dict[str, Any], msg: str, headers: d
     return _skill_confirm(data)
 
 
+# ── Formulation data-call flow: create → attendees → reminder ───────────────────
+
+async def fetch_data_call_id(tool_args: dict[str, Any], headers: dict[str, str] | None) -> Any:
+    """saveDataCalls returns no id, so fetch the just-created call by title + fiscalYear
+    and take the newest match — needed to thread dataCallId into attendees/reminder."""
+    title = str((tool_args or {}).get("title") or "").strip().lower()
+    fy = (tool_args or {}).get("fiscalYear")
+    try:
+        res = await tool_registry.execute("dataCallsByFiscalYear_get", {"fiscalYear": fy}, headers)
+        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        rows = [r for r in (data or []) if isinstance(r, dict)]
+        match = [r for r in rows if str(r.get("title") or "").strip().lower() == title] or rows
+        if not match:
+            return None
+        best = max(match, key=lambda r: int(str(r.get("dataCallId") or 0) or 0))
+        return best.get("dataCallId")
+    except Exception as exc:  # noqa: BLE001
+        log.bind(func="fetch_data_call_id").warning(f"lookup failed: {exc}")
+        return None
+
+
+async def _dist_groups(headers: dict[str, str] | None) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    try:
+        res = await tool_registry.execute("getAllDistributionGroups_get", {}, headers)
+        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        for r in (data or []):
+            if not isinstance(r, dict) or str(r.get("enabled", "Y")).upper() == "N":
+                continue
+            name = str(r.get("groupName") or r.get("groupCode") or "").strip()
+            if name and r.get("distributionGroupId") not in (None, ""):
+                out.append({"id": r["distributionGroupId"], "name": name})
+    except Exception as exc:  # noqa: BLE001
+        log.bind(func="dist_groups").warning(f"group list failed: {exc}")
+    return out
+
+
+def start_data_call(session: Any, data_call_id: Any, title: str | None) -> FlowResult:
+    """Armed after a data call is created — guide adding attendees + a reminder."""
+    who = title or "the data call"
+    if not data_call_id:   # couldn't resolve the id → can't guide the rest; just confirm
+        session.metadata.pop("flow", None)
+        return FlowResult(message=f"✅ **{who}** is set up.", done=True)
+    session.metadata["flow"] = {
+        "name": "data_call", "dataCallId": data_call_id, "title": who,
+        "stage": "offer_attendees", "added": [],
+    }
+    return FlowResult(
+        message=f"✅ Data call **{who}** created. Would you like to add attendees (a distribution group)?",
+        suggestions=[_chip("Add attendees", "add attendees", icon="app"),
+                     _chip("Not now", "not now", icon="skip")],
+    )
+
+
+async def _prompt_groups(flow: dict[str, Any], headers: dict[str, str] | None,
+                         groups: list[dict[str, Any]] | None = None) -> FlowResult:
+    groups = groups if groups is not None else await _dist_groups(headers)
+    if not groups:
+        return FlowResult(message=f"Which distribution group should attend **{flow['title']}**? Type its name.",
+                          suggestions=[_chip("Not now", "not now", icon="skip")])
+    chips, note = _list_chips(groups, "app", [_chip("Not now", "not now", icon="skip")])
+    return FlowResult(message=f"Which distribution group should attend **{flow['title']}**?{note}", suggestions=chips)
+
+
+def _dc_offer_reminder(flow: dict[str, Any], prefix: str = "") -> FlowResult:
+    flow["stage"] = "offer_reminder"
+    return FlowResult(
+        message=f"{prefix}Would you like to schedule a reminder for **{flow['title']}**?",
+        suggestions=[_chip("Add a reminder", "add a reminder", icon="check"),
+                     _chip("Finish", "finish", icon="check")],
+    )
+
+
+def _dc_finish(session: Any, flow: dict[str, Any]) -> FlowResult:
+    title = flow.get("title"); added = flow.get("added", [])
+    session.metadata.pop("flow", None)
+    extra = ("\n" + "\n".join(f"- {a}" for a in added)) if added else ""
+    return FlowResult(message=f"🎉 **{title}** is ready.{extra}", done=True)
+
+
+async def _data_call(session: Any, flow: dict[str, Any], msg: str, headers: dict[str, str] | None) -> FlowResult:
+    stage = flow.get("stage"); title = flow.get("title")
+
+    if stage == "offer_attendees":
+        if _NO.search(msg) and not _YES.search(msg):
+            return _dc_offer_reminder(flow)
+        flow["stage"] = "pick_group"
+        return await _prompt_groups(flow, headers)
+
+    if stage == "pick_group":
+        groups = await _dist_groups(headers)
+        if _NO.search(msg) and not _match(msg, groups):
+            return _dc_offer_reminder(flow, prefix="No problem. ")
+        g = _match(msg, groups)
+        if g:
+            flow["currentGroup"] = g["name"]
+            args = {"dataCallId": flow["dataCallId"], "distributionGroupId": g["id"],
+                    "enabled": "Y", "versionNumber": 1}
+            summary = f"Add attendees **{g['name']}** to **{title}**. Shall I go ahead?"
+            return FlowResult(message=summary,
+                              pending={"tool_name": "saveDataCallDistributions_post",
+                                       "tool_args": args, "summary": summary})
+        return await _prompt_groups(flow, headers, groups=groups)
+
+    if stage == "offer_reminder":
+        if _NO.search(msg) and not _YES.search(msg):
+            return _dc_finish(session, flow)
+        flow["stage"] = "pick_days"
+        return FlowResult(
+            message=f"How many days before the due date should the reminder go out?",
+            suggestions=[_chip("3 days", "3 days", icon="check"), _chip("7 days", "7 days", icon="check"),
+                         _chip("Not now", "not now", icon="skip")])
+
+    if stage == "pick_days":
+        mo = re.search(r"\d+", msg)
+        if _NO.search(msg) and not mo:
+            return _dc_finish(session, flow)
+        if mo:
+            days = int(mo.group())
+            flow["currentDays"] = days
+            args = {"dataCallId": flow["dataCallId"], "daysToRemind": days,
+                    "emailSubject": f"Reminder: {title}", "enabled": "Y", "versionNumber": 1}
+            summary = f"Schedule a reminder **{days} days** before, for **{title}**. Shall I go ahead?"
+            return FlowResult(message=summary,
+                              pending={"tool_name": "saveDataCallReminder_post",
+                                       "tool_args": args, "summary": summary})
+        return FlowResult(message="How many days before? e.g. 3")
+
+    return _dc_finish(session, flow)
+
+
+def dc_after_attendee(session: Any) -> FlowResult | None:
+    if not is_active(session):
+        return None
+    flow = session.metadata["flow"]
+    g = flow.pop("currentGroup", None)
+    if g:
+        flow.setdefault("added", []).append(f"Attendees: {g}")
+    return _dc_offer_reminder(flow, prefix=f"✅ Added **{g}**. " if g else "")
+
+
+def dc_after_reminder(session: Any) -> FlowResult | None:
+    if not is_active(session):
+        return None
+    flow = session.metadata["flow"]
+    d = flow.pop("currentDays", None)
+    if d:
+        flow.setdefault("added", []).append(f"Reminder: {d} days before")
+    return _dc_finish(session, flow)
+
+
 # ── confirm-step callbacks (called by chat_service after the assign confirm) ────
 
 def after_assign(session: Any) -> FlowResult | None:
@@ -614,10 +768,15 @@ def after_assign(session: Any) -> FlowResult | None:
 
 
 def on_decline(session: Any) -> FlowResult | None:
-    """The user declined the in-flow assign → drop this app, offer another."""
+    """The user declined an in-flow confirm → resume the flow at the next natural step."""
     if not is_active(session):
         return None
     flow = session.metadata["flow"]
+    if flow.get("name") == "data_call":
+        flow.pop("currentGroup", None); flow.pop("currentDays", None)
+        # declining an attendee → still offer a reminder; declining a reminder → finish
+        return _dc_offer_reminder(flow, prefix="Okay, skipped. ") if flow.get("stage") == "pick_group" \
+            else _dc_finish(session, flow)
     flow["currentAppId"] = flow["currentAppName"] = flow["currentRoleName"] = None
     flow["stage"] = "offer_apps"
     return _offer_another(flow, prefix="Okay, skipped that one. ")
