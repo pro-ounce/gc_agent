@@ -602,9 +602,11 @@ async def _create_skill(session: Any, flow: dict[str, Any], msg: str, headers: d
 
 # ── Formulation data-call flow: create → attendees → reminder ───────────────────
 
-async def fetch_data_call_id(tool_args: dict[str, Any], headers: dict[str, str] | None) -> Any:
+async def fetch_data_call_id(tool_args: dict[str, Any],
+                             headers: dict[str, str] | None) -> tuple[Any, Any]:
     """saveDataCalls returns no id, so fetch the just-created call by title + fiscalYear
-    and take the newest match — needed to thread dataCallId into attendees/reminder."""
+    and take the newest match — needed to thread dataCallId into attendees/reminder.
+    Returns (dataCallId, applicationId); the row's applicationId scopes attendee groups."""
     title = str((tool_args or {}).get("title") or "").strip().lower()
     fy = (tool_args or {}).get("fiscalYear")
     try:
@@ -613,12 +615,12 @@ async def fetch_data_call_id(tool_args: dict[str, Any], headers: dict[str, str] 
         rows = [r for r in (data or []) if isinstance(r, dict)]
         match = [r for r in rows if str(r.get("title") or "").strip().lower() == title] or rows
         if not match:
-            return None
+            return None, None
         best = max(match, key=lambda r: int(str(r.get("dataCallId") or 0) or 0))
-        return best.get("dataCallId")
+        return best.get("dataCallId"), best.get("applicationId")
     except Exception as exc:  # noqa: BLE001
         log.bind(func="fetch_data_call_id").warning(f"lookup failed: {exc}")
-        return None
+        return None, None
 
 
 async def _dist_groups(headers: dict[str, str] | None,

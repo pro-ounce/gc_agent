@@ -399,8 +399,9 @@ class ChatService:
                 return _fr(fr)
         # ── Formulation data-call flow ──
         if tool_name == "saveDataCalls_post":
-            dcid = await flows.fetch_data_call_id(args, request_headers)
-            return _fr(flows.start_data_call(session, dcid, args.get("title"), args.get("applicationId")))
+            dcid, app_id = await flows.fetch_data_call_id(args, request_headers)
+            return _fr(flows.start_data_call(session, dcid, args.get("title"),
+                                             app_id or args.get("applicationId")))
         if flows.is_active(session) and tool_name == "saveDataCallDistributions_post":
             fr = flows.dc_after_attendee(session)
             if fr is not None:
