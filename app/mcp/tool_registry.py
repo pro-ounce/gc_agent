@@ -373,6 +373,9 @@ class ToolRegistry:
         if tool_name in ("saveDataCalls_post", "updateDataCalls_post"):
             await self._resolve_named_id(arguments, "fundGroupId", _FG_MAP_CACHE,
                 "getAllFundGroups_get", ("code", "name"), "fundGroupId", request_headers)
+            if not str(arguments.get("startTime") or "").strip():
+                import datetime as _dt
+                arguments["startTime"] = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         if tool_name in ("saveDataCallDistributions_post", "addOrgDistributionGroup_post"):
             await self._resolve_named_id(arguments, "distributionGroupId", _DG_MAP_CACHE,
                 "getAllDistributionGroups_get", ("groupcode", "groupname", "groupCode", "groupName"),

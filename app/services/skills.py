@@ -212,7 +212,9 @@ SKILLS: list[Skill] = [
         ),
         tool="saveDataCalls_post",
         required=("title", "fiscalYear", "fundGroupId"),
-        defaults={"applicationId": 3, "enabled": "Y"},   # applicationId 3 = FORMULATION
+        # applicationId 3 = FORMULATION; emailTemplateId/versionNumber are backend-mandatory
+        # (verified); startTime is computed to "now" in the executor if not supplied.
+        defaults={"applicationId": 3, "enabled": "Y", "emailTemplateId": 0, "versionNumber": 1},
         derived={"purpose": ("title",), "description": ("title",)},
         schema={
             "type": "object",
