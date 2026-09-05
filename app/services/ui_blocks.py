@@ -64,6 +64,9 @@ _LABEL_OVERRIDES = {
     "userId": "User",
     "applicationId": "Application",
     "applicationRoleId": "Role",
+    "fundGroupId": "Fund group",
+    "distributionGroupId": "Attendees",
+    "fiscalYear": "Fiscal year",
 }
 
 
