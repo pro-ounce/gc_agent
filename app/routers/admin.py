@@ -186,6 +186,69 @@ async def admin_inference(request: Request):
     }
 
 
+@router.get("/admin/turn/{request_id}", summary="One turn's full workflow timeline (replay/live)")
+async def admin_turn_timeline(request: Request, request_id: str):
+    """Reconstruct a single turn's end-to-end path from the log ring — the ordered steps the
+    request flowed through (route → retrieval → each LLM call → each tool → answer) with the
+    stats on each — so the UI can draw its workflow live (poll while in-flight) or replay."""
+    _guard(request)
+    return _turn_timeline(request_id)
+
+
+def _turn_timeline(rid: str) -> dict:
+    """Ordered workflow nodes for one request_id, built from chat_prompt / turn_step /
+    turn_source / turn_summary / chat_answer events in the in-memory ring."""
+    recs = [r for r in recent_logs(limit=2000) if (r.get("fields") or {}).get("request_id") == rid]
+    recs.reverse()  # oldest-first = execution order
+    steps: list[dict] = []
+    meta: dict = {"request_id": rid, "done": False}
+    for r in recs:
+        f = r.get("fields") or {}
+        ev, ts = f.get("event"), r.get("ts")
+        if ev == "chat_prompt":
+            meta.update({"question": f.get("question"), "session_id": f.get("session_id"),
+                         "user_id": f.get("user_id"), "mode": f.get("mode"), "ts": ts})
+            steps.append({"kind": "prompt", "label": "Request", "ts": ts,
+                          "detail": f"{f.get('tool_count', 0)} tools retrieved",
+                          "tools_retrieved": f.get("retrieved_tools") or []})
+        elif ev == "turn_source":
+            meta["answered_by"] = f.get("answered_by")
+            meta.setdefault("question", f.get("question"))
+            steps.append({"kind": "route", "label": f"Route → {f.get('answered_by')}",
+                          "ts": ts, "answered_by": f.get("answered_by"),
+                          "detail": "answered by the harness (no model)" if f.get("answered_by") not in (None, "inference")
+                                    else "handed to the model"})
+        elif ev == "turn_step":
+            step = f.get("step")
+            if step == "retrieval":
+                steps.append({"kind": "retrieval", "label": "Tool retrieval",
+                              "ts": ts, "ms": f.get("phase_ms"), "detail": "RAG tool selection"})
+            elif step == "llm":
+                steps.append({"kind": "llm", "label": f"LLM call #{f.get('iteration', '')}".strip(),
+                              "ts": ts, "ms": f.get("call_ms"),
+                              "tokens_in": f.get("prompt_tokens"), "tokens_out": f.get("completion_tokens"),
+                              "detail": f"{f.get('prompt_tokens', 0)}→{f.get('completion_tokens', 0)} tok"})
+            elif step == "tool":
+                steps.append({"kind": "tool", "label": f.get("tool") or "tool",
+                              "ts": ts, "detail": f"tool #{f.get('tool_index', '')}".strip()})
+        elif ev == "turn_summary":
+            meta.update({"done": True, "answered_by": f.get("answered_by") or meta.get("answered_by"),
+                         "total_ms": f.get("total_ms"), "llm_ms": f.get("llm_ms"),
+                         "tools_ms": f.get("tools_ms"), "retrieval_ms": f.get("retrieval_ms"),
+                         "tokens_in": f.get("prompt_tokens"), "tokens_out": f.get("completion_tokens"),
+                         "tok_per_s": f.get("tok_per_s"), "iterations": f.get("iterations"),
+                         "outcome": f.get("outcome"), "skill": f.get("skill"), "grounded": f.get("grounded")})
+        elif ev == "chat_answer":
+            meta.update({"done": True, "answer": f.get("answer")})
+            steps.append({"kind": "answer", "label": "Answer", "ts": ts,
+                          "detail": (f.get("answer") or "")[:120]})
+    # a harness turn logs turn_source+chat_answer but no turn_summary → still "done"
+    if any(s["kind"] == "answer" for s in steps):
+        meta["done"] = True
+    meta["steps"] = steps
+    return meta
+
+
 def _recent_turns(limit: int = 40) -> list[dict]:
     turns: dict[str, dict] = {}
     order: list[str] = []
