@@ -112,6 +112,12 @@ class TurnMetrics:
         self.tools_used: list[str] = []
         self.prompt_tokens = 0
         self.completion_tokens = 0
+        # How the turn was answered: "inference" (an LLM call ran) or a harness handler that
+        # answered deterministically WITHOUT the model ("flow" | "meta" | "ecosystem" |
+        # "confirm"). Plus the shaping applied to an inference turn (skill pinned, grounded).
+        self.answered_by = "inference"
+        self.skill = ""
+        self.grounded = False
         self._done = False
 
     def _elapsed_ms(self) -> float:
@@ -182,6 +188,8 @@ class TurnMetrics:
         # Feed the aggregate chat counters (streaming turns weren't counted otherwise).
         chat_requests_total.labels("stream", "error" if outcome == "error" else "success").inc()
         chat_loop_iterations.observe(self.iterations)
+        # tokens/sec = generated tokens over the model's own reported generation time.
+        tok_per_s = round(self.completion_tokens / self.llm_s, 1) if self.llm_s > 0 else 0.0
         _tlog.bind(
             event="turn_summary", agent=self.agent, session_id=self.session_id,
             user_id=self.user_id, request_id=self.request_id, outcome=outcome,
@@ -189,6 +197,8 @@ class TurnMetrics:
             llm_ms=round(self.llm_s * 1000, 1), tools_ms=round(self.tools_s * 1000, 1),
             iterations=self.iterations, tools_used=self.tools_used,
             prompt_tokens=self.prompt_tokens, completion_tokens=self.completion_tokens,
+            answered_by=self.answered_by, tok_per_s=tok_per_s,
+            skill=self.skill, grounded=self.grounded,
         ).info(
             f"turn done: {round(total * 1000)}ms "
             f"[retrieval={round(self.retrieval_s * 1000)} llm={round(self.llm_s * 1000)} "

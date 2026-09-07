@@ -167,6 +167,19 @@ def _log_prompt(session_id: str, user_id: str | None, question: str,
     ).info(f'prompt [{session_id}] "{preview}" → {len(names)} tools retrieved: {names}')
 
 
+def _log_turn_source(session_id: str, answered_by: str, **stats: Any) -> None:
+    """Tag a (non-streaming) turn with how it was answered — 'inference' (an LLM call ran) or
+    a harness handler ('flow'/'meta'/'ecosystem'/'confirm') that answered without the model.
+    The streaming path carries this on turn_summary instead; this covers /api/chat so the
+    admin 'harness vs inference' view sees every turn. request_id auto-attaches via the logger."""
+    try:
+        log.bind(event="turn_source", session_id=session_id, answered_by=answered_by,
+                 **{k: v for k, v in stats.items() if v not in (None, "")}).info(
+            f"turn source: {answered_by}")
+    except Exception:  # noqa: BLE001 — telemetry must never break a turn
+        pass
+
+
 class ChatService:
     """Stateless orchestrator — all state lives in the Session object (Redis)."""
 
@@ -213,16 +226,18 @@ class ChatService:
         if flows.is_active(session):
             fr = await flows.handle(session, user_message, request_headers)
             if fr is not None:
-                return self._flow_response(session, fr)
+                return self._flow_response(session, fr, source="flow")
         else:
+            src = "meta"
             mr = await meta.handle(user_message, request_headers)
             if mr is None:
                 mr = await ecosystem_qa.handle(user_message, request_headers)
+                src = "ecosystem"
             if mr is not None:
-                return self._flow_response(session, mr)
+                return self._flow_response(session, mr, source=src)
             started = flows.maybe_start(session, user_message)
             if started is not None:
-                return self._flow_response(session, started)
+                return self._flow_response(session, started, source="flow")
 
         system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT)
         system = await self._ground_ecosystem(system, request_headers)
@@ -310,6 +325,9 @@ class ChatService:
                 blocks = _trim_count_dump(session, blocks)
                 session.add_assistant(lead)
                 self._log_answer(session_id, lead, blocks)
+                _log_turn_source(session_id, "inference", model=llm_response.model,
+                                 skill=(skill.name if skill else ""),
+                                 grounded=runtime_config.get_bool("AGENT_ECOSYSTEM_GROUNDING"))
                 session_service.save(session)
                 return ChatResponse(
                     session_id=session_id,
@@ -332,6 +350,10 @@ class ChatService:
             final_text = blocks_to_text(blocks)
         session.add_assistant(final_text)
         self._log_answer(session_id, final_text, blocks)
+        _log_turn_source(session_id, "inference",
+                         model=(llm_response.model if llm_response else ""),
+                         skill=(skill.name if skill else ""),
+                         grounded=runtime_config.get_bool("AGENT_ECOSYSTEM_GROUNDING"))
         session_service.save(session)
 
         return ChatResponse(
@@ -431,9 +453,10 @@ class ChatService:
         fu = skills.follow_up_for(tool_name, args)
         return (f"{final_text}\n\n{fu}" if fu else final_text), []
 
-    def _flow_response(self, session: Session, fr: "flows.FlowResult") -> ChatResponse:
+    def _flow_response(self, session: Session, fr: "flows.FlowResult", source: str = "flow") -> ChatResponse:
         """Render a guided-flow turn (sync). Either a confirm hand-off or a prompt+chips."""
         sid = session.session_id
+        _log_turn_source(sid, source)
         if fr.pending:
             pending = self._arm_flow_pending(session, fr)
             session_service.save(session)
@@ -503,22 +526,28 @@ class ChatService:
             if fr is not None:
                 for ch in self._flow_chunks(session, fr):
                     yield ch
+                turn.answered_by = "flow"
                 turn.finish("stop")
                 return
         else:
+            src = "meta"
             mr = await meta.handle(user_message, request_headers)
             if mr is None:
                 mr = await ecosystem_qa.handle(user_message, request_headers)
+                src = "ecosystem"
             started = mr or flows.maybe_start(session, user_message)
             if started is not None:
                 for ch in self._flow_chunks(session, started):
                     yield ch
+                turn.answered_by = src if mr is not None else "flow"
                 turn.finish("stop")
                 return
 
         system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT)
         system = await self._ground_ecosystem(system, request_headers)
         skill = skills.match(user_message)
+        turn.grounded = runtime_config.get_bool("AGENT_ECOSYSTEM_GROUNDING")
+        turn.skill = skill.name if skill else ""
         if skill:
             system = system + skills.grounding(skill)
         only = [skill.tool] if (skill and (is_mutation(skill.tool) or skill.focused)) else None

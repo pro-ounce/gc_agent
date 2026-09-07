@@ -141,6 +141,51 @@ async def admin_turns(request: Request):
     return {"turns": _recent_turns(limit)}
 
 
+@router.get("/admin/inference", summary="Harness-vs-inference mix + inference performance")
+async def admin_inference(request: Request):
+    """Aggregate the recent turns into the three levers: how many questions the HARNESS
+    answered deterministically (no GPU) vs INFERENCE (an LLM call), the model's throughput
+    (tokens/sec, llm latency), and what SHAPING was applied (grounding, skill-pinned)."""
+    _guard(request)
+    limit = int(request.query_params.get("limit", "200"))
+    turns = _recent_turns(limit)
+    total = len(turns)
+    by_source: dict[str, int] = {}
+    tok_rates: list[float] = []
+    llm_mss: list[float] = []
+    grounded = pinned = inference = 0
+    for t in turns:
+        src = t.get("answered_by") or ("inference" if t.get("llm_ms") else "unknown")
+        by_source[src] = by_source.get(src, 0) + 1
+        if src == "inference":
+            inference += 1
+            if t.get("tok_per_s"):
+                tok_rates.append(float(t["tok_per_s"]))
+            if t.get("llm_ms"):
+                llm_mss.append(float(t["llm_ms"]))
+            if t.get("grounded"):
+                grounded += 1
+            if t.get("skill"):
+                pinned += 1
+    harness = total - inference
+    avg = lambda xs: round(sum(xs) / len(xs), 1) if xs else 0.0  # noqa: E731
+    return {
+        "total": total,
+        "harness": harness,
+        "inference": inference,
+        "harness_pct": round(100 * harness / total, 1) if total else 0.0,
+        "by_source": by_source,
+        "inference_perf": {
+            "avg_tokens_per_sec": avg(tok_rates),
+            "avg_llm_ms": avg(llm_mss),
+        },
+        "shaping": {
+            "grounded_pct": round(100 * grounded / inference, 1) if inference else 0.0,
+            "skill_pinned_pct": round(100 * pinned / inference, 1) if inference else 0.0,
+        },
+    }
+
+
 def _recent_turns(limit: int = 40) -> list[dict]:
     turns: dict[str, dict] = {}
     order: list[str] = []
@@ -163,7 +208,15 @@ def _recent_turns(limit: int = 40) -> list[dict]:
                       "tools_ms": f.get("tools_ms"), "retrieval_ms": f.get("retrieval_ms"),
                       "tokens_in": f.get("prompt_tokens"), "tokens_out": f.get("completion_tokens"),
                       "iterations": f.get("iterations"), "tools": f.get("tools_used"),
-                      "outcome": f.get("outcome")})
+                      "outcome": f.get("outcome"),
+                      "answered_by": f.get("answered_by"), "tok_per_s": f.get("tok_per_s"),
+                      "skill": f.get("skill"), "grounded": f.get("grounded")})
+        elif ev == "turn_source":                 # non-streaming turns tag their source here
+            t.setdefault("answered_by", f.get("answered_by"))
+            if f.get("skill"):
+                t.setdefault("skill", f.get("skill"))
+            if f.get("model"):
+                t.setdefault("model", f.get("model"))
         elif ev == "chat_answer":
             t.update({"answer": f.get("answer"), "blocks": f.get("blocks")})
             if f.get("error"):
