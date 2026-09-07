@@ -226,7 +226,7 @@ class ChatService:
         if flows.is_active(session):
             fr = await flows.handle(session, user_message, request_headers)
             if fr is not None:
-                return self._flow_response(session, fr, source="flow")
+                return self._flow_response(session, fr, source="flow", question=user_message)
         else:
             src = "meta"
             mr = await meta.handle(user_message, request_headers)
@@ -234,10 +234,10 @@ class ChatService:
                 mr = await ecosystem_qa.handle(user_message, request_headers)
                 src = "ecosystem"
             if mr is not None:
-                return self._flow_response(session, mr, source=src)
+                return self._flow_response(session, mr, source=src, question=user_message)
             started = flows.maybe_start(session, user_message)
             if started is not None:
-                return self._flow_response(session, started, source="flow")
+                return self._flow_response(session, started, source="flow", question=user_message)
 
         system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT)
         system = await self._ground_ecosystem(system, request_headers)
@@ -453,10 +453,11 @@ class ChatService:
         fu = skills.follow_up_for(tool_name, args)
         return (f"{final_text}\n\n{fu}" if fu else final_text), []
 
-    def _flow_response(self, session: Session, fr: "flows.FlowResult", source: str = "flow") -> ChatResponse:
+    def _flow_response(self, session: Session, fr: "flows.FlowResult", source: str = "flow",
+                       question: str = "") -> ChatResponse:
         """Render a guided-flow turn (sync). Either a confirm hand-off or a prompt+chips."""
         sid = session.session_id
-        _log_turn_source(sid, source)
+        _log_turn_source(sid, source, question=question, answer=(fr.message or "")[:240])
         if fr.pending:
             pending = self._arm_flow_pending(session, fr)
             session_service.save(session)

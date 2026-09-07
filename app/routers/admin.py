@@ -213,6 +213,10 @@ def _recent_turns(limit: int = 40) -> list[dict]:
                       "skill": f.get("skill"), "grounded": f.get("grounded")})
         elif ev == "turn_source":                 # non-streaming turns tag their source here
             t.setdefault("answered_by", f.get("answered_by"))
+            if f.get("question"):
+                t.setdefault("question", f.get("question"))
+            if f.get("answer"):
+                t.setdefault("answer", f.get("answer"))
             if f.get("skill"):
                 t.setdefault("skill", f.get("skill"))
             if f.get("model"):
