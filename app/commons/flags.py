@@ -41,6 +41,12 @@ class FeatureFlags:
     strict_grounding: bool = field(
         default_factory=lambda: env_bool("AGENT_STRICT_GROUNDING", True)
     )
+    # Ecosystem grounding: inject a compact snapshot of the real GC360 applications (and the
+    # currently-selected application + its roles) into the system prompt, so every answer is
+    # anchored to the actual ecosystem and the model never invents an application. Default ON.
+    ecosystem_grounding: bool = field(
+        default_factory=lambda: env_bool("AGENT_ECOSYSTEM_GROUNDING", True)
+    )
 
     # Storage
     redis_enabled: bool = field(default_factory=lambda: env_bool("REDIS_ENABLED", True))

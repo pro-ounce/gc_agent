@@ -65,6 +65,8 @@ def _param_specs() -> list[dict]:
               "Pause for user confirmation before HIGH/CRITICAL tools run."),
         _spec("AGENT_STRICT_GROUNDING", "Strict grounding", "Toggles", "bool", flags.strict_grounding,
               "Report only facts the tools returned — no interpretation or embellishment."),
+        _spec("AGENT_ECOSYSTEM_GROUNDING", "Ecosystem grounding", "Toggles", "bool", flags.ecosystem_grounding,
+              "Inject the app/role/workflow catalogue + current application into the prompt."),
         _spec("LOG_USER_PROMPTS", "Log user prompts", "Toggles", "bool", flags.log_user_prompts,
               "Log each question + the tools RAG retrieved (chat_prompt line)."),
     ]

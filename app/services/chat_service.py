@@ -28,6 +28,8 @@ from ..models.mcp import PendingAction
 from ..services import skills
 from ..services import flows
 from ..services import meta
+from ..services import ecosystem as eco
+from ..services import ecosystem_qa
 from ..agents.registry import STRICT_GROUNDING_INSTRUCTION
 from ..services.ui_blocks import blocks_from_outputs, blocks_to_text, lead_in
 from ..models.session import Session
@@ -177,6 +179,19 @@ class ChatService:
             return f"{system}{STRICT_GROUNDING_INSTRUCTION}"
         return system
 
+    @staticmethod
+    async def _ground_ecosystem(system: str, request_headers: dict[str, str] | None) -> str:
+        """Append a compact snapshot of the real ecosystem (applications + current app +
+        its roles) so the model answers about GC360 as it actually is. Best-effort: any
+        failure leaves the prompt unchanged. Gated by AGENT_ECOSYSTEM_GROUNDING (default on)."""
+        if not runtime_config.get_bool("AGENT_ECOSYSTEM_GROUNDING"):
+            return system
+        try:
+            digest = await eco.grounding_digest(request_headers)
+        except Exception:  # noqa: BLE001 — grounding must never break a turn
+            digest = ""
+        return f"{system}{digest}" if digest else system
+
     # ── Non-streaming chat ────────────────────────────────────────────────────
 
     async def chat(
@@ -201,6 +216,8 @@ class ChatService:
                 return self._flow_response(session, fr)
         else:
             mr = await meta.handle(user_message, request_headers)
+            if mr is None:
+                mr = await ecosystem_qa.handle(user_message, request_headers)
             if mr is not None:
                 return self._flow_response(session, mr)
             started = flows.maybe_start(session, user_message)
@@ -208,6 +225,7 @@ class ChatService:
                 return self._flow_response(session, started)
 
         system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT)
+        system = await self._ground_ecosystem(system, request_headers)
         # Skill? Pin its backing action tool + ground the model on the required fields.
         skill = skills.match(user_message)
         if skill:
@@ -489,6 +507,8 @@ class ChatService:
                 return
         else:
             mr = await meta.handle(user_message, request_headers)
+            if mr is None:
+                mr = await ecosystem_qa.handle(user_message, request_headers)
             started = mr or flows.maybe_start(session, user_message)
             if started is not None:
                 for ch in self._flow_chunks(session, started):
@@ -497,6 +517,7 @@ class ChatService:
                 return
 
         system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT)
+        system = await self._ground_ecosystem(system, request_headers)
         skill = skills.match(user_message)
         if skill:
             system = system + skills.grounding(skill)
