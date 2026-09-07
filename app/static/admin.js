@@ -265,6 +265,8 @@
       +'<button id="mx-refresh" class="btn" style="padding:5px 11px">Refresh</button></span></div>'
       +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Performance health</span><span id="mx-verdict" class="badge-dev">assessing…</span></div>'
       +'<div id="mx-kpis" class="cards" style="margin-top:12px"></div></div>'
+      +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Harness vs inference</span><span id="mx-hvi-badge" class="badge-dev">—</span></div>'
+      +'<div id="mx-hvi" class="cards" style="margin-top:12px"></div></div>'
       +'<div class="cards" style="margin-bottom:14px">'+gaugeCard("CPU","mx-cpu")+gaugeCard("Memory","mx-mem")
       +'<div class="card"><div class="top"><span class="lbl">GPU <span class="key mono" id="mx-gpu-name"></span></span><span class="big" id="mx-gpu-val">—</span></div>'
       +'<div class="gauge"><div class="bar"><div class="fill" id="mx-gpu-fill"></div></div></div>'
@@ -399,12 +401,28 @@
         +'<div class="big" style="font-size:20px;margin-top:2px">'+esc(x[1])+'</div><div class="def">'+esc(x[3])+'</div></div>';
     }).join("");
   }
+  function renderHvi(h){
+    h=h||{};
+    var by=h.by_source||{}, perf=h.inference_perf||{}, shp=h.shaping||{};
+    var badge=document.getElementById("mx-hvi-badge");
+    if(badge){ var pct=h.harness_pct||0; badge.className="badge-dev "+(pct>=50?"ok":pct>=25?"warn":"cpu");
+      badge.textContent=(h.total?pct+"% answered without the GPU":"no turns yet"); }
+    var el=document.getElementById("mx-hvi"); if(!el) return;
+    var srcList=Object.keys(by).sort(function(a,b){return by[b]-by[a];})
+      .map(function(k){return k+" "+by[k];}).join(" · ")||"—";
+    el.innerHTML=
+       tile("Harness", num(h.harness), (h.total?Math.round(100*h.harness/h.total):0)+"% · deterministic, no GPU")
+      +tile("Inference", num(h.inference), (perf.avg_tokens_per_sec||0)+" tok/s · "+ms(perf.avg_llm_ms)+" avg")
+      +tile("By source", srcList, "how turns were answered")
+      +tile("Shaping", (shp.grounded_pct||0)+"% grounded", (shp.skill_pinned_pct||0)+"% skill-pinned");
+  }
   function loadMetrics(){
     return Promise.all([
       fetch(ROOT+"/actuator/info",{cache:"no-store"}).then(function(r){return r.json();}).catch(function(){return {};}),
       fetch(API+"/system",{cache:"no-store"}).then(function(r){return r.json();}).catch(function(){return {};}),
-      fetch(API+"/turns?limit=40",{cache:"no-store"}).then(function(r){return r.json();}).catch(function(){return {turns:[]};})
-    ]).then(function(res){ renderMetrics(res[0], res[1]); renderPerf((res[2]||{}).turns||[], res[1]); })
+      fetch(API+"/turns?limit=40",{cache:"no-store"}).then(function(r){return r.json();}).catch(function(){return {turns:[]};}),
+      fetch(API+"/inference?limit=200",{cache:"no-store"}).then(function(r){return r.json();}).catch(function(){return {};})
+    ]).then(function(res){ renderMetrics(res[0], res[1]); renderPerf((res[2]||{}).turns||[], res[1]); renderHvi(res[3]); })
       .catch(function(e){ var rt=document.getElementById("mx-runtime"); if(rt) rt.innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; });
   }
   function metricsActive(){ var s=document.querySelector('[data-tab="__metrics__"]'); return s&&s.classList.contains("active"); }
@@ -426,6 +444,13 @@
       +'<button id="ac-refresh" class="btn" style="padding:5px 11px">Refresh</button></span></div>'
       +'<div id="ac-list" style="margin-top:8px;max-height:66vh;overflow:auto">loading…</div></div></section>';
   }
+  function srcBadge(t){
+    var s=t.answered_by||''; if(!s) return '';
+    var harness=(s!=='inference'), col=harness?'#16a34a':'#7c3aed';
+    var extra=(!harness && t.tok_per_s)?(' · '+Number(t.tok_per_s).toFixed(0)+' tok/s'):'';
+    var label=(harness?'⚙ '+s:'⚡ inference')+extra;
+    return '<span class="pill" style="background:'+col+'1a;color:'+col+';border-color:'+col+'55;margin-right:6px">'+esc(label)+'</span>';
+  }
   function turnRow(t){
     var err=(t.errors&&t.errors.length)?t.errors:[];
     var toks=(t.tokens_in!=null||t.tokens_out!=null)?(num(t.tokens_in)+"→"+num(t.tokens_out)+" tok"):"";
@@ -435,7 +460,7 @@
       t.llm_ms!=null?"llm "+ms(t.llm_ms):'', t.tools_ms!=null?"tools "+ms(t.tools_ms):'',
       toks, t.outcome?'outcome <span class="mono">'+esc(t.outcome)+'</span>':''].filter(Boolean).join('<span style="opacity:.4">·</span>');
     return '<div class="turn'+(err.length?' err':'')+'">'
-      +'<div class="q">'+(t.question?esc(t.question):'<span class="def">(no prompt captured)</span>')+'</div>'
+      +'<div class="q">'+srcBadge(t)+(t.question?esc(t.question):'<span class="def">(no prompt captured)</span>')+'</div>'
       +(t.answer?'<div class="a">↳ '+esc(t.answer)+(t.blocks?' <span class="pill">'+t.blocks+' card'+(t.blocks>1?'s':'')+'</span>':'')+'</div>':'')
       +err.map(function(e){return '<div class="errline">⚠ '+esc(e)+'</div>';}).join('')
       +'<div class="meta">'+tools+meta+'</div></div>';

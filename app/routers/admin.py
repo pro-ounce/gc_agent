@@ -221,6 +221,8 @@ def _recent_turns(limit: int = 40) -> list[dict]:
                 t.setdefault("skill", f.get("skill"))
             if f.get("model"):
                 t.setdefault("model", f.get("model"))
+            if f.get("grounded") is not None:
+                t.setdefault("grounded", f.get("grounded"))
         elif ev == "chat_answer":
             t.update({"answer": f.get("answer"), "blocks": f.get("blocks")})
             if f.get("error"):
