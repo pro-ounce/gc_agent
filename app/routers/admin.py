@@ -69,6 +69,51 @@ async def admin_reset_config(request: Request):
     return {"params": runtime_config.get_all()}
 
 
+# ── per-application balloon overrides (admin-editable widget suggestions) ────────
+@router.get("/admin/balloons", summary="Applications + their pinned balloon overrides")
+async def admin_get_balloons(request: Request):
+    _guard(request)
+    from .platform import _forward_headers
+    from ..services import ecosystem as eco, balloon_store
+    apps = await eco.applications(_forward_headers(request))
+    return {
+        "applications": [
+            {"code": a["code"], "name": a["name"], "available": eco.is_available(a),
+             "category": a["category"]}
+            for a in apps
+        ],
+        "overrides": balloon_store.all_overrides(),
+    }
+
+
+@router.get("/admin/balloons/{app}/preview", summary="Agent-generated balloons for an application")
+async def admin_preview_balloons(request: Request, app: str):
+    _guard(request)
+    from .platform import _forward_headers
+    from ..services.suggestions import module_suggestions
+    return {"app": app.upper(), "balloons": await module_suggestions(app, _forward_headers(request))}
+
+
+@router.post("/admin/balloons", summary="Pin balloon overrides for an application")
+async def admin_set_balloons(request: Request):
+    _guard(request)
+    from ..services import balloon_store
+    body = await request.json()
+    app = str((body or {}).get("app") or (body or {}).get("code") or "").strip()
+    if not app:
+        return JSONResponse({"error": "application code required (field 'app')"}, status_code=400)
+    saved = balloon_store.set_overrides(app, (body or {}).get("balloons"))
+    return {"app": app.upper(), "balloons": saved, "overrides": balloon_store.all_overrides()}
+
+
+@router.delete("/admin/balloons/{app}", summary="Clear an application's balloon override")
+async def admin_delete_balloons(request: Request, app: str):
+    _guard(request)
+    from ..services import balloon_store
+    balloon_store.delete_overrides(app)
+    return {"app": app.upper(), "overrides": balloon_store.all_overrides()}
+
+
 @router.get("/admin/logs", summary="Recent in-memory logs (turns, prompts, errors)")
 async def admin_logs(request: Request):
     _guard(request)

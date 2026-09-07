@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 from . import ecosystem as eco
+from . import balloon_store
 
 # Hand-curated headline balloons for a few hubs, kept as an override for where we want a very
 # specific set. Everything else is generated from the catalogue.
@@ -105,9 +106,11 @@ async def _build(module: str, headers: dict[str, str] | None, limit: int) -> lis
     out: list[dict[str, Any]] = []
     short = app["name"].split()[0]
 
-    # 1) admin/store override for this application, if any.
-    for lbl, send in _MODULE_BALLOONS.get(app["code"], []):
-        out.append(_chip(lbl, send))
+    # 1) admin-pinned balloons from the store (top priority), else the built-in headline set.
+    pinned = balloon_store.get_overrides(app["code"]) or [
+        {"label": lbl, "send": send} for lbl, send in _MODULE_BALLOONS.get(app["code"], [])
+    ]
+    out.extend(_chip(c["label"], c["send"]) for c in pinned)
 
     # 2) curated workflow entry points (real, do-able actions).
     wf = eco.workflow_for(app["code"]) or {}

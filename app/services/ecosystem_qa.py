@@ -24,6 +24,9 @@ _LIST_APPS = re.compile(
     r"\b(what|which|list|show|see|all|how many)\b[^.?]{0,30}\bapplications?\b|"
     r"\bapplication (list|catalog(ue)?)\b|\bwhat('?s| is) in the (platform|ecosystem|system)\b", re.I)
 _ROLES_CUE = re.compile(r"\broles?\b", re.I)
+_WHO_ACCESS = re.compile(
+    r"\bwho (?:can|has|have|is|are|uses?)\b|\bwhich users?\b|\b(?:list|show|how many) users?\b|"
+    r"\busers? (?:in|with|for|of|that|who)\b|\bwho('?s| are)\b", re.I)
 _ABOUT_CUE = re.compile(
     r"\b(about|what('?s| is| does)|tell me about|describe|explain|overview of|"
     r"workflow|how does .* work|what can .* do)\b", re.I)
@@ -50,6 +53,8 @@ async def handle(message: str, headers: dict[str, str] | None) -> FlowResult | N
     # An application named in the message steers app-specific answers.
     app = await _mentioned_app(msg, headers)
     if app:
+        if _WHO_ACCESS.search(msg):
+            return await _app_users(app, headers)
         if _ROLES_CUE.search(msg):
             return await _app_roles(app, headers)
         if _ABOUT_CUE.search(msg) or _norm(msg) == _norm(app["name"]) or _norm(msg) == _norm(app["code"]):
@@ -200,6 +205,38 @@ async def _named_access(user: str, headers: dict[str, str] | None) -> FlowResult
         lines.append(f"- **{app}** — {', '.join(sorted(by_app[app]))}")
     return FlowResult(message="\n".join(lines),
                       suggestions=[_chip("List applications", "list applications")])
+
+
+async def _app_users(app: dict[str, Any], headers: dict[str, str] | None) -> FlowResult:
+    """The users who have access to an application (with their roles in it). Filters the
+    admin-wide assignment set by applicationId; capped for readability."""
+    try:
+        res = await tool_registry.execute("getAllUserApplicationRoles_post", {"userName": "*"}, headers)
+        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+    except Exception:  # noqa: BLE001
+        data = None
+    rows = [r for r in (data or []) if isinstance(r, dict) and str(r.get("applicationId") or "") == str(app["id"])]
+    if not rows:
+        return FlowResult(message=f"No users currently have access to **{app['name']}**.")
+    by_user: dict[str, dict[str, Any]] = {}
+    for r in rows:
+        u = str(r.get("userName") or "").strip()
+        if not u:
+            continue
+        e = by_user.setdefault(u, {"name": str(r.get("fullName") or "").strip(), "roles": []})
+        role = str(r.get("roleName") or r.get("role") or "").strip()
+        if role and role not in e["roles"]:
+            e["roles"].append(role)
+    n = len(by_user)
+    cap = 20
+    listed = sorted(by_user.items())[:cap]
+    trows = [[u, e["name"], ", ".join(e["roles"][:3]) + (" …" if len(e["roles"]) > 3 else "")]
+             for u, e in listed]
+    head = f"**{n} users** have access to **{app['name']}**"
+    if n > cap:
+        head += f" — showing {cap}"
+    msg = head + ":\n\n" + _tbl(["User", "Name", "Roles"], trows)
+    return FlowResult(message=msg, suggestions=[_chip(f"Roles in {app['name'].split()[0]}", f"roles in {app['code']}", icon="role")])
 
 
 async def _my_access(headers: dict[str, str] | None) -> FlowResult:
