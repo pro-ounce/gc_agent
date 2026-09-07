@@ -27,6 +27,16 @@ _ROLES_CUE = re.compile(r"\broles?\b", re.I)
 _ABOUT_CUE = re.compile(
     r"\b(about|what('?s| is| does)|tell me about|describe|explain|overview of|"
     r"workflow|how does .* work|what can .* do)\b", re.I)
+# "what can <user> do", "access for <user>", "<user>'s access", "what does <user> have
+# access to" — captures the username. 'i'/'you'/'we'/'my' are handled by _MY_ACCESS above.
+_NAMED_ACCESS = [
+    re.compile(r"what can ([A-Za-z0-9._@-]+) (?:do|access)\b", re.I),
+    re.compile(r"what (?:does|do) ([A-Za-z0-9._@-]+) have access to\b", re.I),
+    re.compile(r"\baccess (?:for|of) ([A-Za-z0-9._@-]+)", re.I),
+    re.compile(r"\bapplications? (?:for|of) ([A-Za-z0-9._@-]+)", re.I),
+    re.compile(r"\b([A-Za-z0-9._@-]+)'s (?:access|applications?|roles?)\b", re.I),
+]
+_STOP = {"i", "you", "we", "my", "me", "us", "the", "a", "an", "this", "that", "user", "everyone"}
 
 
 async def handle(message: str, headers: dict[str, str] | None) -> FlowResult | None:
@@ -45,8 +55,15 @@ async def handle(message: str, headers: dict[str, str] | None) -> FlowResult | N
         if _ABOUT_CUE.search(msg) or _norm(msg) == _norm(app["name"]) or _norm(msg) == _norm(app["code"]):
             return await _about_app(app, headers)
 
+    # A named user's access ("what can GCADMIN do"). Only if no application matched above.
+    user = _extract_user(msg)
+    if user:
+        fr = await _named_access(user, headers)
+        if fr is not None:
+            return fr
+
     if _LIST_APPS.search(msg):
-        return await _list_apps(headers)
+        return await _list_apps(headers, show_all=bool(re.search(r"\b(all|every|unlicensed|catalog(ue)?|disabled)\b", msg, re.I)))
 
     return None
 
@@ -87,14 +104,22 @@ def _tbl(headers_row: list[str], rows: list[list[str]]) -> str:
     return line
 
 
-async def _list_apps(headers: dict[str, str] | None) -> FlowResult:
-    apps = await eco.applications(headers)
-    if not apps:
+async def _list_apps(headers: dict[str, str] | None, show_all: bool = False) -> FlowResult:
+    apps_all = await eco.applications(headers)
+    if not apps_all:
         return FlowResult(message="I couldn't load the application catalogue just now.")
-    rows = [[a["name"], a["code"], (a["desc"] or "")[:60]] for a in apps]
-    msg = (f"There are **{len(apps)} applications** in GC360:\n\n"
-           + _tbl(["Application", "Code", "About"], rows)
-           + "\n\nAsk me *“about \\<application\\>”*, *“roles in \\<application\\>”*, or *“my access”*.")
+    apps = apps_all if show_all else [a for a in apps_all if eco.is_available(a)]
+    unlicensed = len(apps_all) - len([a for a in apps_all if eco.is_available(a)])
+    if show_all:
+        rows = [[a["name"], a["code"], "✅" if eco.is_available(a) else "—", (a["desc"] or "")[:52]] for a in apps]
+        head, cols = f"All **{len(apps)} applications** in the environment", ["Application", "Code", "Licensed", "About"]
+    else:
+        rows = [[a["name"], a["code"], (a["desc"] or "")[:60]] for a in apps]
+        head, cols = f"**{len(apps)} applications** are available on this license", ["Application", "Code", "About"]
+    msg = head + ":\n\n" + _tbl(cols, rows)
+    if not show_all and unlicensed:
+        msg += f"\n\n*{unlicensed} more exist in the environment but aren't licensed — say “list all applications” to see them.*"
+    msg += "\n\nAsk *“about \\<application\\>”*, *“roles in \\<application\\>”*, or *“my access”*."
     chips = [_chip("About Formulation", "about Formulation"),
              _chip("Roles in Formulation", "roles in Formulation"),
              _chip("My access", "my access", icon="role")]
@@ -105,6 +130,8 @@ async def _about_app(app: dict[str, Any], headers: dict[str, str] | None) -> Flo
     roles = await eco.roles_for(app, headers)
     wf = eco.workflow_for(app["code"])
     parts = [f"### {app['name']}  \n`{app['code']}`"]
+    if not eco.is_available(app):
+        parts.append("> ⚠️ *Not available on the current license.*")
     desc = app["desc"] or app["info"]
     if desc:
         parts.append(desc)
@@ -131,6 +158,48 @@ async def _app_roles(app: dict[str, Any], headers: dict[str, str] | None) -> Flo
     msg = (f"**{app['name']}** has **{len(roles)} roles**:\n\n"
            + _tbl(["Role", "Description"], rows))
     return FlowResult(message=msg, suggestions=[_chip(f"About {app['name'].split()[0]}", f"about {app['code']}")])
+
+
+def _extract_user(msg: str) -> str | None:
+    """Pull a username out of an access question, ignoring self/pronoun words."""
+    for pat in _NAMED_ACCESS:
+        m = pat.search(msg)
+        if m:
+            tok = m.group(1).strip().strip(".'")
+            if tok and tok.lower() not in _STOP and len(tok) >= 2:
+                return tok
+    return None
+
+
+async def _named_access(user: str, headers: dict[str, str] | None) -> FlowResult | None:
+    """A named user's application access + roles, grouped by application. Uses the admin-wide
+    assignment set (the per-user tools are caller-scoped). Returns None (fall through to normal
+    routing) when the name matches no user — so a false-positive match doesn't dead-end."""
+    # Pass the username so the caller-scope isn't injected (the backend returns the platform
+    # set; we filter to the target — correct whether or not the backend honours the filter).
+    try:
+        res = await tool_registry.execute("getAllUserApplicationRoles_post", {"userName": user}, headers)
+        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+    except Exception:  # noqa: BLE001
+        data = None
+    rows = [r for r in (data or []) if isinstance(r, dict)
+            and str(r.get("userName") or "").strip().lower() == user.strip().lower()]
+    if not rows:
+        return None
+    full = str(rows[0].get("fullName") or "").strip() or str(rows[0].get("userName") or user).strip()
+    by_app: dict[str, list[str]] = {}
+    for r in rows:
+        app = str(r.get("applicationName") or r.get("applicationCode") or "").strip()
+        role = str(r.get("roleName") or r.get("role") or "").strip()
+        if app and role and role not in by_app.setdefault(app, []):
+            by_app[app].append(role)
+    if not by_app:
+        return None
+    lines = [f"**{full}** ({user}) has access to **{len(by_app)} applications**:", ""]
+    for app in sorted(by_app):
+        lines.append(f"- **{app}** — {', '.join(sorted(by_app[app]))}")
+    return FlowResult(message="\n".join(lines),
+                      suggestions=[_chip("List applications", "list applications")])
 
 
 async def _my_access(headers: dict[str, str] | None) -> FlowResult:

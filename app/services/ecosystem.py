@@ -102,38 +102,62 @@ async def _fetch(tool: str, headers: dict[str, str] | None) -> list[dict[str, An
 
 
 # ── applications ────────────────────────────────────────────────────────────────
+def _as_int(v: Any, default: int = 9999) -> int:
+    try:
+        return int(str(v))
+    except (TypeError, ValueError):
+        return default
+
+
+def is_available(app: dict[str, Any]) -> bool:
+    """An application is AVAILABLE when the license enables it (enabled='Y') and it has not
+    expired. The full catalogue exists in the environment, but which apps are usable is
+    license-driven (the license also stamps each app's endDate), so we gate on that."""
+    en = app.get("enabled")
+    ok = en is True or str(en).upper() in ("Y", "TRUE", "1")
+    if not ok:
+        return False
+    end = str(app.get("end_date") or "").strip()
+    if end:
+        # compare the date part only; a malformed/blank value never blocks availability
+        try:
+            import datetime as _dt
+            if _dt.date.fromisoformat(end[:10]) < _dt.date.today():
+                return False
+        except Exception:  # noqa: BLE001
+            pass
+    return True
+
+
 async def applications(headers: dict[str, str] | None) -> list[dict[str, Any]]:
-    """The application catalogue: [{id, name, code, desc, info, url}], enriched with the
-    description fields carried on the application-roles rows (the apps endpoint omits them)."""
+    """The application catalogue in canonical (switcher) order, each with its own metadata
+    and a license-availability flag. Fields come straight from getAllApplications_get."""
     cached = _fresh("apps")
     if cached is not None:
         return cached
-    apps = await _fetch("getAllApplications_get", headers)
-    roles = await app_roles(headers)
-    # index descriptions by applicationId from the roles rows (they carry app metadata)
-    meta: dict[str, dict[str, str]] = {}
-    for r in roles:
-        aid = str(r.get("applicationId") or "")
-        if aid and aid not in meta:
-            meta[aid] = {
-                "desc": str(r.get("applicationDesc") or "").strip(),
-                "info": str(r.get("applicationInfo") or "").strip(),
-                "url": str(r.get("applicationUrl") or "").strip(),
-            }
     out: list[dict[str, Any]] = []
-    for a in apps:
-        aid = str(a.get("applicationId") or "")
-        m = meta.get(aid, {})
+    for a in await _fetch("getAllApplications_get", headers):
         out.append({
-            "id": aid,
+            "id": str(a.get("applicationId") or ""),
             "name": str(a.get("applicationName") or "").strip(),
             "code": str(a.get("applicationCode") or "").strip(),
-            "desc": m.get("desc", ""),
-            "info": m.get("info", ""),
-            "url": m.get("url", ""),
+            "desc": str(a.get("description") or "").strip(),
+            "info": str(a.get("applicationInfo") or "").strip(),
+            "url": str(a.get("applicationUrl") or "").strip(),
+            "icon": str(a.get("applicationIcon") or "").strip(),
+            "short": str(a.get("applicationShortCode") or "").strip(),
+            "category": str(a.get("appCategory") or "").strip(),
+            "order": _as_int(a.get("applicationOrder")),
+            "enabled": str(a.get("enabled") or "").upper() == "Y",
+            "end_date": str(a.get("endDate") or "").strip(),
         })
-    out.sort(key=lambda x: x["name"].lower())
+    out.sort(key=lambda x: (x["order"], x["name"].lower()))
     return _store("apps", out)
+
+
+async def available_applications(headers: dict[str, str] | None) -> list[dict[str, Any]]:
+    """Only the applications the current license makes usable (canonical order)."""
+    return [a for a in await applications(headers) if is_available(a)]
 
 
 async def app_roles(headers: dict[str, str] | None) -> list[dict[str, Any]]:
@@ -210,13 +234,14 @@ async def grounding_digest(headers: dict[str, str] | None, limit: int = 30) -> s
     """A compact, current snapshot of the ecosystem for the system prompt: the real
     applications (so the model never invents one), plus the currently-selected application
     and its roles when the widget provides one. Kept short to protect the context window."""
-    apps = await applications(headers)
+    apps = await available_applications(headers)
     if not apps:
         return ""
     listing = ", ".join(f"{a['name']} [{a['code']}]" for a in apps[:limit])
     lines = [
-        "GC360 ECOSYSTEM (ground every answer in these real applications — never invent one):",
-        f"Applications ({len(apps)}): {listing}.",
+        "GC360 ECOSYSTEM (ground every answer in these real applications — never invent one; "
+        "these are the ones this license makes available):",
+        f"Available applications ({len(apps)}): {listing}.",
     ]
     code = selected_app_code(headers)
     if code:

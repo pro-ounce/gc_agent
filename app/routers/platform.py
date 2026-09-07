@@ -227,7 +227,7 @@ async def agent_questions(
     # header (sent on every request). Always returns a set (default when module is unknown).
     module = (module or "").strip() or _module_from_header(request)
     from ..services.suggestions import module_suggestions
-    balloons = module_suggestions(module)
+    balloons = await module_suggestions(module, _forward_headers(request))
     log.bind(func="questions", mod=module or "(none)", balloons=len(balloons),
              src="query" if request.query_params.get("module") else "header").info(
         f"bootstrap balloons: module={module or '(none)'} → {len(balloons)} balloons")
