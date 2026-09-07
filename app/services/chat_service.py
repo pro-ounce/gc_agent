@@ -525,12 +525,16 @@ class ChatService:
         if flows.is_active(session):
             fr = await flows.handle(session, user_message, request_headers)
             if fr is not None:
-                for ch in self._flow_chunks(session, fr):
-                    yield ch
+                # Finish metrics + tag the source BEFORE yielding: the consumer may close the
+                # connection on the 'done' chunk, cancelling the generator at the yield — so
+                # any post-yield code (turn.finish) would never run. The chunks are a ready list.
+                chunks = self._flow_chunks(session, fr)
                 turn.answered_by = "flow"
                 _log_turn_source(session_id, "flow", question=user_message,
-                                 answer=(fr.message or "")[:240])
+                                 answer=(fr.message or "")[:240], request_id=turn.request_id)
                 turn.finish("stop")
+                for ch in chunks:
+                    yield ch
                 return
         else:
             src = "meta"
@@ -540,12 +544,13 @@ class ChatService:
                 src = "ecosystem"
             started = mr or flows.maybe_start(session, user_message)
             if started is not None:
-                for ch in self._flow_chunks(session, started):
-                    yield ch
+                chunks = self._flow_chunks(session, started)
                 turn.answered_by = src if mr is not None else "flow"
                 _log_turn_source(session_id, turn.answered_by, question=user_message,
-                                 answer=(started.message or "")[:240])
+                                 answer=(started.message or "")[:240], request_id=turn.request_id)
                 turn.finish("stop")
+                for ch in chunks:
+                    yield ch
                 return
 
         system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT)
