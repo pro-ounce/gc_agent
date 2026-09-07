@@ -528,6 +528,8 @@ class ChatService:
                 for ch in self._flow_chunks(session, fr):
                     yield ch
                 turn.answered_by = "flow"
+                _log_turn_source(session_id, "flow", question=user_message,
+                                 answer=(fr.message or "")[:240])
                 turn.finish("stop")
                 return
         else:
@@ -541,6 +543,8 @@ class ChatService:
                 for ch in self._flow_chunks(session, started):
                     yield ch
                 turn.answered_by = src if mr is not None else "flow"
+                _log_turn_source(session_id, turn.answered_by, question=user_message,
+                                 answer=(started.message or "")[:240])
                 turn.finish("stop")
                 return
 
