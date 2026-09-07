@@ -459,8 +459,9 @@
       t.total_ms!=null?'<span class="mono">'+ms(t.total_ms)+'</span> total':'',
       t.llm_ms!=null?"llm "+ms(t.llm_ms):'', t.tools_ms!=null?"tools "+ms(t.tools_ms):'',
       toks, t.outcome?'outcome <span class="mono">'+esc(t.outcome)+'</span>':''].filter(Boolean).join('<span style="opacity:.4">·</span>');
-    return '<div class="turn'+(err.length?' err':'')+'">'
-      +'<div class="q">'+srcBadge(t)+(t.question?esc(t.question):'<span class="def">(no prompt captured)</span>')+'</div>'
+    return '<div class="turn'+(err.length?' err':'')+'" data-rid="'+esc(t.request_id||"")+'" style="cursor:pointer" title="Click to visualize this request’s workflow">'
+      +'<div class="q">'+srcBadge(t)+(t.question?esc(t.question):'<span class="def">(no prompt captured)</span>')
+      +'<span class="pill" style="float:right;opacity:.6">⧉ workflow</span></div>'
       +(t.answer?'<div class="a">↳ '+esc(t.answer)+(t.blocks?' <span class="pill">'+t.blocks+' card'+(t.blocks>1?'s':'')+'</span>':'')+'</div>':'')
       +err.map(function(e){return '<div class="errline">⚠ '+esc(e)+'</div>';}).join('')
       +'<div class="meta">'+tools+meta+'</div></div>';
@@ -482,7 +483,80 @@
     document.getElementById("ac-erronly").addEventListener("change",loadTurns);
     if(_acTimer){clearInterval(_acTimer);}
     _acTimer=setInterval(function(){ var a=document.getElementById("ac-auto"); if(a&&a.checked&&activityActive()) loadTurns(); }, 3000);
+    // Click a turn → open its live/replay workflow visualization.
+    var list=document.getElementById("ac-list");
+    if(list) list.addEventListener("click", function(e){
+      var row=e.target.closest ? e.target.closest(".turn") : null;
+      if(row && row.getAttribute("data-rid")) openWorkflow(row.getAttribute("data-rid"));
+    });
     loadTurns();
+  }
+
+  // ── Request workflow visualization (live + replay) ──────────────────────────
+  var _wfTimer=null, _wfRid=null;
+  var WF_STYLE={
+    prompt:["#475569","▶"], route:["#16a34a","⑃"], retrieval:["#2563eb","⌕"],
+    llm:["#7c3aed","✦"], tool:["#d97706","⚙"], answer:["#0f766e","✓"]
+  };
+  function wfColor(s){ if(s.kind==="route"&&s.answered_by==="inference") return "#7c3aed"; return (WF_STYLE[s.kind]||["#64748b","•"])[0]; }
+  function wfIcon(s){ return (WF_STYLE[s.kind]||["#64748b","•"])[1]; }
+  function ensureWfModal(){
+    var m=document.getElementById("wf-modal"); if(m) return m;
+    m=document.createElement("div"); m.id="wf-modal";
+    m.style.cssText="position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:none;align-items:flex-start;justify-content:center;padding:5vh 16px;overflow:auto";
+    m.innerHTML='<div style="background:var(--bg,#fff);max-width:760px;width:100%;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.3);padding:18px 20px">'
+      +'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px">'
+      +'<div style="font-weight:600;font-size:15px" id="wf-title">Request workflow</div>'
+      +'<div><span id="wf-live" class="badge-dev" style="margin-right:8px"></span>'
+      +'<button id="wf-close" class="btn" style="padding:4px 10px">Close</button></div></div>'
+      +'<div id="wf-head" class="def" style="margin:8px 0 4px"></div>'
+      +'<div id="wf-body" style="margin-top:10px"></div></div>';
+    document.body.appendChild(m);
+    m.addEventListener("click", function(e){ if(e.target===m) closeWorkflow(); });
+    m.querySelector("#wf-close").addEventListener("click", closeWorkflow);
+    return m;
+  }
+  function closeWorkflow(){ if(_wfTimer){clearInterval(_wfTimer);_wfTimer=null;} var m=document.getElementById("wf-modal"); if(m) m.style.display="none"; _wfRid=null; }
+  function openWorkflow(rid){
+    _wfRid=rid; var m=ensureWfModal(); m.style.display="flex";
+    document.getElementById("wf-body").innerHTML='<div class="def">loading…</div>';
+    fetchWorkflow();
+    if(_wfTimer) clearInterval(_wfTimer);
+    _wfTimer=setInterval(function(){ if(_wfRid) fetchWorkflow(); }, 1200);  // live poll until done
+  }
+  function fetchWorkflow(){
+    var rid=_wfRid; if(!rid) return;
+    fetch(API+"/turn/"+encodeURIComponent(rid),{cache:"no-store"}).then(function(r){return r.json();})
+      .then(function(d){ if(rid===_wfRid) renderWorkflow(d); if(d && d.done && _wfTimer){clearInterval(_wfTimer);_wfTimer=null;} })
+      .catch(function(e){ var b=document.getElementById("wf-body"); if(b) b.innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; });
+  }
+  function renderWorkflow(d){
+    d=d||{}; var steps=d.steps||[];
+    var live=document.getElementById("wf-live");
+    if(live){ live.className="badge-dev "+(d.done?"ok":"warn"); live.textContent=d.done?"● replay":"● live"; }
+    var ab=d.answered_by||"?", harness=(ab!=="inference");
+    document.getElementById("wf-title").textContent=(harness?"⚙ harness":"⚡ inference")+" · "+ab;
+    var head=[]; if(d.total_ms!=null) head.push("total "+ms(d.total_ms));
+    if(d.llm_ms!=null&&d.llm_ms>0) head.push("llm "+ms(d.llm_ms));
+    if(d.tools_ms!=null&&d.tools_ms>0) head.push("tools "+ms(d.tools_ms));
+    if(d.tok_per_s) head.push(Number(d.tok_per_s).toFixed(0)+" tok/s");
+    if(d.tokens_in!=null) head.push(num(d.tokens_in)+"→"+num(d.tokens_out)+" tok");
+    if(d.grounded) head.push("grounded"); if(d.skill) head.push("skill:"+esc(d.skill));
+    document.getElementById("wf-head").innerHTML='<b style="color:var(--fg,#111)">'+esc(d.question||"(no prompt)")+'</b><br>'+head.join(' <span style="opacity:.4">·</span> ');
+    var maxms=Math.max.apply(null,steps.map(function(s){return s.ms||0;}).concat([1]));
+    var body=steps.map(function(s,i){
+      var col=wfColor(s), w=s.ms?Math.max(3,Math.round(100*s.ms/maxms)):0;
+      var bar=s.ms!=null?'<div style="height:5px;border-radius:3px;background:'+col+';width:'+w+'%;margin-top:5px"></div>':'';
+      var right=s.ms!=null?('<span class="mono" style="color:'+col+'">'+ms(s.ms)+'</span>'):'';
+      var conn=i<steps.length-1?'<div style="width:2px;height:12px;background:'+col+'44;margin:2px 0 2px 13px"></div>':'';
+      return '<div style="display:flex;gap:10px;align-items:flex-start">'
+        +'<div style="width:26px;height:26px;border-radius:50%;flex:0 0 auto;background:'+col+'1a;color:'+col+';display:flex;align-items:center;justify-content:center;font-size:14px">'+wfIcon(s)+'</div>'
+        +'<div style="flex:1;min-width:0"><div style="display:flex;justify-content:space-between;gap:8px">'
+        +'<span style="font-weight:600;font-size:13.5px">'+esc(s.label||s.kind)+'</span>'+right+'</div>'
+        +'<div class="def" style="margin:1px 0 0">'+esc(s.detail||"")
+        +(s.tokens_in!=null?' <span class="pill">'+num(s.tokens_in)+'→'+num(s.tokens_out)+' tok</span>':'')+'</div>'+bar+'</div></div>'+conn;
+    }).join("");
+    document.getElementById("wf-body").innerHTML=body||'<div class="def">No steps captured.</div>';
   }
 
   // ── Logs tab (recent in-memory logs) ──
