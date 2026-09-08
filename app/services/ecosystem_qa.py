@@ -9,10 +9,12 @@ through when the message isn't an ecosystem question.
 """
 from __future__ import annotations
 
+import random
 import re
 from typing import Any
 
 from . import ecosystem as eco
+from . import intent as intent_mod
 from .flows import FlowResult
 from ..mcp.tool_registry import tool_registry
 
@@ -70,7 +72,31 @@ async def handle(message: str, headers: dict[str, str] | None) -> FlowResult | N
     if _LIST_APPS.search(msg):
         return await _list_apps(headers, show_all=bool(re.search(r"\b(all|every|unlicensed|catalog(ue)?|disabled)\b", msg, re.I)))
 
+    # ── semantic fallback: catch natural rewordings the regex missed ──
+    name, score = await intent_mod.classify(msg)
+    if name:
+        cur = app or await _current_app(headers)   # named app, else the one they're viewing
+        if name == "list_apps":
+            return await _list_apps(headers)
+        if name == "my_access":
+            return await _my_access(headers)
+        if name == "user_access" and user:
+            fr = await _named_access(user, headers)
+            if fr is not None:
+                return fr
+        if cur and name == "roles_app":
+            return await _app_roles(cur, headers, from_current=app is None)
+        if cur and name == "who_access":
+            return await _app_users(cur, headers, from_current=app is None)
+        if cur and name == "about_app":
+            return await _about_app(cur, headers, from_current=app is None)
     return None
+
+
+async def _current_app(headers: dict[str, str] | None) -> dict[str, Any] | None:
+    """The application the user is currently viewing (from the X-Selected-App header)."""
+    code = eco.selected_app_code(headers)
+    return await eco.resolve_app(code, headers) if code else None
 
 
 # ── helpers ────────────────────────────────────────────────────────────────────
@@ -82,10 +108,20 @@ def _chip(label: str, send: str, icon: str = "app") -> dict[str, str]:
     return {"label": label, "send": send, "icon": icon}
 
 
+def _say(*variants: str) -> str:
+    """Pick one friendly phrasing so repeated asks don't read like a form letter."""
+    return random.choice(variants)
+
+
+def _here(app: dict[str, Any], from_current: bool) -> str:
+    """A warm acknowledgement when we inferred the app from the screen they're on."""
+    return f"Since you're in **{app['name']}**, " if from_current else ""
+
+
 async def _mentioned_app(msg: str, headers: dict[str, str] | None) -> dict[str, Any] | None:
-    """The application referenced in the message, if any — matched on the code or the leading
-    significant word of the name. Picks the longest match so 'formulation' beats a short code."""
-    nmsg = _norm(msg)
+    """The application referenced in the message, if any — matched on WHOLE-WORD tokens only
+    (the code, or a distinctive word of the name), never substrings, so 'budgeting' no longer
+    matches 'Budget Analytics'. Picks the longest match so 'formulation' beats a short code."""
     words = set(re.findall(r"[a-z0-9]+", msg.lower()))
     best: tuple[int, dict[str, Any]] | None = None
     for a in await eco.applications(headers):
@@ -97,7 +133,7 @@ async def _mentioned_app(msg: str, headers: dict[str, str] | None) -> dict[str, 
         if first and len(first[0]) >= 4 and first[0] not in ("data", "user"):
             keys.append(first[0])                   # e.g. formulation, execution, allocation
         for k in keys:
-            hit = (k in words) or (len(k) >= 6 and k in nmsg)
+            hit = k in words                        # whole-word match only
             if hit and (best is None or len(k) > best[0]):
                 best = (len(k), a)
     return best[1] if best else None
@@ -117,24 +153,34 @@ async def _list_apps(headers: dict[str, str] | None, show_all: bool = False) -> 
     unlicensed = len(apps_all) - len([a for a in apps_all if eco.is_available(a)])
     if show_all:
         rows = [[a["name"], a["code"], "✅" if eco.is_available(a) else "—", (a["desc"] or "")[:52]] for a in apps]
-        head, cols = f"All **{len(apps)} applications** in the environment", ["Application", "Code", "Licensed", "About"]
+        head = _say(f"Here's the full catalogue — all **{len(apps)} applications** in the environment",
+                    f"Sure, the whole lineup — **{len(apps)} applications** in the environment")
+        cols = ["Application", "Code", "Licensed", "About"]
     else:
         rows = [[a["name"], a["code"], (a["desc"] or "")[:60]] for a in apps]
-        head, cols = f"**{len(apps)} applications** are available on this license", ["Application", "Code", "About"]
+        head = _say(f"Here's everything you can jump into on this license — **{len(apps)} applications**",
+                    f"You've got **{len(apps)} applications** available on this license",
+                    f"Happy to help — **{len(apps)} applications** are live on this license")
+        cols = ["Application", "Code", "About"]
     msg = head + ":\n\n" + _tbl(cols, rows)
     if not show_all and unlicensed:
-        msg += f"\n\n*{unlicensed} more exist in the environment but aren't licensed — say “list all applications” to see them.*"
-    msg += "\n\nAsk *“about \\<application\\>”*, *“roles in \\<application\\>”*, or *“my access”*."
+        msg += f"\n\n*{unlicensed} more exist in the environment but aren't licensed — just say “list all applications” to see them.*"
+    msg += "\n\nWant a closer look? Try *“about \\<application\\>”*, *“roles in \\<application\\>”*, or *“my access”*."
     chips = [_chip("About Formulation", "about Formulation"),
              _chip("Roles in Formulation", "roles in Formulation"),
              _chip("My access", "my access", icon="role")]
     return FlowResult(message=msg, suggestions=chips)
 
 
-async def _about_app(app: dict[str, Any], headers: dict[str, str] | None) -> FlowResult:
+async def _about_app(app: dict[str, Any], headers: dict[str, str] | None,
+                     from_current: bool = False) -> FlowResult:
     roles = await eco.roles_for(app, headers)
     wf = eco.workflow_for(app["code"])
-    parts = [f"### {app['name']}  \n`{app['code']}`"]
+    lead = (f"Since you're in **{app['name']}**, here's the rundown:" if from_current
+            else _say(f"Here's the rundown on **{app['name']}**:",
+                      f"Sure — here's a quick look at **{app['name']}**:",
+                      f"Happy to. **{app['name']}** in a nutshell:"))
+    parts = [lead, f"### {app['name']}  \n`{app['code']}`"]
     if not eco.is_available(app):
         parts.append("> ⚠️ *Not available on the current license.*")
     desc = app["desc"] or app["info"]
@@ -155,13 +201,15 @@ async def _about_app(app: dict[str, Any], headers: dict[str, str] | None) -> Flo
     return FlowResult(message=msg, suggestions=chips)
 
 
-async def _app_roles(app: dict[str, Any], headers: dict[str, str] | None) -> FlowResult:
+async def _app_roles(app: dict[str, Any], headers: dict[str, str] | None,
+                     from_current: bool = False) -> FlowResult:
     roles = await eco.roles_for(app, headers)
     if not roles:
-        return FlowResult(message=f"**{app['name']}** has no roles I can see.")
+        return FlowResult(message=f"Hmm, I can't see any roles defined for **{app['name']}** right now.")
     rows = [[("🛡️ " if r["admin"] else "") + r["name"], (r["desc"] or "")[:70]] for r in roles]
-    msg = (f"**{app['name']}** has **{len(roles)} roles**:\n\n"
-           + _tbl(["Role", "Description"], rows))
+    lead = _here(app, from_current) + _say(f"**{app['name']}** has **{len(roles)} roles** — here they are:",
+                                           f"there are **{len(roles)} roles** in **{app['name']}**:")
+    msg = lead[0].upper() + lead[1:] + "\n\n" + _tbl(["Role", "Description"], rows)
     return FlowResult(message=msg, suggestions=[_chip(f"About {app['name'].split()[0]}", f"about {app['code']}")])
 
 
@@ -200,14 +248,17 @@ async def _named_access(user: str, headers: dict[str, str] | None) -> FlowResult
             by_app[app].append(role)
     if not by_app:
         return None
-    lines = [f"**{full}** ({user}) has access to **{len(by_app)} applications**:", ""]
+    lead = _say(f"Here's what **{full}** ({user}) can get into — **{len(by_app)} applications**:",
+                f"**{full}** ({user}) has access to **{len(by_app)} applications**:")
+    lines = [lead, ""]
     for app in sorted(by_app):
         lines.append(f"- **{app}** — {', '.join(sorted(by_app[app]))}")
     return FlowResult(message="\n".join(lines),
                       suggestions=[_chip("List applications", "list applications")])
 
 
-async def _app_users(app: dict[str, Any], headers: dict[str, str] | None) -> FlowResult:
+async def _app_users(app: dict[str, Any], headers: dict[str, str] | None,
+                     from_current: bool = False) -> FlowResult:
     """The users who have access to an application (with their roles in it). Filters the
     admin-wide assignment set by applicationId; capped for readability."""
     try:
@@ -217,7 +268,7 @@ async def _app_users(app: dict[str, Any], headers: dict[str, str] | None) -> Flo
         data = None
     rows = [r for r in (data or []) if isinstance(r, dict) and str(r.get("applicationId") or "") == str(app["id"])]
     if not rows:
-        return FlowResult(message=f"No users currently have access to **{app['name']}**.")
+        return FlowResult(message=f"Looks like nobody has access to **{app['name']}** yet.")
     by_user: dict[str, dict[str, Any]] = {}
     for r in rows:
         u = str(r.get("userName") or "").strip()
@@ -232,9 +283,12 @@ async def _app_users(app: dict[str, Any], headers: dict[str, str] | None) -> Flo
     listed = sorted(by_user.items())[:cap]
     trows = [[u, e["name"], ", ".join(e["roles"][:3]) + (" …" if len(e["roles"]) > 3 else "")]
              for u, e in listed]
-    head = f"**{n} users** have access to **{app['name']}**"
+    pre = f"Since you're in **{app['name']}**, " if from_current else ""
+    head = pre + _say(f"**{n} people** can get into **{app['name']}**",
+                      f"**{n} users** have access to **{app['name']}**")
+    head = head[0].upper() + head[1:]
     if n > cap:
-        head += f" — showing {cap}"
+        head += f" — here are the first {cap}"
     msg = head + ":\n\n" + _tbl(["User", "Name", "Roles"], trows)
     return FlowResult(message=msg, suggestions=[_chip(f"Roles in {app['name'].split()[0]}", f"roles in {app['code']}", icon="role")])
 
@@ -249,14 +303,16 @@ async def _my_access(headers: dict[str, str] | None) -> FlowResult:
         data = None
     rows = [r for r in (data or []) if isinstance(r, dict)]
     if not rows:
-        return FlowResult(message="I couldn't find any application access on your account.")
+        return FlowResult(message="Hmm, I don't see any application access on your account yet.")
     by_app: dict[str, list[str]] = {}
     for r in rows:
         app = str(r.get("applicationName") or r.get("applicationCode") or "").strip()
         role = str(r.get("roleName") or r.get("role") or "").strip()
         if app and role and role not in by_app.setdefault(app, []):
             by_app[app].append(role)
-    lines = [f"You have access to **{len(by_app)} applications**:", ""]
+    lines = [_say(f"Here's what you can get into — **{len(by_app)} applications**:",
+                  f"You've got access to **{len(by_app)} applications**:",
+                  f"Nice — you can jump into **{len(by_app)} applications**:"), ""]
     for app in sorted(by_app):
         lines.append(f"- **{app}** — {', '.join(sorted(by_app[app]))}")
     return FlowResult(message="\n".join(lines),
