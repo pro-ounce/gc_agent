@@ -60,13 +60,14 @@
     elTabs.innerHTML = groups.map(function(g,i){ return tabBtn(g,g,i===0); }).join("")
       + tabBtn("Metrics","__metrics__",false)
       + tabBtn("Activity","__activity__",false)
+      + tabBtn("Docs","__docs__",false)
       + tabBtn("Backups","__backups__",false)
       + tabBtn("Logs","__logs__",false);
     elSections.innerHTML = groups.map(function(g,i){
       var cards = params.filter(function(p){return p.group===g;}).map(cardFor).join("");
       return '<section class="admin-section'+(i===0?" active":"")+'" data-tab="'+esc(g)+'" role="tabpanel"'
         +' id="panel-'+sid(g)+'" aria-labelledby="tab-'+sid(g)+'" tabindex="0"><div class="cards">'+cards+'</div></section>';
-    }).join("") + metricsSectionHTML() + activitySectionHTML() + backupsSectionHTML() + logsSectionHTML();
+    }).join("") + metricsSectionHTML() + activitySectionHTML() + docsSectionHTML() + backupsSectionHTML() + logsSectionHTML();
     // tab switching — WAI-ARIA tabs: roving tabindex, arrow/Home/End keys, aria-selected.
     var tabEls = Array.prototype.slice.call(elTabs.children);
     function selectTab(btn){
@@ -111,6 +112,7 @@
     initBackups();
     initMetrics();
     initActivity();
+    initDocs();
     initLogs();
   }
 
@@ -557,6 +559,61 @@
         +(s.tokens_in!=null?' <span class="pill">'+num(s.tokens_in)+'→'+num(s.tokens_out)+' tok</span>':'')+'</div>'+bar+'</div></div>'+conn;
     }).join("");
     document.getElementById("wf-body").innerHTML=body||'<div class="def">No steps captured.</div>';
+  }
+
+  // ── Docs tab (live capability + architecture reference) ──
+  function docsSectionHTML(){
+    return '<section class="admin-section" data-tab="__docs__" role="tabpanel" id="panel-__docs__" aria-labelledby="tab-__docs__" tabindex="0">'
+      +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Architecture</span>'
+      +'<span class="btns"><a id="dc-diagram" href="#" target="_blank" rel="noopener" class="btn" style="padding:5px 11px">Open full diagram ↗</a></span></div>'
+      +'<div id="dc-arch" class="def" style="margin-top:10px">loading…</div></div>'
+      +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Capabilities <span id="dc-count" class="key"></span></span>'
+      +'<button id="dc-refresh" class="btn" style="padding:5px 11px">Refresh</button></div>'
+      +'<div id="dc-skills" style="margin-top:10px">loading…</div></div>'
+      +'<div class="cards" style="margin-bottom:14px">'
+      +'<div class="card"><div class="lbl">Questions it answers directly</div><div id="dc-intents" class="def" style="margin-top:8px"></div></div>'
+      +'<div class="card"><div class="lbl">Guided flows</div><div id="dc-flows" class="def" style="margin-top:8px"></div></div>'
+      +'</div></section>';
+  }
+  function pill(txt, cls){ return '<span class="pill'+(cls?" "+cls:"")+'">'+esc(txt)+'</span>'; }
+  function renderDocs(d){
+    d=d||{};
+    var da=document.getElementById("dc-diagram"); if(da && d.diagram_url) da.href=d.diagram_url;
+    // architecture — layered flow, each layer an arrow into the next
+    var arch=document.getElementById("dc-arch");
+    if(arch){ var L=d.architecture||[];
+      arch.innerHTML=L.map(function(x,i){
+        return '<div style="display:flex;gap:10px;align-items:baseline;padding:3px 0">'
+          +'<span class="pill" style="min-width:92px;text-align:center">'+esc(x.layer)+'</span>'
+          +'<span style="color:var(--fg,#111)">'+esc(x.detail)+'</span></div>'
+          +(i<L.length-1?'<div style="margin-left:44px;color:var(--muted)">↓</div>':'');
+      }).join(""); }
+    // capabilities — one row per skill
+    var sk=document.getElementById("dc-skills"), sc=document.getElementById("dc-count");
+    var skills=d.skills||[]; if(sc) sc.textContent="("+skills.length+")";
+    if(sk) sk.innerHTML=skills.map(function(s){
+      return '<div style="padding:9px 0;border-top:1px solid var(--line-soft,#eee)">'
+        +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
+        +'<b style="font-size:14px">'+esc(s.summary)+'</b>'
+        +(s.mutation?pill("writes","warn"):pill("read"))
+        +(s.custom?pill("custom"):"")
+        +'</div>'
+        +'<div class="def" style="margin-top:3px">Say: '+(s.examples||[]).slice(0,4).map(function(e){return '“'+esc(e)+'”';}).join(", ")+'</div>'
+        +((s.needs&&s.needs.length)?'<div class="def" style="margin-top:2px">Needs: '+s.needs.map(esc).join(", ")+'</div>':'')
+        +'<div class="def mono" style="margin-top:2px;opacity:.7">'+esc(s.tool)+'</div></div>';
+    }).join("") || '<div class="def">No skills registered.</div>';
+    var it=document.getElementById("dc-intents");
+    if(it) it.innerHTML=(d.intents||[]).map(function(x){return '<div style="padding:3px 0"><b>'+esc(x[0])+'</b> <span class="def">— '+esc(x[1])+'</span></div>';}).join("");
+    var fl=document.getElementById("dc-flows");
+    if(fl) fl.innerHTML=(d.flows||[]).map(function(x){return '<div style="padding:3px 0"><b>'+esc(x[0])+'</b> <span class="def">— '+esc(x[1])+'</span></div>';}).join("");
+  }
+  function loadDocs(){
+    fetch(API+"/docs",{cache:"no-store"}).then(function(r){return r.json();}).then(renderDocs)
+      .catch(function(e){ var s=document.getElementById("dc-skills"); if(s) s.innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; });
+  }
+  function initDocs(){
+    var b=document.getElementById("dc-refresh"); if(b) b.addEventListener("click",loadDocs);
+    loadDocs();
   }
 
   // ── Logs tab (recent in-memory logs) ──

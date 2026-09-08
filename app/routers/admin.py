@@ -141,6 +141,57 @@ async def admin_turns(request: Request):
     return {"turns": _recent_turns(limit)}
 
 
+@router.get("/admin/docs", summary="Live capability + architecture reference (from code)")
+async def admin_docs(request: Request):
+    """A self-documenting reference for the admin console: the agent's capabilities (skills,
+    deterministic Q&A intents, guided flows) generated from the live code, plus the layered
+    architecture. Always current — it reflects what's actually registered right now."""
+    _guard(request)
+    from ..services import skills as _skills
+    from ..mcp.tool_registry import is_mutation
+    from ..services.skill_store import _read_file as _custom_file
+    custom = {d.get("name") for d in _custom_file() if isinstance(d, dict)}
+    skills_doc = [{
+        "name": s.name,
+        "summary": s.summary or s.name,
+        "examples": list(s.keywords[:6]),
+        "needs": list(s.required),
+        "tool": s.tool,
+        "mutation": is_mutation(s.tool),
+        "custom": s.name in custom,
+    } for s in _skills.SKILLS]
+    intents = [
+        ["List applications", "“list applications”, “which planners exist”"],
+        ["About an application", "“about Formulation”, “what does this app do”"],
+        ["Roles in an application", "“roles in Formulation”"],
+        ["Who can access an application", "“who can access Formulation”"],
+        ["My access", "“my access”, “what can I get into”"],
+        ["A user's access", "“what can GCADMIN do”, “access for jsmith”"],
+    ]
+    flows = [
+        ["Create a user", "guided intake → assign apps & roles"],
+        ["Set up a data call", "create → attendees → reminder"],
+        ["Onboard access", "assign application + role, one at a time"],
+        ["Create a skill", "teach the agent a new action at runtime"],
+    ]
+    architecture = [
+        {"layer": "Client", "detail": "GC360 shell + agent widget (X-Selected-App)"},
+        {"layer": "Edge", "detail": "Apache gc.conf — /api→gateway, /gc-agent→agent (ops)"},
+        {"layer": "Gateway", "detail": "Spring Cloud Gateway :19010 — agent route /reply"},
+        {"layer": "Agent", "detail": "FastAPI :17024 — harness (no GPU) first, else inference (qwen2.5:14b GPU)"},
+        {"layer": "Tool bridge", "detail": "MCP service :19170 — 1,176 tools"},
+        {"layer": "Middleware", "detail": "gc-mw.service — one Tomcat, an appBase per application"},
+        {"layer": "Data", "detail": "Oracle DEV_COMPASS"},
+    ]
+    return {
+        "skills": skills_doc,
+        "intents": intents,
+        "flows": flows,
+        "architecture": architecture,
+        "diagram_url": "https://claude.ai/code/artifact/b2514d32-4632-40f5-8fbc-9fd666a26aca",
+    }
+
+
 @router.get("/admin/inference", summary="Harness-vs-inference mix + inference performance")
 async def admin_inference(request: Request):
     """Aggregate the recent turns into the three levers: how many questions the HARNESS
