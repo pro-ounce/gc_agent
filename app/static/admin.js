@@ -61,13 +61,14 @@
       + tabBtn("Metrics","__metrics__",false)
       + tabBtn("Activity","__activity__",false)
       + tabBtn("Docs","__docs__",false)
+      + tabBtn("Audit","__audit__",false)
       + tabBtn("Backups","__backups__",false)
       + tabBtn("Logs","__logs__",false);
     elSections.innerHTML = groups.map(function(g,i){
       var cards = params.filter(function(p){return p.group===g;}).map(cardFor).join("");
       return '<section class="admin-section'+(i===0?" active":"")+'" data-tab="'+esc(g)+'" role="tabpanel"'
         +' id="panel-'+sid(g)+'" aria-labelledby="tab-'+sid(g)+'" tabindex="0"><div class="cards">'+cards+'</div></section>';
-    }).join("") + metricsSectionHTML() + activitySectionHTML() + docsSectionHTML() + backupsSectionHTML() + logsSectionHTML();
+    }).join("") + metricsSectionHTML() + activitySectionHTML() + docsSectionHTML() + auditSectionHTML() + backupsSectionHTML() + logsSectionHTML();
     // tab switching — WAI-ARIA tabs: roving tabindex, arrow/Home/End keys, aria-selected.
     var tabEls = Array.prototype.slice.call(elTabs.children);
     function selectTab(btn){
@@ -113,6 +114,7 @@
     initMetrics();
     initActivity();
     initDocs();
+    initAudit();
     initLogs();
   }
 
@@ -806,6 +808,46 @@
   function initDocs(){
     var b=document.getElementById("dc-refresh"); if(b) b.addEventListener("click",loadDocs);
     loadDocs();
+  }
+
+  // ── Audit tab (governance / intrusion trail: who · from where · what) ──
+  function auditSectionHTML(){
+    return '<section class="admin-section" data-tab="__audit__" role="tabpanel" id="panel-__audit__" aria-labelledby="tab-__audit__" tabindex="0">'
+      +'<div class="card"><div class="top"><span class="lbl">Audit trail <span id="au-count" class="key"></span></span>'
+      +'<span class="btns">'
+      +'<label class="switch" style="gap:6px"><input type="checkbox" id="au-susp" aria-label="Suspicious only"><span class="track" aria-hidden="true"><span class="knob"></span></span><span class="state" style="font-size:12px">suspicious</span></label>'
+      +'<label class="switch" style="gap:6px"><input type="checkbox" id="au-mut" aria-label="Mutations only"><span class="track" aria-hidden="true"><span class="knob"></span></span><span class="state" style="font-size:12px">writes</span></label>'
+      +'<button id="au-refresh" class="btn" style="padding:5px 11px">Refresh</button></span></div>'
+      +'<div class="def" style="margin-top:4px">Who fired each request, from where, in which application &amp; role — restart-durable.</div>'
+      +'<div id="au-list" style="margin-top:10px;max-height:66vh;overflow:auto">loading…</div></div></section>';
+  }
+  function auditRow(e){
+    var flags=(e.flags&&e.flags.length)?e.flags.map(function(f){return '<span class="pill" style="background:#fdeaea;color:#b91c1c;border-color:#f3c9c9">⚠ '+esc(f)+'</span>';}).join(" "):"";
+    var muts=(e.mutations&&e.mutations.length)?e.mutations.map(function(m){return '<span class="pill" style="background:var(--amber-wash);color:var(--amber);border-color:#f3ddc0">'+esc(m)+'</span>';}).join(" "):"";
+    var meta=[e.ts?'<span class="mono">'+esc(e.ts)+'</span>':'',
+      '👤 <b>'+esc(e.user||"—")+'</b>'+(e.client_ip?' @<span class="mono">'+esc(e.client_ip)+'</span>':''),
+      (e.browser||e.os)?esc((e.browser||"?")+" · "+(e.os||"?")):'',
+      e.origin?'origin <span class="mono">'+esc(e.origin)+'</span>':'',
+      e.app?('📱 '+esc(e.app)):'', e.role?('🎭 '+esc(e.role)):'',
+      e.answered_by?esc(e.answered_by):''].filter(Boolean).join('<span style="opacity:.4">·</span>');
+    return '<div class="turn'+(e.flags&&e.flags.length?' err':'')+'">'
+      +'<div class="q">'+(e.question?esc(e.question):'<span class="def">(no prompt)</span>')+(flags?' '+flags:'')+'</div>'
+      +(muts?'<div style="margin-top:4px">'+muts+'</div>':'')
+      +'<div class="meta">'+meta+'</div></div>';
+  }
+  function loadAudit(){
+    var el=document.getElementById("au-list"); if(!el) return;
+    var qs="?limit=200"+((document.getElementById("au-susp")||{}).checked?"&suspicious_only=1":"")+((document.getElementById("au-mut")||{}).checked?"&mutations_only=1":"");
+    fetch(API+"/audit"+qs,{cache:"no-store"}).then(function(r){return r.json();}).then(function(d){
+      var es=d.entries||[]; var c=document.getElementById("au-count"); if(c) c.textContent="("+es.length+")";
+      el.innerHTML = es.length ? es.map(auditRow).join("") : '<div class="def" style="padding:12px 2px">No audit entries.</div>';
+    }).catch(function(e){ el.innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; });
+  }
+  function initAudit(){
+    var b=document.getElementById("au-refresh"); if(b) b.addEventListener("click",loadAudit);
+    var s=document.getElementById("au-susp"); if(s) s.addEventListener("change",loadAudit);
+    var m=document.getElementById("au-mut"); if(m) m.addEventListener("change",loadAudit);
+    loadAudit();
   }
 
   // ── Logs tab (recent in-memory logs) ──
