@@ -284,6 +284,42 @@ SKILLS: list[Skill] = [
         ),
     ),
 
+    # ── Edit an existing assignment: make default / enable / disable / favourite ──
+    Skill(
+        name="edit_access",
+        keywords=(
+            "make default", "set default", "set as default", "make it default",
+            "default application", "default app", "enable the role", "disable the role",
+            "enable role", "disable role", "make favourite", "make favorite",
+            "set as favourite", "mark as favourite", "make this my default",
+        ),
+        tool="updateUserApplicationRoles_put",
+        required=("userName", "applicationId", "applicationRoleId", "action"),
+        summary="edit a user's assignment (default / enable / disable / favourite)",
+        schema={
+            "type": "object",
+            "properties": {
+                "userName": {"type": "string",
+                             "description": "The user's username exactly as given (e.g. GCADMIN)."},
+                "applicationId": {"type": "string",
+                                  "description": "The application name or code (e.g. FORMULATION)."},
+                "applicationRoleId": {"type": "string",
+                                      "description": "The role name for that application (e.g. Super Admin)."},
+                "action": {"type": "string",
+                           "enum": ["make_default", "enable", "disable", "favourite", "unfavourite"],
+                           "description": "What to change: make_default, enable, disable, favourite, unfavourite."},
+            },
+            "required": ["userName", "applicationId", "applicationRoleId", "action"],
+        },
+        hint=(
+            "To edit an existing assignment, pass the USERNAME (userName), the APPLICATION "
+            "name/code (applicationId), the ROLE name (applicationRoleId), and the change as "
+            "`action` (one of make_default, enable, disable, favourite, unfavourite) — the "
+            "system reads that assignment and updates just that flag. Don't look up ids. Call "
+            "updateUserApplicationRoles_put with the three names + action."
+        ),
+    ),
+
     # ── Formulation: set up a data call (create → then guide attendees + reminder) ──
     Skill(
         name="create_data_call",

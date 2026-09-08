@@ -31,7 +31,9 @@ _ROLES_CUE = re.compile(r"\broles?\b", re.I)
 # never be hijacked as a "roles in <app>" listing just because it contains the word "role".
 _MUTATION_CUE = re.compile(
     r"\b(assign|re-?assign|reassign|grant|allocate|provision|revoke|un-?assign|de-?assign|"
-    r"remove|deactivate|activate|enable|disable|onboard)\b", re.I)
+    r"remove|deactivate|activate|enable|disable|onboard)\b"
+    r"|\b(make|set|mark)\b[^.?]{0,60}\b(default|favou?rite)\b"   # edit: make/set … default/favourite
+    r"|\bdefault (app|application)\b|\bfavou?rite\b", re.I)
 _WHO_ACCESS = re.compile(
     r"\bwho (?:can|has|have|is|are|uses?)\b|\bwhich users?\b|\b(?:list|show|how many) users?\b|"
     r"\busers? (?:in|with|for|of|that|who)\b|\bwho('?s| are)\b", re.I)

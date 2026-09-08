@@ -399,6 +399,65 @@ class ToolRegistry:
         log.bind(func="resolve_uar_ids", count=len(ids)).info(
             f"resolved remove-application child roles → {len(ids)} userApplicationRoleIds")
 
+    async def _resolve_edit_user_app_role(
+        self, arguments: dict[str, Any], request_headers: dict[str, str] | None
+    ) -> None:
+        """Edit one assignment (make default / enable / disable / favourite) via read-modify-
+        write: the tool is a full-row PUT, so find the (user + application + role) row, copy all
+        its fields, flip only the flag the `action` names, and replace the args with that body."""
+        user = str(arguments.get("userName") or arguments.get("userId") or "").strip()
+        role = str(arguments.get("applicationRoleId") or arguments.get("roleName") or "").strip()
+        action = _norm_label(arguments.get("action"))
+        await self._resolve_application_id(arguments, request_headers)
+        app = str(arguments.get("applicationId") or "").strip()
+        row = None
+        if user and role:
+            try:
+                res = await self.execute("getAllUserApplicationRoles_post", {"userName": user}, request_headers)
+                data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+                want = _norm_label(role)
+                for r in (data or []):
+                    if not isinstance(r, dict) or str(r.get("userName") or "").strip().lower() != user.lower():
+                        continue
+                    if app and str(r.get("applicationId") or "") != app:
+                        continue
+                    cands = [_norm_label(r.get("roleName")), _norm_label(r.get("role"))]
+                    if any(c and (c == want or want in c or c in want) for c in cands):
+                        row = r
+                        break
+            except Exception:  # noqa: BLE001
+                row = None
+        if not row:
+            return   # nothing matched → leave args; the PUT will no-op/error and confirm shows it
+        body = {
+            "userApplicationRoleId": row.get("userApplicationRoleId"),
+            "applicationRoleId": row.get("applicationRoleId"),
+            "userId": row.get("userId"),
+            "applicationId": row.get("applicationId"),
+            "enabled": row.get("enabled") or "Y",
+            "isDefault": row.get("isDefault") or "N",
+            "isFavourite": row.get("isFavourite") or "N",
+            "versionNumber": row.get("versionNumber") or 0,
+            "displayOrder": row.get("displayOrder") or 1,
+            "startDate": row.get("startDate") or "",
+            "endDate": row.get("endDate") or "",
+            "clientId": row.get("clientId") or "",
+        }
+        if action in ("make default", "default", "set default", "set as default"):
+            body["isDefault"] = "Y"
+        elif action in ("enable", "activate"):
+            body["enabled"] = "Y"
+        elif action in ("disable", "deactivate"):
+            body["enabled"] = "N"
+        elif action in ("favourite", "favorite", "make favourite", "favourite it"):
+            body["isFavourite"] = "Y"
+        elif action in ("unfavourite", "unfavorite", "remove favourite"):
+            body["isFavourite"] = "N"
+        arguments.clear()
+        arguments.update(body)
+        log.bind(func="resolve_edit_uar", action=action, uar=str(body["userApplicationRoleId"])).info(
+            f"edit assignment {body['userApplicationRoleId']} action={action}")
+
     async def _resolve_user_application_id(
         self, arguments: dict[str, Any], request_headers: dict[str, str] | None
     ) -> None:
@@ -497,6 +556,9 @@ class ToolRegistry:
         # Clear all of a user's roles for an application (child rows, before the app row).
         if tool_name == "deleteUserApplicationRolesById_delete":
             await self._resolve_user_application_role_ids(arguments, request_headers)
+        # Edit one assignment (default / enable / disable / favourite) via read-modify-write.
+        if tool_name == "updateUserApplicationRoles_put" and str(arguments.get("action") or "").strip():
+            await self._resolve_edit_user_app_role(arguments, request_headers)
         # Data-call flow: fund group + distribution group driven by name/code.
         if tool_name in ("saveDataCalls_post", "updateDataCalls_post"):
             await self._resolve_named_id(arguments, "fundGroupId", _FG_MAP_CACHE,
