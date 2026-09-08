@@ -561,6 +561,201 @@
     document.getElementById("wf-body").innerHTML=body||'<div class="def">No steps captured.</div>';
   }
 
+  function archSvg(){ return `<style>
+#dc-arch{overflow-x:auto}
+#dc-arch svg{display:block;width:100%;height:auto;min-width:760px;max-width:1000px;margin:0 auto}
+#dc-arch .band{fill:var(--bg);stroke:var(--line)}
+#dc-arch .node{fill:var(--panel);stroke:var(--line)}
+#dc-arch .harness{fill:var(--good-wash);stroke:var(--good)}
+#dc-arch .inference{fill:var(--accent-wash);stroke:var(--accent)}
+#dc-arch .tool{fill:var(--amber-wash);stroke:var(--amber)}
+#dc-arch .t{fill:var(--ink);font-size:12.5px}
+#dc-arch .t.m{fill:var(--ink);opacity:.62}
+#dc-arch .h{fill:var(--ink);font-size:14px;font-weight:600}
+#dc-arch .cap{fill:var(--good);font-weight:600;font-size:12.5px}
+#dc-arch .cei{fill:var(--accent);font-weight:600;font-size:12.5px}
+#dc-arch .cet{fill:var(--amber);font-weight:600;font-size:12.5px}
+#dc-arch .lbl{fill:var(--ink);opacity:.55;font-size:10.5px;letter-spacing:.13em;font-weight:600}
+#dc-arch .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;fill:var(--ink);opacity:.62;font-size:11px}
+#dc-arch .flow{stroke:var(--accent);stroke-width:2;fill:none}
+#dc-arch .flowlbl{fill:var(--accent);font-family:ui-monospace,monospace;font-size:11px;font-weight:500}
+#dc-arch .wire{stroke:var(--line);stroke-width:1.5;fill:none}
+#dc-arch .dash{stroke:var(--ink);opacity:.5;stroke-width:1.4;fill:none;stroke-dasharray:4 4}
+#dc-arch .resp{stroke:#0e9aa7;stroke-width:2;fill:none;stroke-dasharray:7 5}
+#dc-arch .resplbl{fill:#0e9aa7;font-family:ui-monospace,monospace;font-size:11px}
+#dc-arch .mk-f{fill:var(--accent)} #dc-arch .mk-w{fill:var(--line)} #dc-arch .mk-d{fill:var(--ink)} #dc-arch .mk-r{fill:#0e9aa7}
+</style><svg viewBox="0 0 1016 1176" role="img" aria-label="Layered architecture of the GC Agent: the GC360 shell widget calls Apache over HTTPS, Apache routes /api to the Spring Cloud Gateway on port 19010, the gateway forwards /reply to the FastAPI agent on port 17024. The agent's ChatService tries the harness first (flows, ecosystem_qa, meta, skills, suggestions — no GPU) and escalates the long tail to inference (Ollama qwen2.5:14b on the GB10 GPU with nomic-embed and grounding). Both call the Tool Registry of 1176 MCP tools, which reaches the MCP service on 19170, which fans out to the gc-mw Tomcat modules (formulation 19070, administration 19030, reporting 19060, support 19040, smart hub 19050, authentication 19020, gateway 19010, mcp 19170) and finally to Oracle DEV_COMPASS. A dashed return channel on the right carries the response back up the same path and streams the answer to the widget over SSE. A telemetry tap feeds the observability plane and the workflow timeline.">
+      <defs>
+        <marker id="af" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path class="mk-f" d="M0,0 L10,5 L0,10 z"/>
+        </marker>
+        <marker id="aw" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+          <path class="mk-w" d="M0,0 L10,5 L0,10 z"/>
+        </marker>
+        <marker id="ad" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path class="mk-d" d="M0,0 L10,5 L0,10 z"/>
+        </marker>
+        <marker id="ar" viewBox="0 0 10 10" refX="8.5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+          <path class="mk-r" d="M0,0 L10,5 L0,10 z"/>
+        </marker>
+      </defs>
+
+      <!-- ===== RESPONSE — return channel up the right gutter, back to the widget ===== -->
+      <path class="resp" d="M 940 1112 H 986 V 84 H 924" marker-end="url(#ar)"/>
+      <text class="resplbl" x="1004" y="600" transform="rotate(-90 1004 600)" text-anchor="middle">response — results back · answer streams (SSE)</text>
+
+      <!-- ============ CLIENT ============ -->
+      <rect class="band" x="20" y="22" width="920" height="94" rx="12"/>
+      <text class="lbl" x="38" y="44">CLIENT</text>
+      <rect class="node" x="38" y="52" width="418" height="54" rx="9"/>
+      <text class="h" x="56" y="76">GC360 Shell</text>
+      <text class="mono" x="56" y="95">single-spa host · React micro-frontends</text>
+      <rect class="node" x="474" y="52" width="448" height="54" rx="9"/>
+      <text class="h" x="492" y="76">GC Agent Widget</text>
+      <text class="mono" x="492" y="95">SELECTED_APPLICATION_CODE → X-Selected-App</text>
+
+      <!-- flow client -> edge -->
+      <line class="flow" x1="480" y1="116" x2="480" y2="140" marker-end="url(#af)"/>
+      <text class="flowlbl" x="490" y="132">HTTPS</text>
+
+      <!-- ============ EDGE ============ -->
+      <rect class="band" x="20" y="140" width="920" height="64" rx="12"/>
+      <text class="lbl" x="38" y="160">EDGE</text>
+      <rect class="node" x="38" y="150" width="884" height="44" rx="9"/>
+      <text class="h" x="56" y="178">Apache <tspan class="mono" dx="6">gc.conf</tspan></text>
+      <text class="mono" x="922" y="178" text-anchor="end">/api → gateway   ·   /gc-agent → agent (ops only)   ·   /ws → gateway</text>
+
+      <line class="flow" x1="480" y1="204" x2="480" y2="228" marker-end="url(#af)"/>
+      <text class="flowlbl" x="490" y="220">/api</text>
+
+      <!-- ============ GATEWAY ============ -->
+      <rect class="band" x="20" y="228" width="920" height="64" rx="12"/>
+      <text class="lbl" x="38" y="248">GATEWAY</text>
+      <rect class="node" x="38" y="238" width="884" height="44" rx="9"/>
+      <text class="h" x="56" y="266">Spring Cloud Gateway MVC</text>
+      <text class="mono" x="922" y="266" text-anchor="end">:19010 · DB-driven routes · agent = /reply</text>
+
+      <line class="flow" x1="480" y1="292" x2="480" y2="316" marker-end="url(#af)"/>
+      <text class="flowlbl" x="490" y="308">/reply · SSE</text>
+
+      <!-- ============ AGENT ============ -->
+      <rect class="band" x="20" y="316" width="920" height="486" rx="12"/>
+      <text class="lbl" x="38" y="340">AGENT</text>
+      <text class="mono" x="922" y="340" text-anchor="end">FastAPI · uvicorn (UDS) · :17024 · Ollama on GB10</text>
+
+      <!-- ChatService -->
+      <rect class="node" x="38" y="350" width="884" height="40" rx="9"/>
+      <text class="h" x="480" y="375" text-anchor="middle">ChatService<tspan class="t m" dx="8">— every turn tries the harness first, then the model</tspan></text>
+
+      <!-- split arrows -->
+      <line class="wire" x1="250" y1="390" x2="250" y2="414" marker-end="url(#aw)"/>
+      <line class="wire" x1="710" y1="390" x2="710" y2="414" marker-end="url(#aw)"/>
+
+      <!-- HARNESS -->
+      <rect class="harness" x="38" y="414" width="424" height="170" rx="10"/>
+      <text class="cap" x="56" y="437">① HARNESS<tspan class="t m" dx="6" font-weight="400">— deterministic · no GPU</tspan></text>
+      <text class="t" x="56" y="462">flows.py<tspan class="t m" dx="4">— guided writes (data call, onboarding)</tspan></text>
+      <text class="t" x="56" y="486">ecosystem_qa<tspan class="t m" dx="4">— apps · roles · access · my access</tspan></text>
+      <text class="t" x="56" y="510">meta<tspan class="t m" dx="4">— skill &amp; tool introspection</tspan></text>
+      <text class="t" x="56" y="534">skills<tspan class="t m" dx="4">— pin + shape the model’s tool call</tspan></text>
+      <text class="t" x="56" y="558">suggestions · balloon_store<tspan class="t m" dx="4">— per-app chips</tspan></text>
+
+      <!-- INFERENCE -->
+      <rect class="inference" x="498" y="414" width="424" height="170" rx="10"/>
+      <text class="cei" x="516" y="437">② INFERENCE<tspan class="t m" dx="6" font-weight="400">— Ollama on the GB10 GPU</tspan></text>
+      <text class="t" x="516" y="462">qwen2.5:14b<tspan class="t m" dx="4">— 100% GPU</tspan></text>
+      <text class="t" x="516" y="486">nomic-embed-text<tspan class="t m" dx="4">— RAG retrieval</tspan></text>
+      <text class="t" x="516" y="510">grounding digest<tspan class="t m" dx="4">— 26 licensed apps + current</tspan></text>
+      <text class="t" x="516" y="534">strict grounding<tspan class="t m" dx="4">— air-gapped to GC360</tspan></text>
+      <text class="t" x="516" y="558">tool-RAG<tspan class="t m" dx="4">— top-k of 1,176 tools</tspan></text>
+
+      <!-- escalate -->
+      <line class="dash" x1="462" y1="470" x2="498" y2="470" marker-end="url(#ad)"/>
+      <text class="mono" x="480" y="463" text-anchor="middle" font-size="10">escalates</text>
+
+      <!-- into tool registry -->
+      <line class="wire" x1="250" y1="584" x2="250" y2="602" marker-end="url(#aw)"/>
+      <line class="wire" x1="710" y1="584" x2="710" y2="602" marker-end="url(#aw)"/>
+
+      <!-- Tool Registry -->
+      <rect class="tool" x="38" y="602" width="884" height="42" rx="9"/>
+      <text class="cet" x="56" y="628">Tool Registry<tspan class="t m" dx="8" font-weight="400">1,176 MCP tools · name→id resolvers · license + caller scoping</tspan></text>
+
+      <!-- observability + state rail (main flow passes through the centre gap) -->
+      <rect class="node" x="38" y="658" width="416" height="132" rx="10"/>
+      <text class="lbl" x="56" y="680">OBSERVABILITY</text>
+      <text class="t" x="56" y="702">TurnMetrics<tspan class="t m" dx="4">— harness vs inference · tok/s</tspan></text>
+      <text class="t" x="56" y="724">/admin/inference<tspan class="t m" dx="4">— the three levers</tspan></text>
+      <text class="t" x="56" y="746">workflow timeline<tspan class="t m" dx="4">— click a request · live/replay</tspan></text>
+      <text class="t" x="56" y="768">/admin<tspan class="t m" dx="4">— Config · Metrics · Activity · Logs</tspan></text>
+
+      <rect class="node" x="506" y="658" width="416" height="132" rx="10"/>
+      <text class="lbl" x="524" y="680">STATE</text>
+      <text class="t" x="524" y="702">OpenSearch KV<tspan class="t m" dx="4">— sessions</tspan></text>
+      <text class="t" x="524" y="724">custom skills<tspan class="mono" dx="6">gcskill:</tspan></text>
+      <text class="t" x="524" y="746">balloon overrides<tspan class="mono" dx="6">gcballoon:</tspan></text>
+      <text class="t" x="524" y="768">flat-file fallbacks<tspan class="t m" dx="4">— gitignored</tspan></text>
+
+      <!-- telemetry tap -->
+      <path class="dash" d="M 300 644 L 300 651 L 246 651 L 246 658" marker-end="url(#ad)"/>
+      <text class="mono" x="196" y="650" font-size="10">every turn</text>
+
+      <!-- main flow through centre gap to MCP -->
+      <line class="flow" x1="480" y1="644" x2="480" y2="820" marker-end="url(#af)"/>
+      <text class="flowlbl" x="490" y="736">MCP / HTTP</text>
+
+      <!-- ============ MCP ============ -->
+      <rect class="band" x="20" y="820" width="920" height="64" rx="12"/>
+      <text class="lbl" x="38" y="840">TOOL BRIDGE</text>
+      <rect class="tool" x="38" y="830" width="884" height="44" rx="9"/>
+      <text class="cet" x="56" y="858">MCP Service<tspan class="t m" dx="8" font-weight="400">Tomcat</tspan></text>
+      <text class="mono" x="922" y="858" text-anchor="end">:19170 · /mcp-service/mcp</text>
+
+      <line class="flow" x1="480" y1="884" x2="480" y2="908" marker-end="url(#af)"/>
+      <text class="flowlbl" x="490" y="900">localhost:&lt;port&gt;</text>
+
+      <!-- ============ MIDDLEWARE ============ -->
+      <rect class="band" x="20" y="908" width="920" height="152" rx="12"/>
+      <text class="lbl" x="38" y="930">MIDDLEWARE — gc-mw.service · one Tomcat, an appBase per application</text>
+
+      <!-- module chips: 4 x 2 -->
+      <!-- row 1 -->
+      <rect class="node" x="38" y="944" width="212" height="46" rx="8"/>
+      <text class="t" x="52" y="967">Formulation</text><text class="mono" x="236" y="967" text-anchor="end">:19070</text>
+      <text class="mono" x="52" y="983">/api/formulation</text>
+      <rect class="node" x="262" y="944" width="212" height="46" rx="8"/>
+      <text class="t" x="276" y="967">Administration</text><text class="mono" x="460" y="967" text-anchor="end">:19030</text>
+      <text class="mono" x="276" y="983">/api/admin</text>
+      <rect class="node" x="486" y="944" width="212" height="46" rx="8"/>
+      <text class="t" x="500" y="967">Reporting</text><text class="mono" x="684" y="967" text-anchor="end">:19060</text>
+      <text class="mono" x="500" y="983">reports-manager</text>
+      <rect class="node" x="710" y="944" width="212" height="46" rx="8"/>
+      <text class="t" x="724" y="967">Support</text><text class="mono" x="908" y="967" text-anchor="end">:19040</text>
+      <text class="mono" x="724" y="983">support-manager</text>
+      <!-- row 2 -->
+      <rect class="node" x="38" y="1000" width="212" height="46" rx="8"/>
+      <text class="t" x="52" y="1023">Smart Hub</text><text class="mono" x="236" y="1023" text-anchor="end">:19050</text>
+      <text class="mono" x="52" y="1039">smarthub</text>
+      <rect class="node" x="262" y="1000" width="212" height="46" rx="8"/>
+      <text class="t" x="276" y="1023">Authentication</text><text class="mono" x="460" y="1023" text-anchor="end">:19020</text>
+      <text class="mono" x="276" y="1039">auth</text>
+      <rect class="node" x="486" y="1000" width="212" height="46" rx="8"/>
+      <text class="t" x="500" y="1023">Gateway</text><text class="mono" x="684" y="1023" text-anchor="end">:19010</text>
+      <text class="mono" x="500" y="1039">routes</text>
+      <rect class="tool" x="710" y="1000" width="212" height="46" rx="8"/>
+      <text class="t" x="724" y="1023">MCP</text><text class="mono" x="908" y="1023" text-anchor="end">:19170</text>
+      <text class="mono" x="724" y="1039">tool bridge</text>
+
+      <line class="flow" x1="480" y1="1060" x2="480" y2="1084" marker-end="url(#af)"/>
+      <text class="flowlbl" x="490" y="1076">JDBC</text>
+
+      <!-- ============ DATA ============ -->
+      <rect class="band" x="20" y="1084" width="920" height="64" rx="12"/>
+      <text class="lbl" x="38" y="1104">DATA</text>
+      <rect class="node" x="38" y="1094" width="884" height="44" rx="9"/>
+      <text class="h" x="56" y="1122">Oracle<tspan class="t m" dx="8" font-weight="400">DEV_COMPASS</tspan></text>
+      <text class="mono" x="922" y="1122" text-anchor="end">compass-dev-dbase · JNDI datasources</text>
+    </svg>`; }
   // ── Docs tab (live capability + architecture reference) ──
   function docsSectionHTML(){
     return '<section class="admin-section" data-tab="__docs__" role="tabpanel" id="panel-__docs__" aria-labelledby="tab-__docs__" tabindex="0">'
@@ -580,28 +775,23 @@
     d=d||{};
     var da=document.getElementById("dc-diagram"); if(da && d.diagram_url) da.href=d.diagram_url;
     // architecture — layered flow, each layer an arrow into the next
-    var arch=document.getElementById("dc-arch");
-    if(arch){ var L=d.architecture||[];
-      arch.innerHTML=L.map(function(x,i){
-        return '<div style="display:flex;gap:10px;align-items:baseline;padding:3px 0">'
-          +'<span class="pill" style="min-width:92px;text-align:center">'+esc(x.layer)+'</span>'
-          +'<span style="color:var(--fg,#111)">'+esc(x.detail)+'</span></div>'
-          +(i<L.length-1?'<div style="margin-left:44px;color:var(--muted)">↓</div>':'');
-      }).join(""); }
+    var arch=document.getElementById("dc-arch"); if(arch) arch.innerHTML=archSvg();
     // capabilities — one row per skill
     var sk=document.getElementById("dc-skills"), sc=document.getElementById("dc-count");
     var skills=d.skills||[]; if(sc) sc.textContent="("+skills.length+")";
-    if(sk) sk.innerHTML=skills.map(function(s){
-      return '<div style="padding:9px 0;border-top:1px solid var(--line-soft,#eee)">'
-        +'<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">'
-        +'<b style="font-size:14px">'+esc(s.summary)+'</b>'
-        +(s.mutation?pill("writes","warn"):pill("read"))
+    if(sk) sk.innerHTML='<div class="cards">'+ (skills.map(function(s){
+      return '<div class="card">'
+        +'<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">'
+        +'<b style="font-size:14px;text-transform:capitalize">'+esc(s.summary)+'</b>'
+        +'<span class="pill" style="'+(s.mutation
+            ?'background:var(--amber-wash);color:var(--amber);border-color:#f3ddc0'
+            :'background:var(--good-wash);color:var(--good);border-color:#b6e3c4')+'">'+(s.mutation?'writes':'read')+'</span>'
         +(s.custom?pill("custom"):"")
         +'</div>'
-        +'<div class="def" style="margin-top:3px">Say: '+(s.examples||[]).slice(0,4).map(function(e){return '“'+esc(e)+'”';}).join(", ")+'</div>'
-        +((s.needs&&s.needs.length)?'<div class="def" style="margin-top:2px">Needs: '+s.needs.map(esc).join(", ")+'</div>':'')
-        +'<div class="def mono" style="margin-top:2px;opacity:.7">'+esc(s.tool)+'</div></div>';
-    }).join("") || '<div class="def">No skills registered.</div>';
+        +'<div class="def" style="margin-top:7px">'+(s.examples||[]).slice(0,4).map(function(e){return '<span class="pill" style="margin:2px 4px 0 0">'+esc(e)+'</span>';}).join("")+'</div>'
+        +((s.needs&&s.needs.length)?'<div class="def" style="margin-top:6px">needs '+s.needs.map(esc).join(" · ")+'</div>':'')
+        +'<div class="def mono" style="margin-top:6px;opacity:.6;font-size:11px">'+esc(s.tool)+'</div></div>';
+    }).join("") || '<div class="def">No skills registered.</div>') +'</div>';
     var it=document.getElementById("dc-intents");
     if(it) it.innerHTML=(d.intents||[]).map(function(x){return '<div style="padding:3px 0"><b>'+esc(x[0])+'</b> <span class="def">— '+esc(x[1])+'</span></div>';}).join("");
     var fl=document.getElementById("dc-flows");

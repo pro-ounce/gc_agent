@@ -29,11 +29,16 @@ _ADMIN_HTML = _STATIC_DIR / "admin.html"
 _ADMIN_JS = _STATIC_DIR / "admin.js"
 
 
+# No-store so a deploy's new admin UI shows immediately (the console must never be a stale
+# cached copy after we ship a change).
+_NOCACHE = {"Cache-Control": "no-store, must-revalidate"}
+
+
 @router.get("/admin", include_in_schema=False)
 async def admin_page(request: Request):
     _guard(request)
     if _ADMIN_HTML.exists():
-        return FileResponse(str(_ADMIN_HTML))
+        return FileResponse(str(_ADMIN_HTML), headers=_NOCACHE)
     return JSONResponse({"detail": "admin UI not found"}, status_code=404)
 
 
@@ -43,7 +48,7 @@ async def admin_js(request: Request):
     # RBAC-exempt; also lets the strict CSP keep script-src 'self' (no inline).
     _guard(request)
     if _ADMIN_JS.exists():
-        return FileResponse(str(_ADMIN_JS), media_type="application/javascript")
+        return FileResponse(str(_ADMIN_JS), media_type="application/javascript", headers=_NOCACHE)
     return JSONResponse({"detail": "admin.js not found"}, status_code=404)
 
 
