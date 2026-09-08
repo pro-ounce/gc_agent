@@ -53,7 +53,8 @@ def _chip(label: str, send: str | None = None, icon: str | None = None) -> dict[
 _FLOWS = ("onboard", "create_user", "create_skill", "data_call")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _SKILL_INTENT_RE = re.compile(
-    r"\b(create|add|make|build|teach|define|register)\b.{0,20}\bskill\b", re.I)
+    r"\b(create|add|make|build|teach|define|register)\b.{0,20}\b(skill|capabilit(y|ies)|"
+    r"new (action|command|ability))\b", re.I)
 
 # ── Fail-safe: universal exit commands, honoured at ANY stage of ANY flow ───────
 # Standalone commands (whole message ≈ one of these) always cancel.
@@ -179,17 +180,19 @@ def start_onboarding(session: Any, first_name: str | None, user_name: str, user_
     )
 
 
-def maybe_start(session: Any, message: str) -> FlowResult | None:
-    """Start a guided flow from a fresh intent (when none is active). Currently: a
-    create-user request WITHOUT enough detail (no email present) opens the guided intake;
-    a fully-detailed 'create user … email …' message is left to the normal skill path."""
+def maybe_start(session: Any, message: str, skill: Any = None) -> FlowResult | None:
+    """Start a guided flow from a fresh intent (when none is active). A create-user request
+    WITHOUT enough detail (no email present) opens the guided intake; a fully-detailed
+    'create user … email …' message is left to the normal skill path. `skill` is the
+    already-resolved skill for this turn (keyword OR semantic match) — passed so a paraphrase
+    like 'onboard a new person' opens the guided intake too."""
     if is_active(session):
         return None
     # Skill authoring intent takes precedence ("create a skill" must not read as create-user).
     if _SKILL_INTENT_RE.search(message or ""):
         return start_create_skill(session, message or "")
     from ..services import skills
-    sk = skills.match(message or "")
+    sk = skill if skill is not None else skills.match(message or "")
     if sk and sk.name == "create_user" and not re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", message or ""):
         return start_create(session)
     return None

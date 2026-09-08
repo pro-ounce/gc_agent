@@ -223,6 +223,7 @@ class ChatService:
 
         # Guided flow active (e.g. onboarding)? Advance it deterministically — no LLM.
         # Or a fresh intent (create user without full detail) may START a guided intake.
+        skill = None
         if flows.is_active(session):
             fr = await flows.handle(session, user_message, request_headers)
             if fr is not None:
@@ -235,14 +236,18 @@ class ChatService:
                 src = "ecosystem"
             if mr is not None:
                 return self._flow_response(session, mr, source=src, question=user_message)
-            started = flows.maybe_start(session, user_message)
+            # Resolve the skill once (keyword, then semantic fallback for paraphrases) and
+            # thread it into flow-start so 'onboard a new person' opens the guided intake too.
+            skill = skills.match(user_message) or await skills.match_semantic(user_message)
+            started = flows.maybe_start(session, user_message, skill=skill)
             if started is not None:
                 return self._flow_response(session, started, source="flow", question=user_message)
 
         system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT)
         system = await self._ground_ecosystem(system, request_headers)
         # Skill? Pin its backing action tool + ground the model on the required fields.
-        skill = skills.match(user_message)
+        if skill is None:                       # active-flow fall-through path: cheap keyword match
+            skill = skills.match(user_message)
         if skill:
             system = system + skills.grounding(skill)
         # Tool-RAG: pick only tools relevant to this query (falls back to all — see select_tools).
@@ -522,6 +527,7 @@ class ChatService:
 
         # Guided flow active (e.g. onboarding)? Advance it deterministically — no LLM.
         # Or a fresh intent (create user without full detail) may START a guided intake.
+        skill = None
         if flows.is_active(session):
             fr = await flows.handle(session, user_message, request_headers)
             if fr is not None:
@@ -542,7 +548,9 @@ class ChatService:
             if mr is None:
                 mr = await ecosystem_qa.handle(user_message, request_headers)
                 src = "ecosystem"
-            started = mr or flows.maybe_start(session, user_message)
+            if mr is None:      # resolve skill (keyword → semantic) for flow-start + the model
+                skill = skills.match(user_message) or await skills.match_semantic(user_message)
+            started = mr or flows.maybe_start(session, user_message, skill=skill)
             if started is not None:
                 chunks = self._flow_chunks(session, started)
                 turn.answered_by = src if mr is not None else "flow"
@@ -555,7 +563,8 @@ class ChatService:
 
         system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT)
         system = await self._ground_ecosystem(system, request_headers)
-        skill = skills.match(user_message)
+        if skill is None:                       # active-flow fall-through path: cheap keyword match
+            skill = skills.match(user_message)
         turn.grounded = runtime_config.get_bool("AGENT_ECOSYSTEM_GROUNDING")
         turn.skill = skill.name if skill else ""
         if skill:

@@ -107,3 +107,34 @@ async def classify(query: str, threshold: float = 0.66) -> tuple[str | None, flo
     if best_score >= threshold:
         return best, round(best_score, 3)
     return None, round(best_score, 3)
+
+
+async def classify_among(query: str, groups: dict[str, list[str]], threshold: float = 0.66,
+                         cache: dict[str, list[list[float]]] | None = None) -> tuple[str | None, float]:
+    """Generic semantic match: pick the label whose exemplar phrases are closest to `query`.
+    `groups` is {label: [exemplar phrases]}. Pass a `cache` dict (owned by the caller) to reuse
+    exemplar vectors across calls; the caller clears it when its label set changes (e.g. a new
+    skill was registered). Used by skill trigger matching."""
+    q = (query or "").strip()
+    if len(q) < 3 or not groups:
+        return None, 0.0
+    store = cache if cache is not None else {}
+    for name, phrases in groups.items():
+        if name not in store:
+            vs: list[list[float]] = []
+            for p in phrases:
+                v = await embed(p)
+                if v:
+                    vs.append(v)
+            store[name] = vs
+    qv = await embed(q)
+    if not qv:
+        return None, 0.0
+    best, best_score = None, 0.0
+    for name, vs in store.items():
+        score = max((_cos(qv, ev) for ev in vs), default=0.0)
+        if score > best_score:
+            best, best_score = name, score
+    if best_score >= threshold:
+        return best, round(best_score, 3)
+    return None, round(best_score, 3)

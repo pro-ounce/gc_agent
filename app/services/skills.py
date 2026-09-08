@@ -92,9 +92,10 @@ SKILLS: list[Skill] = [
     Skill(
         name="create_user",
         keywords=(
-            "create user", "create a user", "create an user", "add user", "add a user",
+            "create user", "create a user", "onboard a user", "onboard a new user",
+            "onboard someone", "add a user", "create an user", "add user",
             "new user", "register user", "register a user", "onboard user",
-            "create account", "create an account", "set up a user",
+            "create account", "create an account", "set up a user", "set up a new user",
         ),
         tool="addUser_post",
         # The user provides these mandatory basic fields; the model asks for any missing.
@@ -300,6 +301,34 @@ def by_tool(tool_name: str) -> Skill | None:
         if s.tool == tool_name:
             return s
     return None
+
+
+def by_name(name: str) -> Skill | None:
+    for s in SKILLS:
+        if s.name == name:
+            return s
+    return None
+
+
+# Semantic (embedding) fallback for skill triggers — catches paraphrases the keyword match
+# misses ("set up a data collection" → create_data_call, "onboard a new person" → create_user).
+# Exemplars are each skill's summary + its keywords; vectors are cached and rebuilt when the
+# skill set changes (a custom skill was registered). Cheap: one query embed per fallback.
+_SEM_CACHE: dict[str, list] = {}
+_SEM_VER: int | None = None
+
+
+async def match_semantic(query: str, threshold: float = 0.66) -> Skill | None:
+    global _SEM_VER
+    from . import intent as _intent
+    ver = len(SKILLS)
+    if _SEM_VER != ver:
+        _SEM_CACHE.clear()
+        _SEM_VER = ver
+    groups = {s.name: [s.summary or s.name, *list(s.keywords[:6])]
+              for s in SKILLS if (s.summary or s.keywords)}
+    name, _score = await _intent.classify_among(query, groups, threshold, _SEM_CACHE)
+    return by_name(name) if name else None
 
 
 def grounding(s: Skill) -> str:
