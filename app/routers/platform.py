@@ -227,10 +227,13 @@ async def agent_questions(
     # header (sent on every request). Always returns a set (default when module is unknown).
     module = (module or "").strip() or _module_from_header(request)
     from ..services.suggestions import module_suggestions
-    balloons = await module_suggestions(module, _forward_headers(request))
-    log.bind(func="questions", mod=module or "(none)", balloons=len(balloons),
+    from ..services.ecosystem import selected_role as _sel_role
+    fheaders = _forward_headers(request)
+    balloons = await module_suggestions(module, fheaders)
+    role = _sel_role(fheaders)
+    log.bind(func="questions", mod=module or "(none)", role=role or "(none)", balloons=len(balloons),
              src="query" if request.query_params.get("module") else "header").info(
-        f"bootstrap balloons: module={module or '(none)'} → {len(balloons)} balloons")
+        f"bootstrap balloons: module={module or '(none)'} role={role or '(none)'} → {len(balloons)} balloons")
     return ApiResponse.ok(message="ok", data={
         "questions": list(_SUGGESTIONS),
         "balloons": balloons,

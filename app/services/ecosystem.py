@@ -230,6 +230,43 @@ def selected_app_code(headers: dict[str, str] | None) -> str:
         return raw.strip()
 
 
+_NO_ROLE = {"", "null", "landing", "none", "undefined"}
+
+
+def selected_role(headers: dict[str, str] | None) -> str:
+    """The currently-active role from the X-Selected-Role header (base64 of the role
+    name/code, parallel to X-Selected-App). Empty when none / the LANDING sentinel."""
+    if not headers:
+        return ""
+    raw = headers.get("X-Selected-Role") or headers.get("x-selected-role") or ""
+    if not raw:
+        return ""
+    try:
+        val = base64.b64decode(raw).decode("utf-8", "ignore").strip()
+    except Exception:  # noqa: BLE001
+        val = raw.strip()
+    return "" if val.lower() in _NO_ROLE else val
+
+
+async def role_in_app(app: dict[str, Any], value: str, headers: dict[str, str] | None) -> str | None:
+    """Resolve a selected-role value (name, code, or id) to its display roleName within an
+    application, so the agent can name the active role cleanly. Falls back to the raw value."""
+    if not value:
+        return None
+    want = _norm(value)
+    aid = str(app.get("id") or "")
+    for r in await app_roles(headers):
+        if str(r.get("applicationId") or "") != aid:
+            continue
+        name = str(r.get("roleName") or r.get("role") or "").strip()
+        if not name:
+            continue
+        if (_norm(name) == want or _norm(r.get("role")) == want
+                or str(r.get("applicationRoleId") or "") == value):
+            return name
+    return value
+
+
 async def grounding_digest(headers: dict[str, str] | None, limit: int = 30) -> str:
     """A compact, current snapshot of the ecosystem for the system prompt: the real
     applications (so the model never invents one), plus the currently-selected application
@@ -256,6 +293,14 @@ async def grounding_digest(headers: dict[str, str] | None, limit: int = 30) -> s
                 line += f" — {desc.rstrip('.')}"
             lines.append(line + ".")
             lines.append(f"Its roles: {rnames}.")
+            # The ACTIVE role: capabilities differ per role, and the backend already scopes
+            # tool results to it — so tell the model which role the user is acting in.
+            active = await role_in_app(app, selected_role(headers), headers)
+            if active:
+                lines.append(
+                    f"Current role: the user is acting as **{active}** in {app['name']}. "
+                    f"Answer for THIS role — its permissions and menus — and note that what they "
+                    f"can do changes with the selected role.")
             if wf and wf.get("workflow"):
                 lines.append("Workflow: " + wf["workflow"].replace("**", ""))
     lines.append(
