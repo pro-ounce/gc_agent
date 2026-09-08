@@ -633,7 +633,10 @@ class ChatService:
                 elif _ev[0] == "result":
                     render_out, render_name = _ev[1], _ev[2]
         blocks = blocks_from_outputs([(render_name, render_out if result.success else result.error, result.success)])
-        lead = lead_in(blocks) if blocks else (output or "Done.")
+        lead = (lead_in(blocks) if blocks else "").strip()
+        if not lead or lead == "—":            # never return an empty/blank bubble to the widget
+            lead = ("Done." if result.success
+                    else f"That didn't go through — {result.error or 'the platform rejected the request'}.")
         suggestions: list[Suggestion] = []
         if result.success:
             lead, suggestions = await self._post_confirm_flow(session, tool_name, tool_args, lead, request_headers)

@@ -32,6 +32,16 @@ log = get_logger(__name__)
 # first authenticated chat. The raw MCP payloads round-trip via Tool.from_mcp_payload.
 _CATALOG_KEY = "mcp:tools:catalog"
 
+def _norm_label(s: Any) -> str:
+    """Normalise a name/code for matching: lowercase, and treat spaces, underscores and
+    hyphens as equivalent — so 'SUPER_ADMIN', 'Super Admin' and 'super-admin' all compare
+    equal. (The role list carries both a display roleName and an underscored code.)"""
+    out = str(s or "").strip().lower()
+    for ch in ("_", "-"):
+        out = out.replace(ch, " ")
+    return " ".join(out.split())
+
+
 # Cache for deterministic application code/name → id resolution (see _resolve_application_id).
 _APP_MAP_CACHE: dict[str, Any] = {"map": None, "ts": 0.0}
 _APP_MAP_TTL = 300.0  # seconds
@@ -290,7 +300,7 @@ class ToolRegistry:
         val = arguments.get("applicationRoleId")
         if val is None or not str(val).strip() or str(val).strip().isdigit():
             return
-        role_name = str(val).strip().lower()
+        want = _norm_label(val)          # match display name OR code ("SUPER_ADMIN" == "Super Admin")
         app_id = arguments.get("applicationId")
         if not str(app_id or "").strip() or not str(app_id).strip().isdigit():
             return
@@ -299,13 +309,14 @@ class ToolRegistry:
             data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
             if isinstance(data, list):
                 for r in data:
-                    nm = str(r.get("roleName") or r.get("role") or r.get("name") or "").strip().lower()
-                    if nm and (nm == role_name or role_name in nm or nm in role_name):
+                    cands = [_norm_label(r.get("roleName")), _norm_label(r.get("role")),
+                             _norm_label(r.get("name")), _norm_label(r.get("roleCode"))]
+                    if any(c and (c == want or want in c or c in want) for c in cands):
                         rid = r.get("applicationRoleId") or r.get("id") or r.get("roleId")
                         if rid is not None:
                             arguments["applicationRoleId"] = rid
-                            log.bind(func="resolve_role_id", frm=role_name, to=str(rid)).info(
-                                f"resolved role '{role_name}' → {rid}"
+                            log.bind(func="resolve_role_id", frm=str(val), to=str(rid)).info(
+                                f"resolved role '{val}' → {rid}"
                             )
                             return
         except Exception:  # noqa: BLE001
@@ -340,8 +351,9 @@ class ToolRegistry:
                     continue
                 if app and str(r.get("applicationId") or "") != app:
                     continue
-                rn = str(r.get("roleName") or r.get("role") or "").strip().lower()
-                if rn == role.lower() or role.lower() in rn:
+                want = _norm_label(role)
+                cands = [_norm_label(r.get("roleName")), _norm_label(r.get("role"))]
+                if any(c and (c == want or want in c or c in want) for c in cands):
                     found = r.get("userApplicationRoleId")
                     break
         except Exception:  # noqa: BLE001 — best-effort
