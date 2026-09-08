@@ -206,6 +206,47 @@ SKILLS: list[Skill] = [
         ),
     ),
 
+    # ── Remove access: un-assign a user's application role (paired with assign_access) ──
+    Skill(
+        name="remove_access",
+        keywords=(
+            "remove role", "remove access", "unassign", "un-assign", "revoke role",
+            "revoke access", "revoke the role", "remove the role", "take away access",
+            "remove application", "remove app", "deassign", "de-assign",
+            "remove role from user", "revoke", "strip access",
+        ),
+        tool="deleteUserApplicationRoleById_delete",
+        required=("userName", "applicationId", "applicationRoleId"),
+        summary="remove (un-assign) a user's application role",
+        # Slim schema: the three NAMES; the registry finds the assignment's join-row id and
+        # deletes it (deleteUserApplicationRoleById keys off userApplicationRoleId).
+        schema={
+            "type": "object",
+            "properties": {
+                "userName": {
+                    "type": "string",
+                    "description": "The user's username exactly as given (e.g. GCADMIN).",
+                },
+                "applicationId": {
+                    "type": "string",
+                    "description": "The application name or code (e.g. FORMULATION).",
+                },
+                "applicationRoleId": {
+                    "type": "string",
+                    "description": "The role name to remove for that application (e.g. Super Admin).",
+                },
+            },
+            "required": ["userName", "applicationId", "applicationRoleId"],
+        },
+        hint=(
+            "To un-assign, pass the USERNAME (userName), the APPLICATION name/code "
+            "(applicationId), and the ROLE name to remove (applicationRoleId) EXACTLY as given "
+            "— the system finds that exact assignment and deletes it. Do NOT look up any id and "
+            "do NOT ask for one; call deleteUserApplicationRoleById_delete with the three names. "
+            "Only ask if the user, application, or role is missing."
+        ),
+    ),
+
     # ── Formulation: set up a data call (create → then guide attendees + reminder) ──
     Skill(
         name="create_data_call",

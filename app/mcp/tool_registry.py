@@ -311,6 +311,48 @@ class ToolRegistry:
         except Exception:  # noqa: BLE001
             pass
 
+    async def _resolve_user_app_role_id(
+        self, arguments: dict[str, Any], request_headers: dict[str, str] | None
+    ) -> None:
+        """Un-assign is driven by NAMES (user + application + role), but the delete tool keys
+        off the assignment's join-row id (userApplicationRoleId). Find that exact row in the
+        user's assignments and set the id, dropping the helper name fields so the delete call
+        carries only the id. No match → leave it (the tool then reports nothing to remove)."""
+        if str(arguments.get("userApplicationRoleId") or "").strip().isdigit():
+            return
+        user = str(arguments.get("userName") or arguments.get("userId") or "").strip()
+        role = str(arguments.get("applicationRoleId") or arguments.get("roleName") or "").strip()
+        await self._resolve_application_id(arguments, request_headers)   # application name → id
+        app = str(arguments.get("applicationId") or "").strip()
+        helpers = ("userName", "username", "userId", "applicationId", "applicationRoleId", "roleName")
+        if not (user and role):
+            for k in helpers:
+                arguments.pop(k, None)
+            return
+        found = None
+        try:
+            res = await self.execute("getAllUserApplicationRoles_post", {"userName": user}, request_headers)
+            data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+            for r in (data or []):
+                if not isinstance(r, dict):
+                    continue
+                if str(r.get("userName") or "").strip().lower() != user.lower():
+                    continue
+                if app and str(r.get("applicationId") or "") != app:
+                    continue
+                rn = str(r.get("roleName") or r.get("role") or "").strip().lower()
+                if rn == role.lower() or role.lower() in rn:
+                    found = r.get("userApplicationRoleId")
+                    break
+        except Exception:  # noqa: BLE001 — best-effort
+            found = None
+        for k in helpers:
+            arguments.pop(k, None)
+        if found is not None:
+            arguments["userApplicationRoleId"] = found
+            log.bind(func="resolve_uar_id", user=user, role=role, to=str(found)).info(
+                f"resolved un-assign {user}/{role} → userApplicationRoleId {found}")
+
     @staticmethod
     def _caller_user_id(request_headers: dict[str, str] | None) -> str | None:
         """The current user's id from the caller/forwarded JWT (sub claim)."""
@@ -369,6 +411,9 @@ class ToolRegistry:
         if tool_name in ("addUserApplicationAndRole_post", "addUserApplicationRole_post"):
             await self._resolve_user_id(arguments, request_headers)
             await self._resolve_role_id(arguments, request_headers)
+        # Un-assign: (user, application, role) names → the assignment's join-row id.
+        if tool_name == "deleteUserApplicationRoleById_delete":
+            await self._resolve_user_app_role_id(arguments, request_headers)
         # Data-call flow: fund group + distribution group driven by name/code.
         if tool_name in ("saveDataCalls_post", "updateDataCalls_post"):
             await self._resolve_named_id(arguments, "fundGroupId", _FG_MAP_CACHE,
