@@ -26,6 +26,12 @@ _LIST_APPS = re.compile(
     r"\b(what|which|list|show|see|all|how many)\b[^.?]{0,30}\bapplications?\b|"
     r"\bapplication (list|catalog(ue)?)\b|\bwhat('?s| is) in the (platform|ecosystem|system)\b", re.I)
 _ROLES_CUE = re.compile(r"\broles?\b", re.I)
+# This module is READ-ONLY. A message with an assignment/mutation verb ("assign role X to
+# user Y", "grant access", "revoke …") must fall straight through to the skill/flow path —
+# never be hijacked as a "roles in <app>" listing just because it contains the word "role".
+_MUTATION_CUE = re.compile(
+    r"\b(assign|re-?assign|reassign|grant|allocate|provision|revoke|un-?assign|de-?assign|"
+    r"remove|deactivate|activate|enable|disable|onboard)\b", re.I)
 _WHO_ACCESS = re.compile(
     r"\bwho (?:can|has|have|is|are|uses?)\b|\bwhich users?\b|\b(?:list|show|how many) users?\b|"
     r"\busers? (?:in|with|for|of|that|who)\b|\bwho('?s| are)\b", re.I)
@@ -47,6 +53,11 @@ _STOP = {"i", "you", "we", "my", "me", "us", "the", "a", "an", "this", "that", "
 async def handle(message: str, headers: dict[str, str] | None) -> FlowResult | None:
     msg = (message or "").strip()
     if not msg:
+        return None
+
+    # Read-only module: never intercept a mutation (assign/grant/revoke a role, etc.) — let it
+    # reach the assign_access skill / guided flow instead of answering with a role listing.
+    if _MUTATION_CUE.search(msg):
         return None
 
     if _MY_ACCESS.search(msg):

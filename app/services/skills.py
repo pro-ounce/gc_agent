@@ -158,10 +158,12 @@ SKILLS: list[Skill] = [
     Skill(
         name="assign_access",
         keywords=(
-            "assign access", "assign application", "assign app", "assign role",
-            "give access", "grant access", "grant role", "add application to user",
+            "assign role", "assign access", "assign application", "allocate role",
+            "allocate access", "grant role", "grant access", "reassign role",
+            "assign app", "give access", "add application to user",
             "add role to user", "provide access", "give the user access",
             "assign the application", "assign this application",
+            "allocate the role", "give the user the role",
         ),
         tool="addUserApplicationAndRole_post",
         required=("userId", "applicationId", "applicationRoleId"),
