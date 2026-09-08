@@ -365,6 +365,71 @@ class ToolRegistry:
             log.bind(func="resolve_uar_id", user=user, role=role, to=str(found)).info(
                 f"resolved un-assign {user}/{role} → userApplicationRoleId {found}")
 
+    async def _resolve_user_application_role_ids(
+        self, arguments: dict[str, Any], request_headers: dict[str, str] | None
+    ) -> None:
+        """Removing a whole application means clearing its child roles FIRST (FK order). Given
+        (user + application) names, collect ALL of that user's role join-ids for the app and
+        set them as the userApplicationRoleIds array; drop helper name fields."""
+        if isinstance(arguments.get("userApplicationRoleIds"), list) and arguments["userApplicationRoleIds"]:
+            return
+        user = str(arguments.get("userName") or arguments.get("userId") or "").strip()
+        await self._resolve_application_id(arguments, request_headers)
+        app = str(arguments.get("applicationId") or "").strip()
+        ids: list[Any] = []
+        if user:
+            try:
+                res = await self.execute("getAllUserApplicationRoles_post", {"userName": user}, request_headers)
+                data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+                for r in (data or []):
+                    if not isinstance(r, dict):
+                        continue
+                    if str(r.get("userName") or "").strip().lower() != user.lower():
+                        continue
+                    if app and str(r.get("applicationId") or "") != app:
+                        continue
+                    uar = r.get("userApplicationRoleId")
+                    if uar is not None:
+                        ids.append(uar)
+            except Exception:  # noqa: BLE001
+                ids = []
+        for k in ("userName", "username", "userId", "applicationId", "applicationRoleId", "roleName"):
+            arguments.pop(k, None)
+        arguments["userApplicationRoleIds"] = ids
+        log.bind(func="resolve_uar_ids", count=len(ids)).info(
+            f"resolved remove-application child roles → {len(ids)} userApplicationRoleIds")
+
+    async def _resolve_user_application_id(
+        self, arguments: dict[str, Any], request_headers: dict[str, str] | None
+    ) -> None:
+        """Remove-whole-application is driven by (user + application) NAMES, but the delete tool
+        keys off the user↔application join id (userApplicationId). Resolve user→id and app→id,
+        find that user's row for the application, set userApplicationId, drop helper fields."""
+        if str(arguments.get("userApplicationId") or "").strip().isdigit():
+            return
+        await self._resolve_user_id(arguments, request_headers)          # userName → userId
+        await self._resolve_application_id(arguments, request_headers)   # app name → applicationId
+        uid = str(arguments.get("userId") or "").strip()
+        app = str(arguments.get("applicationId") or "").strip()
+        helpers = ("userName", "username", "userId", "applicationId", "applicationRoleId", "roleName")
+        found = None
+        if uid.isdigit() and app:
+            try:
+                res = await self.execute("getUserAppsByUserId_get", {"userId": uid}, request_headers)
+                data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+                for r in (data or []):
+                    if isinstance(r, dict) and str(r.get("applicationId") or "") == app:
+                        found = r.get("userApplicationId")
+                        break
+            except Exception:  # noqa: BLE001
+                found = None
+        for k in helpers:
+            arguments.pop(k, None)
+        if found is not None:
+            arguments["userApplicationId"] = found
+            log.bind(func="resolve_ua_id", to=str(found)).info(
+                f"resolved remove-application → userApplicationId {found}")
+
     @staticmethod
     def _caller_user_id(request_headers: dict[str, str] | None) -> str | None:
         """The current user's id from the caller/forwarded JWT (sub claim)."""
@@ -423,9 +488,15 @@ class ToolRegistry:
         if tool_name in ("addUserApplicationAndRole_post", "addUserApplicationRole_post"):
             await self._resolve_user_id(arguments, request_headers)
             await self._resolve_role_id(arguments, request_headers)
-        # Un-assign: (user, application, role) names → the assignment's join-row id.
+        # Un-assign a role: (user, application, role) names → the assignment's join-row id.
         if tool_name == "deleteUserApplicationRoleById_delete":
             await self._resolve_user_app_role_id(arguments, request_headers)
+        # Remove a whole application from a user: (user, application) names → userApplicationId.
+        if tool_name == "deleteUserApplicationById_delete":
+            await self._resolve_user_application_id(arguments, request_headers)
+        # Clear all of a user's roles for an application (child rows, before the app row).
+        if tool_name == "deleteUserApplicationRolesById_delete":
+            await self._resolve_user_application_role_ids(arguments, request_headers)
         # Data-call flow: fund group + distribution group driven by name/code.
         if tool_name in ("saveDataCalls_post", "updateDataCalls_post"):
             await self._resolve_named_id(arguments, "fundGroupId", _FG_MAP_CACHE,

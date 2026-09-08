@@ -210,10 +210,9 @@ SKILLS: list[Skill] = [
     Skill(
         name="remove_access",
         keywords=(
-            "remove role", "remove access", "unassign", "un-assign", "revoke role",
-            "revoke access", "revoke the role", "remove the role", "take away access",
-            "remove application", "remove app", "deassign", "de-assign",
-            "remove role from user", "revoke", "strip access",
+            "remove role", "unassign role", "un-assign role", "revoke role",
+            "remove the role", "revoke the role", "deassign role", "de-assign role",
+            "remove role from user", "take away the role", "strip the role", "unassign the role",
         ),
         tool="deleteUserApplicationRoleById_delete",
         required=("userName", "applicationId", "applicationRoleId"),
@@ -244,6 +243,44 @@ SKILLS: list[Skill] = [
             "— the system finds that exact assignment and deletes it. Do NOT look up any id and "
             "do NOT ask for one; call deleteUserApplicationRoleById_delete with the three names. "
             "Only ask if the user, application, or role is missing."
+        ),
+    ),
+
+    # ── Remove a whole application from a user (distinct from removing one role) ──
+    Skill(
+        name="remove_application",
+        keywords=(
+            "remove application", "remove the application", "remove app", "remove the app",
+            "revoke application", "revoke the application", "unassign application",
+            "remove access to", "revoke access to", "take away the application",
+            "remove application from user", "remove user from application",
+        ),
+        # Entry clears the CHILD role rows first, then the chain removes the application row
+        # (parent) — the backend enforces that FK order.
+        tool="deleteUserApplicationRolesById_delete",
+        required=("userName", "applicationId"),
+        summary="remove a whole application from a user (all their roles, then the application)",
+        schema={
+            "type": "object",
+            "properties": {
+                "userName": {"type": "string",
+                             "description": "The user's username exactly as given (e.g. GCADMIN)."},
+                "applicationId": {"type": "string",
+                                  "description": "The application name or code to remove (e.g. FORMULATION)."},
+            },
+            "required": ["userName", "applicationId"],
+        },
+        then=(
+            Step(tool="deleteUserApplicationById_delete",
+                 args={"userName": "$userName", "applicationId": "$applicationId"},
+                 render=True, label="Removing the application"),
+        ),
+        hint=(
+            "This removes the user's ENTIRE access to an application. Pass the USERNAME (userName) "
+            "and the APPLICATION name/code (applicationId) EXACTLY as given — the system first "
+            "clears all their roles in that application and then removes the application itself "
+            "(that FK order is required). Don't look up ids or ask for one; call the tool with the "
+            "two names. To remove a single ROLE (not the whole app), that's a different action."
         ),
     ),
 
