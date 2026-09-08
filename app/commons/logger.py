@@ -28,6 +28,9 @@ _trace_id_ctx: ContextVar[str] = ContextVar("trace_id", default="")
 # Audit context (FedRAMP): who fired the request and from where — stamped on every log record.
 _user_name_ctx: ContextVar[str] = ContextVar("user_name", default="")
 _client_ip_ctx: ContextVar[str] = ContextVar("client_ip", default="")
+# Client fingerprint for snooping/intrusion detection: browser+OS (User-Agent) and origin.
+_user_agent_ctx: ContextVar[str] = ContextVar("user_agent", default="")
+_origin_ctx: ContextVar[str] = ContextVar("origin", default="")
 
 
 def set_request_context(
@@ -36,6 +39,8 @@ def set_request_context(
     user_id: str = "",
     trace_id: str = "",
     client_ip: str = "",
+    user_agent: str = "",
+    origin: str = "",
 ) -> str:
     rid = request_id or str(uuid.uuid4())
     _request_id_ctx.set(rid)
@@ -44,6 +49,10 @@ def set_request_context(
     _trace_id_ctx.set(trace_id)
     if client_ip:
         _client_ip_ctx.set(client_ip)
+    if user_agent:
+        _user_agent_ctx.set(user_agent[:400])
+    if origin:
+        _origin_ctx.set(origin[:200])
     return rid
 
 
@@ -197,7 +206,8 @@ class _RingHandler(logging.Handler):
             # the persisted trail answers FedRAMP's who-did-what-when-from-where without gaps.
             for key, ctx in (("request_id", _request_id_ctx), ("session_id", _session_id_ctx),
                              ("user_id", _user_id_ctx), ("user_name", _user_name_ctx),
-                             ("trace_id", _trace_id_ctx), ("client_ip", _client_ip_ctx)):
+                             ("trace_id", _trace_id_ctx), ("client_ip", _client_ip_ctx),
+                             ("user_agent", _user_agent_ctx), ("origin", _origin_ctx)):
                 val = ctx.get()
                 if val and key not in fields:
                     fields[key] = val

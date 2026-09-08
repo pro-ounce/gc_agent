@@ -146,6 +146,44 @@ async def admin_turns(request: Request):
     return {"turns": _recent_turns(limit)}
 
 
+def _parse_ua(ua: str) -> tuple[str, str]:
+    """Rough browser + OS from a User-Agent — enough to spot an unexpected client."""
+    u = (ua or "").lower()
+    if not u:
+        return "", ""
+    browser = ("curl/script" if ("curl" in u or "python-" in u or "httpx" in u or "wget" in u)
+               else "Edge" if "edg" in u
+               else "Chrome" if ("chrome" in u or "crios" in u)
+               else "Firefox" if "firefox" in u
+               else "Safari" if "safari" in u
+               else "Unknown")
+    osn = ("Windows" if "windows" in u
+           else "iOS" if ("iphone" in u or "ipad" in u)
+           else "macOS" if ("mac os" in u or "macintosh" in u)
+           else "Android" if "android" in u
+           else "Linux" if "linux" in u
+           else "Unknown")
+    return browser, osn
+
+
+# The origins we expect the agent to be reached from; anything else is flagged for review.
+_EXPECTED_ORIGIN = "proounce"
+
+
+def _audit_flags(t: dict) -> list[str]:
+    """Cheap intrusion signals: an off-domain origin, a scripted/absent client, or errors."""
+    flags: list[str] = []
+    origin = str(t.get("origin") or "")
+    ua = str(t.get("user_agent") or "")
+    if origin and _EXPECTED_ORIGIN not in origin.lower():
+        flags.append("off-domain origin")
+    if ua and any(s in ua.lower() for s in ("curl", "python-", "httpx", "wget")):
+        flags.append("non-browser client")
+    if t.get("errors"):
+        flags.append("errors")
+    return flags
+
+
 @router.get("/admin/audit", summary="Audit trail — who did what, when, from where (FedRAMP)")
 async def admin_audit(request: Request):
     """A governance/audit view over recent turns: one row per request with the actor
@@ -157,6 +195,7 @@ async def admin_audit(request: Request):
     fuser = (request.query_params.get("user") or "").strip().lower()
     fapp = (request.query_params.get("app") or "").strip().lower()
     muts_only = request.query_params.get("mutations_only") in ("1", "true", "yes")
+    susp_only = request.query_params.get("suspicious_only") in ("1", "true", "yes")
     from ..mcp.tool_registry import is_mutation
     rows = []
     for t in _recent_turns(limit):
@@ -168,11 +207,20 @@ async def admin_audit(request: Request):
             continue
         if fapp and fapp not in str(t.get("app") or "").lower():
             continue
+        flags = _audit_flags(t)
+        if susp_only and not flags:
+            continue
+        browser, osn = _parse_ua(t.get("user_agent") or "")
         rows.append({
             "ts": t.get("ts"),
             "user": t.get("user_name") or t.get("user_id"),
             "user_id": t.get("user_id"),
             "client_ip": t.get("client_ip"),
+            "user_agent": t.get("user_agent"),
+            "browser": browser,
+            "os": osn,
+            "origin": t.get("origin"),
+            "flags": flags,
             "session_id": t.get("session_id"),
             "trace_id": t.get("trace_id"),
             "request_id": t.get("request_id"),
@@ -315,7 +363,7 @@ def _turn_timeline(rid: str) -> dict:
     for r in recs:
         f = r.get("fields") or {}
         ev, ts, msg = f.get("event"), r.get("ts"), (r.get("msg") or "")
-        for k in ("user_name", "user_id", "client_ip", "trace_id", "session_id", "app", "role"):
+        for k in ("user_name", "user_id", "client_ip", "trace_id", "session_id", "app", "role", "user_agent", "origin"):
             if f.get(k) and not meta.get(k):
                 meta[k] = f.get(k)
         if ev == "chat_prompt":
@@ -381,7 +429,7 @@ def _recent_turns(limit: int = 40) -> list[dict]:
             turns[rid] = t
             order.append(rid)
         # Audit identity is stamped on every record — capture it from whichever arrives.
-        for k in ("user_name", "user_id", "client_ip", "trace_id", "session_id", "app", "role"):
+        for k in ("user_name", "user_id", "client_ip", "trace_id", "session_id", "app", "role", "user_agent", "origin"):
             if f.get(k) and not t.get(k):
                 t[k] = f.get(k)
         ev = f.get("event")

@@ -43,9 +43,13 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         xff = request.headers.get("X-Forwarded-For") or request.headers.get("X-Real-IP") or ""
         client_ip = (xff.split(",")[0].strip() if xff
                      else (request.client.host if request.client else ""))
+        # Client fingerprint for the audit / intrusion trail.
+        user_agent = request.headers.get("User-Agent", "")
+        origin = request.headers.get("Origin") or request.headers.get("Referer") or ""
 
         set_request_context(request_id=request_id, session_id=session_id,
-                            user_id=user_id, trace_id=trace_id, client_ip=client_ip)
+                            user_id=user_id, trace_id=trace_id, client_ip=client_ip,
+                            user_agent=user_agent, origin=origin)
 
         M.http_in_flight.inc()
         start = time.perf_counter()

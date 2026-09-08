@@ -457,7 +457,9 @@
     var err=(t.errors&&t.errors.length)?t.errors:[];
     var toks=(t.tokens_in!=null||t.tokens_out!=null)?(num(t.tokens_in)+"→"+num(t.tokens_out)+" tok"):"";
     var tools=(t.tools&&t.tools.length)?t.tools.map(function(x){return '<span class="pill">'+esc(x)+'</span>';}).join(" "):'<span class="def">no tools</span>';
-    var meta=[t.ts?'<span class="mono">'+esc(t.ts)+'</span>':'', t.user_id?"user "+esc(t.user_id):'',
+    var who=(t.user_name||t.user_id)?("👤 "+esc(t.user_name||t.user_id)+(t.client_ip?(" @"+esc(t.client_ip)):"")):"";
+    var ctx=(t.app?("📱 "+esc(t.app)):"")+(t.role?(" · 🎭 "+esc(t.role)):"");
+    var meta=[t.ts?'<span class="mono">'+esc(t.ts)+'</span>':'', who, ctx,
       t.total_ms!=null?'<span class="mono">'+ms(t.total_ms)+'</span> total':'',
       t.llm_ms!=null?"llm "+ms(t.llm_ms):'', t.tools_ms!=null?"tools "+ms(t.tools_ms):'',
       toks, t.outcome?'outcome <span class="mono">'+esc(t.outcome)+'</span>':''].filter(Boolean).join('<span style="opacity:.4">·</span>');
