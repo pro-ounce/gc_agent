@@ -12,7 +12,7 @@ from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoin
 
 from ..commons.config import cfg
 from ..commons.flags import flags
-from ..commons.logger import get_logger, set_request_context
+from ..commons.logger import get_logger, set_request_context, set_identity
 from ..rbac.gateway_auth import authenticate_gateway
 from ..rbac.jwt_handler import JWTError, decode_token
 from ..rbac.models import APIKey, User
@@ -59,8 +59,9 @@ class RBACMiddleware(BaseHTTPMiddleware):
 
         request.state.user = user
         request.state.auth_method = method
-        # Update logger context with user_id
-        set_request_context(user_id=user.id if user else "")
+        # Update logger/audit context with the resolved identity (id + username).
+        if user:
+            set_identity(user_id=user.id, user_name=user.username)
 
         return await call_next(request)
 

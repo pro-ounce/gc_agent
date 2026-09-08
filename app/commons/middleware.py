@@ -38,9 +38,14 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         # propagate the gc platform trace id for cross-service correlation
         trace_id = request.headers.get("X-TRACE-ID") or request.headers.get("X-Trace-Id", "")
         user_id = getattr(getattr(request, "state", None), "user_id", "")
+        # Client IP for the audit trail: first hop of X-Forwarded-For (set by the gateway),
+        # else the peer address.
+        xff = request.headers.get("X-Forwarded-For") or request.headers.get("X-Real-IP") or ""
+        client_ip = (xff.split(",")[0].strip() if xff
+                     else (request.client.host if request.client else ""))
 
         set_request_context(request_id=request_id, session_id=session_id,
-                            user_id=user_id, trace_id=trace_id)
+                            user_id=user_id, trace_id=trace_id, client_ip=client_ip)
 
         M.http_in_flight.inc()
         start = time.perf_counter()

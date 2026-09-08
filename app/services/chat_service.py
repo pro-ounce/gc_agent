@@ -224,10 +224,13 @@ class ChatService:
         # Guided flow active (e.g. onboarding)? Advance it deterministically — no LLM.
         # Or a fresh intent (create user without full detail) may START a guided intake.
         skill = None
+        sel_app = eco.selected_app_code(request_headers)
+        sel_role = eco.selected_role(request_headers)
         if flows.is_active(session):
             fr = await flows.handle(session, user_message, request_headers)
             if fr is not None:
-                return self._flow_response(session, fr, source="flow", question=user_message)
+                return self._flow_response(session, fr, source="flow", question=user_message,
+                                           app=sel_app, role=sel_role)
         else:
             src = "meta"
             mr = await meta.handle(user_message, request_headers)
@@ -235,13 +238,15 @@ class ChatService:
                 mr = await ecosystem_qa.handle(user_message, request_headers)
                 src = "ecosystem"
             if mr is not None:
-                return self._flow_response(session, mr, source=src, question=user_message)
+                return self._flow_response(session, mr, source=src, question=user_message,
+                                           app=sel_app, role=sel_role)
             # Resolve the skill once (keyword, then semantic fallback for paraphrases) and
             # thread it into flow-start so 'onboard a new person' opens the guided intake too.
             skill = skills.match(user_message) or await skills.match_semantic(user_message)
             started = flows.maybe_start(session, user_message, skill=skill)
             if started is not None:
-                return self._flow_response(session, started, source="flow", question=user_message)
+                return self._flow_response(session, started, source="flow", question=user_message,
+                                           app=sel_app, role=sel_role)
 
         system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT)
         system = await self._ground_ecosystem(system, request_headers)
@@ -331,7 +336,7 @@ class ChatService:
                 session.add_assistant(lead)
                 self._log_answer(session_id, lead, blocks)
                 _log_turn_source(session_id, "inference", model=llm_response.model,
-                                 skill=(skill.name if skill else ""),
+                                 skill=(skill.name if skill else ""), app=sel_app, role=sel_role,
                                  grounded=runtime_config.get_bool("AGENT_ECOSYSTEM_GROUNDING"))
                 session_service.save(session)
                 return ChatResponse(
@@ -357,7 +362,7 @@ class ChatService:
         self._log_answer(session_id, final_text, blocks)
         _log_turn_source(session_id, "inference",
                          model=(llm_response.model if llm_response else ""),
-                         skill=(skill.name if skill else ""),
+                         skill=(skill.name if skill else ""), app=sel_app, role=sel_role,
                          grounded=runtime_config.get_bool("AGENT_ECOSYSTEM_GROUNDING"))
         session_service.save(session)
 
@@ -459,10 +464,11 @@ class ChatService:
         return (f"{final_text}\n\n{fu}" if fu else final_text), []
 
     def _flow_response(self, session: Session, fr: "flows.FlowResult", source: str = "flow",
-                       question: str = "") -> ChatResponse:
+                       question: str = "", app: str = "", role: str = "") -> ChatResponse:
         """Render a guided-flow turn (sync). Either a confirm hand-off or a prompt+chips."""
         sid = session.session_id
-        _log_turn_source(sid, source, question=question, answer=(fr.message or "")[:240])
+        _log_turn_source(sid, source, question=question, answer=(fr.message or "")[:240],
+                         app=app, role=role)
         if fr.pending:
             pending = self._arm_flow_pending(session, fr)
             session_service.save(session)
@@ -519,6 +525,8 @@ class ChatService:
             user_id=str(user_id or ""),
             request_id=get_request_id(),   # correlate turn_summary with chat_prompt/answer
         )
+        turn.app = eco.selected_app_code(request_headers)
+        turn.role = eco.selected_role(request_headers)
         session = session_service.get_or_create(session_id, user_id)
         session.add_user(user_message)
         session.metadata["last_user_message"] = user_message
@@ -537,7 +545,8 @@ class ChatService:
                 chunks = self._flow_chunks(session, fr)
                 turn.answered_by = "flow"
                 _log_turn_source(session_id, "flow", question=user_message,
-                                 answer=(fr.message or "")[:240], request_id=turn.request_id)
+                                 answer=(fr.message or "")[:240], request_id=turn.request_id,
+                                 app=turn.app, role=turn.role)
                 turn.finish("stop")
                 for ch in chunks:
                     yield ch
@@ -555,7 +564,8 @@ class ChatService:
                 chunks = self._flow_chunks(session, started)
                 turn.answered_by = src if mr is not None else "flow"
                 _log_turn_source(session_id, turn.answered_by, question=user_message,
-                                 answer=(started.message or "")[:240], request_id=turn.request_id)
+                                 answer=(started.message or "")[:240], request_id=turn.request_id,
+                                 app=turn.app, role=turn.role)
                 turn.finish("stop")
                 for ch in chunks:
                     yield ch
@@ -590,6 +600,8 @@ class ChatService:
         """Resume a stream paused on 'confirm_required': run (or skip) the pending
         mutating tool, record the result, then stream the model's continuation."""
         turn = M.TurnMetrics(agent=session_id.split(":", 1)[0] or "chatbot", session_id=session_id)
+        turn.app = eco.selected_app_code(request_headers)
+        turn.role = eco.selected_role(request_headers)
         session = session_service.get_or_create(session_id)
         pending_raw = (session.metadata.get("pending_actions") or {}).get(action_id)
         if not pending_raw:

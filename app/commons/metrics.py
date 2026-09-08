@@ -118,6 +118,8 @@ class TurnMetrics:
         self.answered_by = "inference"
         self.skill = ""
         self.grounded = False
+        self.app = ""      # current application (X-Selected-App) for this turn
+        self.role = ""     # current selected role (X-Selected-Role) — capabilities are per-role
         self._done = False
 
     def _elapsed_ms(self) -> float:
@@ -198,7 +200,7 @@ class TurnMetrics:
             iterations=self.iterations, tools_used=self.tools_used,
             prompt_tokens=self.prompt_tokens, completion_tokens=self.completion_tokens,
             answered_by=self.answered_by, tok_per_s=tok_per_s,
-            skill=self.skill, grounded=self.grounded,
+            skill=self.skill, grounded=self.grounded, app=self.app, role=self.role,
         ).info(
             f"turn done: {round(total * 1000)}ms "
             f"[retrieval={round(self.retrieval_s * 1000)} llm={round(self.llm_s * 1000)} "

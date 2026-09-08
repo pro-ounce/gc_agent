@@ -146,6 +146,48 @@ async def admin_turns(request: Request):
     return {"turns": _recent_turns(limit)}
 
 
+@router.get("/admin/audit", summary="Audit trail — who did what, when, from where (FedRAMP)")
+async def admin_audit(request: Request):
+    """A governance/audit view over recent turns: one row per request with the actor
+    (username / user id), source IP, session + trace ids, the application & role in effect,
+    the question, the tools/mutations invoked, the outcome, and any errors. Optional filters
+    ?user=, ?app=, ?mutations_only=1. Backed by the persisted (restart-durable) metrics trail."""
+    _guard(request)
+    limit = int(request.query_params.get("limit", "200"))
+    fuser = (request.query_params.get("user") or "").strip().lower()
+    fapp = (request.query_params.get("app") or "").strip().lower()
+    muts_only = request.query_params.get("mutations_only") in ("1", "true", "yes")
+    from ..mcp.tool_registry import is_mutation
+    rows = []
+    for t in _recent_turns(limit):
+        tools = t.get("tools") or []
+        muts = [x for x in tools if is_mutation(x)]
+        if muts_only and not muts:
+            continue
+        if fuser and fuser not in str(t.get("user_name") or t.get("user_id") or "").lower():
+            continue
+        if fapp and fapp not in str(t.get("app") or "").lower():
+            continue
+        rows.append({
+            "ts": t.get("ts"),
+            "user": t.get("user_name") or t.get("user_id"),
+            "user_id": t.get("user_id"),
+            "client_ip": t.get("client_ip"),
+            "session_id": t.get("session_id"),
+            "trace_id": t.get("trace_id"),
+            "request_id": t.get("request_id"),
+            "app": t.get("app"),
+            "role": t.get("role"),
+            "answered_by": t.get("answered_by"),
+            "question": t.get("question"),
+            "tools": tools,
+            "mutations": muts,
+            "outcome": t.get("outcome"),
+            "errors": t.get("errors") or [],
+        })
+    return {"count": len(rows), "entries": rows}
+
+
 @router.get("/admin/docs", summary="Live capability + architecture reference (from code)")
 async def admin_docs(request: Request):
     """A self-documenting reference for the admin console: the agent's capabilities (skills,
@@ -207,12 +249,18 @@ async def admin_inference(request: Request):
     turns = _recent_turns(limit)
     total = len(turns)
     by_source: dict[str, int] = {}
+    by_app: dict[str, int] = {}
+    by_role: dict[str, int] = {}
     tok_rates: list[float] = []
     llm_mss: list[float] = []
     grounded = pinned = inference = 0
     for t in turns:
         src = t.get("answered_by") or ("inference" if t.get("llm_ms") else "unknown")
         by_source[src] = by_source.get(src, 0) + 1
+        if t.get("app"):
+            by_app[str(t["app"])] = by_app.get(str(t["app"]), 0) + 1
+        if t.get("role"):
+            by_role[str(t["role"])] = by_role.get(str(t["role"]), 0) + 1
         if src == "inference":
             inference += 1
             if t.get("tok_per_s"):
@@ -231,6 +279,8 @@ async def admin_inference(request: Request):
         "inference": inference,
         "harness_pct": round(100 * harness / total, 1) if total else 0.0,
         "by_source": by_source,
+        "by_app": by_app,
+        "by_role": by_role,
         "inference_perf": {
             "avg_tokens_per_sec": avg(tok_rates),
             "avg_llm_ms": avg(llm_mss),
@@ -265,6 +315,9 @@ def _turn_timeline(rid: str) -> dict:
     for r in recs:
         f = r.get("fields") or {}
         ev, ts, msg = f.get("event"), r.get("ts"), (r.get("msg") or "")
+        for k in ("user_name", "user_id", "client_ip", "trace_id", "session_id", "app", "role"):
+            if f.get(k) and not meta.get(k):
+                meta[k] = f.get(k)
         if ev == "chat_prompt":
             meta.update({"question": f.get("question"), "session_id": f.get("session_id"),
                          "user_id": f.get("user_id"), "mode": f.get("mode"), "ts": ts})
@@ -327,6 +380,10 @@ def _recent_turns(limit: int = 40) -> list[dict]:
             t = {"request_id": rid, "ts": r.get("ts"), "errors": []}
             turns[rid] = t
             order.append(rid)
+        # Audit identity is stamped on every record — capture it from whichever arrives.
+        for k in ("user_name", "user_id", "client_ip", "trace_id", "session_id", "app", "role"):
+            if f.get(k) and not t.get(k):
+                t[k] = f.get(k)
         ev = f.get("event")
         if ev == "chat_prompt":
             t.update({"question": f.get("question"), "session_id": f.get("session_id"),
@@ -338,9 +395,14 @@ def _recent_turns(limit: int = 40) -> list[dict]:
                       "iterations": f.get("iterations"), "tools": f.get("tools_used"),
                       "outcome": f.get("outcome"),
                       "answered_by": f.get("answered_by"), "tok_per_s": f.get("tok_per_s"),
-                      "skill": f.get("skill"), "grounded": f.get("grounded")})
+                      "skill": f.get("skill"), "grounded": f.get("grounded"),
+                      "app": f.get("app"), "role": f.get("role")})
         elif ev == "turn_source":                 # non-streaming turns tag their source here
             t.setdefault("answered_by", f.get("answered_by"))
+            if f.get("app"):
+                t.setdefault("app", f.get("app"))
+            if f.get("role"):
+                t.setdefault("role", f.get("role"))
             if f.get("question"):
                 t.setdefault("question", f.get("question"))
             if f.get("answer"):

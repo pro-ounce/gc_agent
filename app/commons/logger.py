@@ -25,6 +25,9 @@ _request_id_ctx: ContextVar[str] = ContextVar("request_id", default="")
 _session_id_ctx: ContextVar[str] = ContextVar("session_id", default="")
 _user_id_ctx: ContextVar[str] = ContextVar("user_id", default="")
 _trace_id_ctx: ContextVar[str] = ContextVar("trace_id", default="")
+# Audit context (FedRAMP): who fired the request and from where — stamped on every log record.
+_user_name_ctx: ContextVar[str] = ContextVar("user_name", default="")
+_client_ip_ctx: ContextVar[str] = ContextVar("client_ip", default="")
 
 
 def set_request_context(
@@ -32,13 +35,33 @@ def set_request_context(
     session_id: str = "",
     user_id: str = "",
     trace_id: str = "",
+    client_ip: str = "",
 ) -> str:
     rid = request_id or str(uuid.uuid4())
     _request_id_ctx.set(rid)
     _session_id_ctx.set(session_id)
     _user_id_ctx.set(user_id)
     _trace_id_ctx.set(trace_id)
+    if client_ip:
+        _client_ip_ctx.set(client_ip)
     return rid
+
+
+def set_identity(user_id: str = "", user_name: str = "") -> None:
+    """Record who the authenticated caller is, once the route has resolved them — so every
+    subsequent log line (and the persisted audit trail) carries the actual username."""
+    if user_id:
+        _user_id_ctx.set(str(user_id))
+    if user_name:
+        _user_name_ctx.set(str(user_name))
+
+
+def get_user_name() -> str:
+    return _user_name_ctx.get()
+
+
+def get_client_ip() -> str:
+    return _client_ip_ctx.get()
 
 
 def get_trace_id() -> str:
@@ -170,9 +193,14 @@ class _RingHandler(logging.Handler):
                 k: v for k, v in record.__dict__.items()
                 if k not in _STD_ATTRS and not k.startswith("_") and _jsonable(v)
             }
-            rid = _request_id_ctx.get()
-            if rid and "request_id" not in fields:
-                fields["request_id"] = rid
+            # Stamp the full audit identity (who / where / which session) onto every record so
+            # the persisted trail answers FedRAMP's who-did-what-when-from-where without gaps.
+            for key, ctx in (("request_id", _request_id_ctx), ("session_id", _session_id_ctx),
+                             ("user_id", _user_id_ctx), ("user_name", _user_name_ctx),
+                             ("trace_id", _trace_id_ctx), ("client_ip", _client_ip_ctx)):
+                val = ctx.get()
+                if val and key not in fields:
+                    fields[key] = val
             rec = {
                 "ts": _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(record.created)),
                 "level": record.levelname,
