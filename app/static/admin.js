@@ -821,8 +821,17 @@
       +'<div class="def" style="margin-top:4px">Who fired each request, from where, in which application &amp; role — restart-durable.</div>'
       +'<div id="au-list" style="margin-top:10px;max-height:66vh;overflow:auto">loading…</div></div></section>';
   }
+  function riskBadge(e){
+    var lvl=e.risk_level||"low", sc=e.risk_score||0;
+    if(lvl==="low") return '<span class="pill" style="opacity:.6">risk '+sc+'</span>';
+    var col=lvl==="high"?"#b91c1c":"#b45309", bg=lvl==="high"?"#fdeaea":"var(--amber-wash)";
+    return '<span class="pill" style="background:'+bg+';color:'+col+';border-color:'+col+'66;font-weight:700">'+(lvl==="high"?"⛔":"⚠")+' risk '+sc+' · '+esc(lvl)+'</span>';
+  }
   function auditRow(e){
-    var flags=(e.flags&&e.flags.length)?e.flags.map(function(f){return '<span class="pill" style="background:#fdeaea;color:#b91c1c;border-color:#f3c9c9">⚠ '+esc(f)+'</span>';}).join(" "):"";
+    var reasons=(e.risk_reasons&&e.risk_reasons.length)?e.risk_reasons.map(function(f){
+      var hi=e.risk_level==="high"; var col=hi?"#b91c1c":"#b45309";
+      return '<span class="pill" style="background:'+(hi?"#fdeaea":"var(--amber-wash)")+';color:'+col+';border-color:'+col+'55">'+esc(f)+'</span>';
+    }).join(" "):"";
     var muts=(e.mutations&&e.mutations.length)?e.mutations.map(function(m){return '<span class="pill" style="background:var(--amber-wash);color:var(--amber);border-color:#f3ddc0">'+esc(m)+'</span>';}).join(" "):"";
     var meta=[e.ts?'<span class="mono">'+esc(e.ts)+'</span>':'',
       '👤 <b>'+esc(e.user||"—")+'</b>'+(e.client_ip?' @<span class="mono">'+esc(e.client_ip)+'</span>':''),
@@ -830,8 +839,9 @@
       e.origin?'origin <span class="mono">'+esc(e.origin)+'</span>':'',
       e.app?('📱 '+esc(e.app)):'', e.role?('🎭 '+esc(e.role)):'',
       e.answered_by?esc(e.answered_by):''].filter(Boolean).join('<span style="opacity:.4">·</span>');
-    return '<div class="turn'+(e.flags&&e.flags.length?' err':'')+'">'
-      +'<div class="q">'+(e.question?esc(e.question):'<span class="def">(no prompt)</span>')+(flags?' '+flags:'')+'</div>'
+    return '<div class="turn'+(e.risk_level==="high"?' err':'')+'">'
+      +'<div class="q" style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">'+riskBadge(e)+'<span>'+(e.question?esc(e.question):'<span class="def">(no prompt)</span>')+'</span></div>'
+      +(reasons?'<div style="margin-top:5px">'+reasons+'</div>':'')
       +(muts?'<div style="margin-top:4px">'+muts+'</div>':'')
       +'<div class="meta">'+meta+'</div></div>';
   }
@@ -839,7 +849,8 @@
     var el=document.getElementById("au-list"); if(!el) return;
     var qs="?limit=200"+((document.getElementById("au-susp")||{}).checked?"&suspicious_only=1":"")+((document.getElementById("au-mut")||{}).checked?"&mutations_only=1":"");
     fetch(API+"/audit"+qs,{cache:"no-store"}).then(function(r){return r.json();}).then(function(d){
-      var es=d.entries||[]; var c=document.getElementById("au-count"); if(c) c.textContent="("+es.length+")";
+      var es=d.entries||[]; var c=document.getElementById("au-count");
+      if(c) c.textContent="("+es.length+(d.high?" · "+d.high+" high":"")+(d.medium?" · "+d.medium+" med":"")+")";
       el.innerHTML = es.length ? es.map(auditRow).join("") : '<div class="def" style="padding:12px 2px">No audit entries.</div>';
     }).catch(function(e){ el.innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; });
   }

@@ -196,9 +196,12 @@ async def admin_audit(request: Request):
     fapp = (request.query_params.get("app") or "").strip().lower()
     muts_only = request.query_params.get("mutations_only") in ("1", "true", "yes")
     susp_only = request.query_params.get("suspicious_only") in ("1", "true", "yes")
+    min_score = int(request.query_params.get("min_score", "0") or 0)
     from ..mcp.tool_registry import is_mutation
+    from ..services import risk
+    turns = risk.score_turns(_recent_turns(limit))   # Tier-1 risk scoring over the trail
     rows = []
-    for t in _recent_turns(limit):
+    for t in turns:
         tools = t.get("tools") or []
         muts = [x for x in tools if is_mutation(x)]
         if muts_only and not muts:
@@ -207,12 +210,16 @@ async def admin_audit(request: Request):
             continue
         if fapp and fapp not in str(t.get("app") or "").lower():
             continue
-        flags = _audit_flags(t)
-        if susp_only and not flags:
+        if susp_only and t.get("risk_level") == "low":
+            continue
+        if min_score and (t.get("risk_score") or 0) < min_score:
             continue
         browser, osn = _parse_ua(t.get("user_agent") or "")
         rows.append({
             "ts": t.get("ts"),
+            "risk_score": t.get("risk_score", 0),
+            "risk_level": t.get("risk_level", "low"),
+            "risk_reasons": t.get("risk_reasons", []),
             "user": t.get("user_name") or t.get("user_id"),
             "user_id": t.get("user_id"),
             "client_ip": t.get("client_ip"),
@@ -220,7 +227,7 @@ async def admin_audit(request: Request):
             "browser": browser,
             "os": osn,
             "origin": t.get("origin"),
-            "flags": flags,
+            "flags": _audit_flags(t),
             "session_id": t.get("session_id"),
             "trace_id": t.get("trace_id"),
             "request_id": t.get("request_id"),
@@ -233,7 +240,11 @@ async def admin_audit(request: Request):
             "outcome": t.get("outcome"),
             "errors": t.get("errors") or [],
         })
-    return {"count": len(rows), "entries": rows}
+    # Highest risk first, then most recent — surface what needs review.
+    rows.sort(key=lambda r: (r["risk_score"], r["ts"] or ""), reverse=True)
+    high = sum(1 for r in rows if r["risk_level"] == "high")
+    med = sum(1 for r in rows if r["risk_level"] == "medium")
+    return {"count": len(rows), "high": high, "medium": med, "entries": rows}
 
 
 @router.get("/admin/docs", summary="Live capability + architecture reference (from code)")
