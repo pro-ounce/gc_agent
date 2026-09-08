@@ -196,41 +196,41 @@ async def admin_turn_timeline(request: Request, request_id: str):
 
 
 def _turn_timeline(rid: str) -> dict:
-    """Ordered workflow nodes for one request_id, built from chat_prompt / turn_step /
-    turn_source / turn_summary / chat_answer events in the in-memory ring."""
+    """Ordered workflow nodes for one request_id, assembled from the log ring: the request,
+    the routing decision, then the execution steps in time order (RAG retrieval, each LLM
+    call, and EVERY MCP tool call — harness handlers call tools directly, so their tool steps
+    come from the mcp `execute_tool` completion logs, not turn.tool()), then the answer."""
     recs = [r for r in recent_logs(limit=2000) if (r.get("fields") or {}).get("request_id") == rid]
-    recs.reverse()  # oldest-first = execution order
-    steps: list[dict] = []
+    recs.reverse()  # oldest-first
     meta: dict = {"request_id": rid, "done": False}
+    prompt_step = route_step = None
+    exec_steps: list[dict] = []      # retrieval / llm / tool, in execution (timestamp) order
+    answer_text = None
     for r in recs:
         f = r.get("fields") or {}
-        ev, ts = f.get("event"), r.get("ts")
+        ev, ts, msg = f.get("event"), r.get("ts"), (r.get("msg") or "")
         if ev == "chat_prompt":
             meta.update({"question": f.get("question"), "session_id": f.get("session_id"),
                          "user_id": f.get("user_id"), "mode": f.get("mode"), "ts": ts})
-            steps.append({"kind": "prompt", "label": "Request", "ts": ts,
-                          "detail": f"{f.get('tool_count', 0)} tools retrieved",
-                          "tools_retrieved": f.get("retrieved_tools") or []})
+            prompt_step = {"kind": "prompt", "label": "Request", "ts": ts,
+                           "detail": f"{f.get('tool_count', 0)} tools retrieved"}
         elif ev == "turn_source":
             meta["answered_by"] = f.get("answered_by")
             meta.setdefault("question", f.get("question"))
-            steps.append({"kind": "route", "label": f"Route → {f.get('answered_by')}",
-                          "ts": ts, "answered_by": f.get("answered_by"),
-                          "detail": "answered by the harness (no model)" if f.get("answered_by") not in (None, "inference")
-                                    else "handed to the model"})
-        elif ev == "turn_step":
-            step = f.get("step")
-            if step == "retrieval":
-                steps.append({"kind": "retrieval", "label": "Tool retrieval",
-                              "ts": ts, "ms": f.get("phase_ms"), "detail": "RAG tool selection"})
-            elif step == "llm":
-                steps.append({"kind": "llm", "label": f"LLM call #{f.get('iteration', '')}".strip(),
-                              "ts": ts, "ms": f.get("call_ms"),
-                              "tokens_in": f.get("prompt_tokens"), "tokens_out": f.get("completion_tokens"),
-                              "detail": f"{f.get('prompt_tokens', 0)}→{f.get('completion_tokens', 0)} tok"})
-            elif step == "tool":
-                steps.append({"kind": "tool", "label": f.get("tool") or "tool",
-                              "ts": ts, "detail": f"tool #{f.get('tool_index', '')}".strip()})
+            if f.get("answer"):
+                answer_text = f.get("answer")
+            route_step = _route_step(f.get("answered_by"), ts)
+        elif ev == "turn_step" and f.get("step") == "retrieval":
+            exec_steps.append({"kind": "retrieval", "label": "Tool retrieval", "ts": ts,
+                               "ms": f.get("phase_ms"), "detail": "RAG tool selection"})
+        elif ev == "turn_step" and f.get("step") == "llm":
+            exec_steps.append({"kind": "llm", "label": f"LLM call #{f.get('iteration', '')}".strip(),
+                               "ts": ts, "ms": f.get("call_ms"),
+                               "tokens_in": f.get("prompt_tokens"), "tokens_out": f.get("completion_tokens"),
+                               "detail": f"{f.get('prompt_tokens', 0)}→{f.get('completion_tokens', 0)} tok"})
+        elif f.get("func") == "execute_tool" and "completed in" in msg:
+            exec_steps.append({"kind": "tool", "label": f.get("tool") or "tool", "ts": ts,
+                               "ms": f.get("duration_ms"), "detail": "MCP tool call"})
         elif ev == "turn_summary":
             meta.update({"done": True, "answered_by": f.get("answered_by") or meta.get("answered_by"),
                          "total_ms": f.get("total_ms"), "llm_ms": f.get("llm_ms"),
@@ -239,14 +239,23 @@ def _turn_timeline(rid: str) -> dict:
                          "tok_per_s": f.get("tok_per_s"), "iterations": f.get("iterations"),
                          "outcome": f.get("outcome"), "skill": f.get("skill"), "grounded": f.get("grounded")})
         elif ev == "chat_answer":
-            meta.update({"done": True, "answer": f.get("answer")})
-            steps.append({"kind": "answer", "label": "Answer", "ts": ts,
-                          "detail": (f.get("answer") or "")[:120]})
-    # a harness turn logs turn_source+chat_answer but no turn_summary → still "done"
-    if any(s["kind"] == "answer" for s in steps):
+            meta.update({"done": True})
+            answer_text = f.get("answer")
+    if route_step is None and meta.get("answered_by"):   # stream inference has no turn_source
+        route_step = _route_step(meta.get("answered_by"), meta.get("ts"))
+    steps = [s for s in (prompt_step, route_step) if s] + exec_steps
+    if answer_text is not None:
+        meta["answer"] = answer_text
         meta["done"] = True
+        steps.append({"kind": "answer", "label": "Answer", "ts": None, "detail": (answer_text or "")[:120]})
     meta["steps"] = steps
     return meta
+
+
+def _route_step(answered_by: str | None, ts) -> dict:
+    harness = answered_by not in (None, "inference")
+    return {"kind": "route", "label": f"Route → {answered_by}", "ts": ts, "answered_by": answered_by,
+            "detail": "answered by the harness (no model)" if harness else "handed to the model"}
 
 
 def _recent_turns(limit: int = 40) -> list[dict]:
