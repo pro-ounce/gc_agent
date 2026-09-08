@@ -7,7 +7,9 @@ Mirrors delivery/app/commons/logger.py pattern.
 from __future__ import annotations
 
 import collections
+import json as _json
 import logging
+import os as _os
 import sys
 import time as _time
 import uuid
@@ -87,6 +89,69 @@ class _ContextFormatter(jsonlogger.JsonFormatter):
 
 # ── In-memory ring buffer (recent logs for the /admin Logs view) ─────────────────
 _LOG_RING: collections.deque = collections.deque(maxlen=800)
+
+# ── durable metrics ────────────────────────────────────────────────────────────
+# The /admin Metrics·Activity·inference views + workflow timelines reconstruct from this
+# ring, which is in-memory — so a restart (every deploy restarts the service) wiped them.
+# Persist the METRIC-relevant records (turn prompt/summary/source/answer, per-step, tool
+# completions, errors) to a gitignored JSONL and rehydrate the ring on startup, so the
+# dashboards survive restarts. Best-effort throughout: persistence never breaks logging.
+_METRICS_FILE = _os.environ.get("METRICS_LOG_FILE", "metrics_log.jsonl")
+_METRICS_EVENTS = {"chat_prompt", "turn_summary", "turn_source", "chat_answer"}
+_METRICS_MAXLINES = 8000      # trim target when the file grows past ~2x this
+_persist_n = 0
+
+
+def _metric_relevant(fields: dict, level: str) -> bool:
+    if not fields.get("request_id"):
+        return False
+    return (fields.get("event") in _METRICS_EVENTS or "step" in fields
+            or fields.get("func") == "execute_tool" or level == "ERROR")
+
+
+def _persist_record(rec: dict) -> None:
+    global _persist_n
+    try:
+        with open(_METRICS_FILE, "a", encoding="utf-8") as f:
+            f.write(_json.dumps(rec, ensure_ascii=False) + "\n")
+        _persist_n += 1
+        if _persist_n % 500 == 0:               # occasional trim to keep the file bounded
+            _trim_metrics_file()
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def _trim_metrics_file() -> None:
+    try:
+        with open(_METRICS_FILE, encoding="utf-8") as f:
+            lines = f.readlines()
+        if len(lines) > 2 * _METRICS_MAXLINES:
+            with open(_METRICS_FILE, "w", encoding="utf-8") as f:
+                f.writelines(lines[-_METRICS_MAXLINES:])
+    except Exception:  # noqa: BLE001
+        pass
+
+
+def load_persisted_metrics(limit: int = 800) -> int:
+    """Rehydrate the ring from the last `limit` persisted records (oldest-first) so the admin
+    dashboards show history immediately after a restart. Called once at startup."""
+    try:
+        if not _os.path.exists(_METRICS_FILE):
+            return 0
+        with open(_METRICS_FILE, encoding="utf-8") as f:
+            lines = f.readlines()[-limit:]
+    except Exception:  # noqa: BLE001
+        return 0
+    n = 0
+    for ln in lines:
+        try:
+            rec = _json.loads(ln)
+            if isinstance(rec, dict) and "fields" in rec:
+                _LOG_RING.append(rec)
+                n += 1
+        except Exception:  # noqa: BLE001
+            continue
+    return n
 # Standard LogRecord attributes to skip when capturing the structured 'extra' fields.
 _STD_ATTRS = set(vars(logging.makeLogRecord({}))) | {"asctime", "message", "taskName"}
 
@@ -108,13 +173,16 @@ class _RingHandler(logging.Handler):
             rid = _request_id_ctx.get()
             if rid and "request_id" not in fields:
                 fields["request_id"] = rid
-            _LOG_RING.append({
+            rec = {
                 "ts": _time.strftime("%Y-%m-%d %H:%M:%S", _time.localtime(record.created)),
                 "level": record.levelname,
                 "logger": record.name.rsplit(".", 1)[-1],
                 "msg": record.getMessage(),
                 "fields": fields,
-            })
+            }
+            _LOG_RING.append(rec)
+            if _metric_relevant(fields, record.levelname):   # durable → survives restart
+                _persist_record(rec)
         except Exception:  # noqa: BLE001 — logging must never raise
             pass
 

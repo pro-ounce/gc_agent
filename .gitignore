@@ -55,3 +55,4 @@ logs/
 # Runtime user-created skills (persisted on the box; never committed)
 custom_skills.json
 balloon_overrides.json
+metrics_log.jsonl

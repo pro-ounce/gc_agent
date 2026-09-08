@@ -54,6 +54,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:  # noqa: BLE001 — never block startup on custom skills
         log.warning(f"custom skill load failed (non-fatal): {exc}")
 
+    # Rehydrate the metrics/activity ring from disk so the admin dashboards survive restarts.
+    try:
+        from .commons.logger import load_persisted_metrics
+        n = load_persisted_metrics()
+        if n:
+            log.bind(func="lifespan", records=n).info(f"rehydrated {n} metric records from disk")
+    except Exception as exc:  # noqa: BLE001
+        log.warning(f"metrics rehydrate failed (non-fatal): {exc}")
+
     # Warm the LLM so the first chat after a (re)start isn't a cold model reload. Fire-and-
     # forget: it must not delay the server accepting requests, and keep_alive=-1 pins it after.
     try:
