@@ -803,10 +803,11 @@ class PickerStep:
 # VERIFY against live responses (scratchpad/baseline_probe.py) — source label/value field
 # names are per the product spec; if a picker renders blank, correct the field here.
 BASELINE_STEPS: tuple[PickerStep, ...] = (
+    # Show the year, send its fiscalYearId (the payload keys off the id, not the year number).
     PickerStep("sourceFiscalYear", "Choose the **source** fiscal year (BFY)",
-               "getAllFiscalYears_post", "fiscalYear", "fiscalYear"),
+               "getAllFiscalYears_post", "fiscalYear", "fiscalYearId"),
     PickerStep("fiscalYear", "Choose the **target** fiscal year",
-               "getAllFiscalYears_post", "fiscalYear", "fiscalYear"),
+               "getAllFiscalYears_post", "fiscalYear", "fiscalYearId"),
     PickerStep("businessRuleGroups", "Choose the **baseline** business rule group(s)",
                "getAllValidationGroups_post", "groupName", "validationGroupId", multi=True,
                source_args={"groupType": "BASELINE", "applicationId": 3}),
