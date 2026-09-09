@@ -48,6 +48,12 @@ _NAMED_ACCESS = [
     re.compile(r"\baccess (?:for|of) ([A-Za-z0-9._@-]+)", re.I),
     re.compile(r"\bapplications? (?:for|of) ([A-Za-z0-9._@-]+)", re.I),
     re.compile(r"\b([A-Za-z0-9._@-]+)'s (?:access|applications?|roles?)\b", re.I),
+    # "applications/apps/access/roles assigned to <user>", "granted to <user>"
+    re.compile(r"\b(?:applications?|apps?|access|roles?) (?:assigned|granted|given) to (?:the )?([A-Za-z0-9._@-]+)", re.I),
+    # "what applications does <user> have", "which apps has <user>"
+    re.compile(r"what (?:applications?|apps?|access|roles?) (?:does|do|has|have) ([A-Za-z0-9._@-]+)\b", re.I),
+    # bare "assigned to <user>" (mutations already bailed above; a bogus name falls through)
+    re.compile(r"\bassigned to (?:the )?([A-Za-z0-9._@-]+)", re.I),
 ]
 _STOP = {"i", "you", "we", "my", "me", "us", "the", "a", "an", "this", "that", "user", "everyone"}
 
