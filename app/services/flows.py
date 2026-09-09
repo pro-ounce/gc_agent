@@ -50,11 +50,16 @@ def _chip(label: str, send: str | None = None, icon: str | None = None) -> dict[
     return {"label": label, "send": send if send is not None else label, "icon": icon}
 
 
-_FLOWS = ("onboard", "create_user", "create_skill", "data_call")
+_FLOWS = ("onboard", "create_user", "create_skill", "data_call", "formulation_baseline")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _SKILL_INTENT_RE = re.compile(
     r"\b(create|add|make|build|teach|define|register)\b.{0,20}\b(skill|capabilit(y|ies)|"
     r"new (action|command|ability))\b", re.I)
+# Formulation baseline generation — a 13-field guided flow ending in one confirmed mutation.
+# Matched deterministically so the mutation is ALWAYS flow-gated (never LLM-driven).
+_BASELINE_INTENT_RE = re.compile(
+    r"\b(generate|create|run|build|new|start)\b[^.?]{0,24}\bbaseline\b|"
+    r"\bbaseline\b[^.?]{0,12}\b(generation|generate)\b|\bformulation baseline\b", re.I)
 
 # ── Fail-safe: universal exit commands, honoured at ANY stage of ANY flow ───────
 # Standalone commands (whole message ≈ one of these) always cancel.
@@ -86,7 +91,8 @@ def _cancel_flow(session: Any, flow: dict[str, Any]) -> FlowResult:
     session.pending_action_id = None
     session.metadata.pop("pending_actions", None)
     what = {"onboard": "onboarding", "create_user": "creating the user",
-            "create_skill": "creating the skill"}.get(name, "that")
+            "create_skill": "creating the skill",
+            "formulation_baseline": "generating the baseline"}.get(name, "that")
     return FlowResult(
         message=f"Okay — I've cancelled {what}. Nothing was saved. What would you like to do next?",
         done=True)
@@ -191,6 +197,9 @@ def maybe_start(session: Any, message: str, skill: Any = None) -> FlowResult | N
     # Skill authoring intent takes precedence ("create a skill" must not read as create-user).
     if _SKILL_INTENT_RE.search(message or ""):
         return start_create_skill(session, message or "")
+    # Formulation baseline generation → open the guided flow (mutation stays flow-gated).
+    if _BASELINE_INTENT_RE.search(message or ""):
+        return start_formulation_baseline(session)
     from ..services import skills
     sk = skill if skill is not None else skills.match(message or "")
     if sk and sk.name == "create_user" and not re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", message or ""):
@@ -229,6 +238,9 @@ async def handle(session: Any, message: str, headers: dict[str, str] | None) -> 
 
     if name == "data_call":
         return await _data_call(session, flow, msg, headers)
+
+    if name == "formulation_baseline":
+        return await _baseline(session, flow, msg, headers)
 
     return None
 
@@ -770,6 +782,317 @@ def dc_after_reminder(session: Any) -> FlowResult | None:
     return _dc_finish(session, flow)
 
 
+# ── Generic declarative picker-flow (Formulation baseline generation) ───────────
+# A small step-driven engine: collect a list of fields ONE BY ONE (fetched pickers,
+# multi-select, static options, or free text) and, only after the user confirms, run a
+# SINGLE mutation. Kept declarative so future formulation actions add a spec, not code.
+
+@dataclass(frozen=True)
+class PickerStep:
+    field: str                       # payload key this step fills
+    prompt: str                      # question shown to the user
+    source_tool: str = ""            # read tool that supplies options (else static/free-text)
+    label_field: str = ""            # option's display key in each row
+    value_field: str = ""            # option's payload key in each row
+    multi: bool = False              # accumulate multiple selections
+    optional: bool = False           # allow skip / "select all"
+    static_options: tuple[str, ...] = ()  # fixed choices (no fetch), e.g. Y/N or Q1..Q4
+    source_args: dict[str, Any] = field(default_factory=dict)
+
+
+# VERIFY against live responses (scratchpad/baseline_probe.py) — source label/value field
+# names are per the product spec; if a picker renders blank, correct the field here.
+BASELINE_STEPS: tuple[PickerStep, ...] = (
+    PickerStep("sourceFiscalYear", "Choose the **source** fiscal year (BFY)",
+               "getAllFiscalYears_post", "fiscalYear", "fiscalYear"),
+    PickerStep("fiscalYear", "Choose the **target** fiscal year",
+               "getAllFiscalYears_post", "fiscalYear", "fiscalYear"),
+    PickerStep("businessRuleGroups", "Choose the **baseline** business rule group(s)",
+               "getAllValidationGroups_post", "groupName", "validationGroupId", multi=True,
+               source_args={"groupType": "BASELINE", "applicationId": 3}),
+    PickerStep("baselineTitle", "Enter a **title** for this baseline"),
+    PickerStep("description", "Enter a short **description**"),
+    PickerStep("orgIds", "Choose program office(s) — or select all",
+               "getOrganizationsByUser_post", "organizationName", "organizationId",
+               multi=True, optional=True, source_args={"applicationId": 3}),
+    PickerStep("requestTypes", "Choose request type(s) — or select all",
+               "getActiveRequestTypeMappings_post", "requestTypeName", "requestTypeCode",
+               multi=True, optional=True),
+    PickerStep("acquisitionVehicles", "Choose acquisition vehicle(s) — or select all",
+               "getActiveAcquisitionVehicleMappingsIds_post",
+               "acquisitionVehicleName", "acquisitionVehicleId", multi=True, optional=True),
+    PickerStep("quarter", "Choose a quarter _(optional)_",
+               static_options=("Q1", "Q2", "Q3", "Q4"), optional=True),
+    PickerStep("isTargetApplicable", "Is **target** applicable?", static_options=("Y", "N")),
+    PickerStep("isRecommended", "Include **recommended** requests?", static_options=("Y", "N")),
+    PickerStep("isDeferred", "Include **deferred** requests?", static_options=("Y", "N")),
+    PickerStep("isWithdrawn", "Include **withdrawn** requests?", static_options=("Y", "N")),
+)
+
+# Backend-mandatory fields with safe defaults (VERIFY fundGroupId / quarter policy with the
+# product owner). Empty optional lists mean "all" per the baseline contract.
+BASELINE_DEFAULTS: dict[str, Any] = {
+    "applicationCode": "FORMULATION", "withdrawnRequest": "N", "deletedRequest": "N",
+    "fundGroupId": 0, "quarter": "", "orgIds": [], "requestTypes": [], "acquisitionVehicles": [],
+}
+BASELINE_LABELS: dict[str, str] = {
+    "sourceFiscalYear": "Source FY", "fiscalYear": "Target FY",
+    "businessRuleGroups": "Rule group(s)", "baselineTitle": "Title", "description": "Description",
+    "orgIds": "Program office(s)", "requestTypes": "Request type(s)",
+    "acquisitionVehicles": "Acquisition vehicle(s)", "quarter": "Quarter",
+    "isTargetApplicable": "Target applicable", "isRecommended": "Include recommended",
+    "isDeferred": "Include deferred", "isWithdrawn": "Include withdrawn",
+}
+
+_DONE_RE = re.compile(r"\b(done|that'?s all|thats all|finish(ed)?|no more|next|proceed|complete|that is all)\b", re.I)
+_ALL_RE = re.compile(r"\b(all|everything|every one|everyone|entire|any)\b", re.I)
+_SKIP_RE = re.compile(r"\b(skip|none|not now|later|no thanks|n/?a|leave (it )?(blank|empty))\b", re.I)
+
+
+def _yn(msg: str) -> str | None:
+    """Map an affirmative/negative line to Y / N (None if unclear)."""
+    if re.search(r"\b(y|yes|yeah|yep|true|include|applicable|do)\b", msg, re.I):
+        return "Y"
+    if re.search(r"\b(n|no|nope|false|exclude|don'?t|do not|not applicable)\b", msg, re.I):
+        return "N"
+    return None
+
+
+async def _fetch_options(step: PickerStep, headers: dict[str, str] | None) -> list[dict[str, Any]]:
+    """A step's options as [{value, label}] — defensive about field names and row shapes."""
+    if step.static_options:
+        return [{"value": o, "label": ("Yes" if o == "Y" else "No" if o == "N" else o)}
+                for o in step.static_options]
+    if not step.source_tool:
+        return []
+    out: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    try:
+        res = await tool_registry.execute(step.source_tool, dict(step.source_args), headers)
+        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        for r in (data or []):
+            if isinstance(r, dict):
+                if str(r.get("enabled", "Y")).upper() == "N":
+                    continue
+                val = r.get(step.value_field)
+                lab = r.get(step.label_field)
+                if val is None and lab is None:   # field-name miss → first usable scalar
+                    scal = [v for v in r.values() if isinstance(v, (str, int, float)) and str(v).strip()]
+                    if not scal:
+                        continue
+                    val = lab = scal[0]
+                value = val if val is not None else lab
+                label = str(lab if lab is not None else val)
+            else:                                  # scalar list (e.g. plain fiscal years)
+                value, label = r, str(r)
+            key = str(value)
+            if not label.strip() or key in seen:
+                continue
+            seen.add(key)
+            out.append({"value": value, "label": label})
+    except Exception as exc:  # noqa: BLE001 — a picker must never crash the turn
+        log.bind(func="baseline_options", tool=step.source_tool).warning(f"option fetch failed: {exc}")
+    return out
+
+
+def _match_opt(msg: str, options: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Resolve a line to one option by label or value — exact, then unambiguous contains."""
+    m = msg.strip().lower()
+    if not m:
+        return None
+    for o in options:
+        if m in (str(o["label"]).lower(), str(o["value"]).lower()):
+            return o
+    hits = [o for o in options
+            if str(o["label"]).lower() in m or m in str(o["label"]).lower()]
+    return hits[0] if len(hits) == 1 else None
+
+
+def start_formulation_baseline(session: Any) -> FlowResult:
+    """Begin the guided baseline-generation intake (sync: no fetch until the user starts)."""
+    session.metadata["flow"] = {
+        "name": "formulation_baseline", "stage": "intro", "idx": 0,
+        "data": {}, "labels": {}, "buf": [],
+    }
+    return FlowResult(
+        message=("Let's generate a **FORMULATION** budget baseline. I'll ask a few questions "
+                 "one at a time, then show everything for your confirmation before anything runs."),
+        suggestions=[_chip("Start", "start", icon="check"), _chip("Cancel", "cancel", icon="skip")],
+    )
+
+
+def _baseline_control_chips(step: PickerStep, has_buf: bool) -> list[dict[str, Any]]:
+    tail: list[dict[str, Any]] = []
+    if step.multi:
+        tail.append(_chip("Done selecting" if has_buf else "Done", "done", icon="check"))
+        if step.optional:
+            tail.append(_chip("Select all", "select all", icon="app"))
+    if step.optional and not step.multi:
+        tail.append(_chip("Skip", "skip", icon="skip"))
+    return tail
+
+
+async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
+                           headers: dict[str, str] | None, prefix: str = "",
+                           options: list[dict[str, Any]] | None = None) -> FlowResult:
+    """Render the current step: fetched/static chips (+ controls), or a free-text ask."""
+    if not step.source_tool and not step.static_options:      # free text
+        return FlowResult(message=f"{prefix}{step.prompt}")
+    options = options if options is not None else await _fetch_options(step, headers)
+    flow.setdefault("opts", {})[step.field] = options          # cache for matching/summary
+    if not options:
+        return FlowResult(message=f"{prefix}{step.prompt} _(type a value)_",
+                          suggestions=_baseline_control_chips(step, bool(flow.get("buf"))))
+    icon = "role" if step.multi else "app"
+    chips = [_chip(str(o["label"]), str(o["label"]), icon=icon) for o in options[:MAX_CHIPS]]
+    note = f"\n\n_Showing {MAX_CHIPS} of {len(options)} — or type a name._" if len(options) > MAX_CHIPS else ""
+    return FlowResult(message=f"{prefix}{step.prompt}{note}",
+                      suggestions=chips + _baseline_control_chips(step, bool(flow.get("buf"))))
+
+
+def _baseline_summary(flow: dict[str, Any]) -> str:
+    labels = flow.get("labels", {})
+    lines = []
+    for f in BASELINE_CONFIRM_FIELDS:
+        val = labels.get(f)
+        if val in (None, "", [], {}):
+            val = "_(all)_" if f in ("orgIds", "requestTypes", "acquisitionVehicles") else "—"
+        elif isinstance(val, list):
+            val = ", ".join(str(x) for x in val) or "_(all)_"
+        lines.append(f"- **{BASELINE_LABELS.get(f, f)}:** {val}")
+    body = "\n".join(lines)
+    return ("Ready to generate this **FORMULATION baseline**:\n"
+            f"{body}\n\nShall I go ahead?")
+
+
+BASELINE_CONFIRM_FIELDS = tuple(s.field for s in BASELINE_STEPS)
+
+
+def _baseline_finalize(flow: dict[str, Any]) -> FlowResult:
+    """Build the payload from collected values + defaults and hand off the single mutation."""
+    args: dict[str, Any] = {**BASELINE_DEFAULTS, **flow.get("data", {})}
+    summary = _baseline_summary(flow)
+    return FlowResult(message=summary,
+                      pending={"tool_name": "bobBaseLineGenerate_put", "tool_args": args,
+                               "summary": "Generate a FORMULATION budget baseline"})
+
+
+async def _advance_baseline(flow: dict[str, Any], headers: dict[str, str] | None,
+                            prefix: str = "") -> FlowResult:
+    """Move to the next step and prompt it; finalize (confirm hand-off) when past the last."""
+    flow["idx"] += 1
+    flow["buf"] = []
+    if flow["idx"] >= len(BASELINE_STEPS):
+        flow["stage"] = "confirm"
+        return _baseline_finalize(flow)
+    return await _baseline_prompt(flow, BASELINE_STEPS[flow["idx"]], headers, prefix=prefix)
+
+
+async def _baseline(session: Any, flow: dict[str, Any], msg: str,
+                    headers: dict[str, str] | None) -> FlowResult:
+    if flow.get("stage") == "intro":
+        if _NO.search(msg) and not _YES.search(msg):
+            return _cancel_flow(session, flow)
+        flow["stage"] = "collect"
+        flow["idx"] = 0
+        return await _baseline_prompt(flow, BASELINE_STEPS[0], headers)
+
+    if flow.get("stage") != "collect":
+        # awaiting Confirm/Cancel buttons
+        return FlowResult(message="Please use **Confirm** or **Cancel** above to finish.")
+
+    step = BASELINE_STEPS[flow["idx"]]
+
+    # ── free-text step ──
+    if not step.source_tool and not step.static_options:
+        text = msg.strip()
+        if not text:
+            return FlowResult(message=step.prompt)
+        flow["data"][step.field] = text
+        flow["labels"][step.field] = text
+        return await _advance_baseline(flow, headers)
+
+    # ── static single-choice (Y/N, quarter) ──
+    if step.static_options and not step.multi:
+        if step.optional and _SKIP_RE.search(msg) and not _match_opt(msg, await _fetch_options(step, headers)):
+            flow["data"].pop(step.field, None)          # leave default
+            flow["labels"][step.field] = "—"
+            return await _advance_baseline(flow, headers)
+        if set(step.static_options) == {"Y", "N"}:
+            yn = _yn(msg)
+            if yn is None:
+                return await _baseline_prompt(flow, step, headers, prefix="Please choose Yes or No. ")
+            flow["data"][step.field] = yn
+            flow["labels"][step.field] = "Yes" if yn == "Y" else "No"
+            return await _advance_baseline(flow, headers)
+        opt = _match_opt(msg, await _fetch_options(step, headers))
+        if not opt:
+            return await _baseline_prompt(flow, step, headers, prefix="Please pick one. ")
+        flow["data"][step.field] = opt["value"]
+        flow["labels"][step.field] = opt["label"]
+        return await _advance_baseline(flow, headers)
+
+    # ── fetched picker (single or multi) ──
+    options = await _fetch_options(step, headers)
+
+    if step.multi:
+        buf: list[dict[str, Any]] = flow.setdefault("buf", [])
+        if step.optional and _ALL_RE.search(msg) and not _match_opt(msg, options):
+            flow["data"][step.field] = []               # empty == all
+            flow["labels"][step.field] = "All"
+            return await _advance_baseline(flow, headers)
+        if _DONE_RE.search(msg) or (step.optional and _SKIP_RE.search(msg)):
+            if not buf:
+                if step.optional:
+                    flow["data"][step.field] = []
+                    flow["labels"][step.field] = "All"
+                    return await _advance_baseline(flow, headers)
+                return await _baseline_prompt(flow, step, headers,
+                                              prefix="Pick at least one, then choose Done. ", options=options)
+            flow["data"][step.field] = [b["value"] for b in buf]
+            flow["labels"][step.field] = [b["label"] for b in buf]
+            return await _advance_baseline(flow, headers)
+        # accept one or more (comma-separated) selections this turn
+        added = []
+        for part in re.split(r"[,;]|\band\b", msg):
+            opt = _match_opt(part, options)
+            if opt and all(str(b["value"]) != str(opt["value"]) for b in buf):
+                buf.append(opt)
+                added.append(opt["label"])
+        if not added:
+            return await _baseline_prompt(flow, step, headers,
+                                          prefix="I didn't catch that — pick from the list. ", options=options)
+        chosen = ", ".join(b["label"] for b in buf)
+        return await _baseline_prompt(flow, step, headers,
+                                      prefix=f"Added **{', '.join(added)}** (so far: {chosen}). Add more or choose Done. ",
+                                      options=options)
+
+    # single fetched picker
+    if step.optional and _SKIP_RE.search(msg) and not _match_opt(msg, options):
+        flow["labels"][step.field] = "—"
+        return await _advance_baseline(flow, headers)
+    opt = _match_opt(msg, options)
+    if not opt:
+        return await _baseline_prompt(flow, step, headers, prefix="Please pick one. ", options=options)
+    flow["data"][step.field] = opt["value"]
+    flow["labels"][step.field] = opt["label"]
+    return await _advance_baseline(flow, headers)
+
+
+def baseline_after_generate(session: Any) -> FlowResult | None:
+    """Baseline mutation confirmed & run → finish the flow with a friendly result."""
+    if not is_active(session):
+        return None
+    flow = session.metadata["flow"]
+    title = (flow.get("data", {}) or {}).get("baselineTitle") or "the baseline"
+    session.metadata.pop("flow", None)
+    return FlowResult(
+        message=(f"🎉 **{title}** has been submitted for generation. "
+                 "Baseline runs process in the background — check the FORMULATION baselines "
+                 "screen for status."),
+        done=True)
+
+
 # ── confirm-step callbacks (called by chat_service after the assign confirm) ────
 
 def after_assign(session: Any) -> FlowResult | None:
@@ -791,6 +1114,10 @@ def on_decline(session: Any) -> FlowResult | None:
     if not is_active(session):
         return None
     flow = session.metadata["flow"]
+    if flow.get("name") == "formulation_baseline":
+        # The single mutation is the whole point — declining it cancels the run cleanly.
+        session.metadata.pop("flow", None)
+        return FlowResult(message="Okay — I won't generate the baseline. Nothing was saved.", done=True)
     if flow.get("name") == "data_call":
         flow.pop("currentGroup", None); flow.pop("currentDays", None)
         # declining an attendee → still offer a reminder; declining a reminder → finish
