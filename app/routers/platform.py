@@ -136,6 +136,7 @@ def _forward_headers(request: Request) -> dict[str, str]:
 
 
 # Suggestion chips shown on an empty conversation (curated, enterprise-relevant starters).
+# Fallback greeting prompts when there's no current-application context (no module).
 _SUGGESTIONS: tuple[str, ...] = (
     "Show my applications",
     "What roles do I have?",
@@ -143,6 +144,21 @@ _SUGGESTIONS: tuple[str, ...] = (
     "Create a user",
     "Generate a user access report",
 )
+
+
+def _questions_from_balloons(balloons: list[dict], fallback: tuple[str, ...]) -> list[str]:
+    """Greeting prompts for the CURRENT application — derived from the module-aware balloons so
+    the open-state suggestions match the module (Formulation shows Formulation actions), not a
+    generic admin set. Strips the leading balloon icon; falls back to the generic set."""
+    out: list[str] = []
+    for b in balloons or []:
+        s = str((b or {}).get("label") or "")
+        while s and not s[0].isalnum():          # drop the leading emoji/icon
+            s = s[1:]
+        s = s.strip()
+        if s and s not in out:
+            out.append(s)
+    return out[:6] or list(fallback)
 
 
 async def _identity(request: Request, user: "User") -> dict:
@@ -235,7 +251,7 @@ async def agent_questions(
              src="query" if request.query_params.get("module") else "header").info(
         f"bootstrap balloons: module={module or '(none)'} role={role or '(none)'} → {len(balloons)} balloons")
     return ApiResponse.ok(message="ok", data={
-        "questions": list(_SUGGESTIONS),
+        "questions": _questions_from_balloons(balloons, _SUGGESTIONS),
         "balloons": balloons,
         "module": module,
         "displayName": ident["displayName"],
