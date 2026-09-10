@@ -33,6 +33,64 @@ def _list_block(title: str, items: list[str]) -> UIBlock:
     """A structured set (e.g. a user's roles in one app) — rendered as chips/rows, not prose."""
     return UIBlock(type="list", title=title, items=items)
 
+
+async def _entity_table(tool: str, headers: dict[str, str] | None, cols: list[tuple[str, str]],
+                        title: str, lead: str, cap: int = 50,
+                        keep=None, fmt: dict[str, Any] | None = None,
+                        empty: str = "") -> FlowResult | None:
+    """Fetch a read tool and render a capped structured table. `cols` = [(Header, row_key)];
+    `keep` filters rows; `fmt` maps a row_key → a value formatter. Returns None on total failure
+    so the query falls back to the LLM router (Option B) rather than dead-ending."""
+    try:
+        res = await tool_registry.execute(tool, {}, headers)
+        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+    except Exception as exc:  # noqa: BLE001
+        log.bind(func="entity_table", tool=tool).warning(f"fetch failed: {exc}")
+        return None
+    rows_in = [r for r in (data or []) if isinstance(r, dict)]
+    if keep:
+        rows_in = [r for r in rows_in if keep(r)]
+    if not rows_in:
+        return FlowResult(message=empty) if empty else None
+    fmt = fmt or {}
+    rows = [[(fmt[k](r.get(k)) if k in fmt else str(r.get(k) or "")) for _, k in cols]
+            for r in rows_in[:cap]]
+    total = len(rows_in)
+    note = f"\n\n_Showing {cap} of {total}._" if total > cap else ""
+    return FlowResult(message=lead.format(n=total) + note,
+                      blocks=[_table_block(title, [h for h, _ in cols], rows)])
+
+
+async def _users_list(headers: dict[str, str] | None) -> FlowResult | None:
+    return await _entity_table(
+        "getActiveUsers_get", headers,
+        [("Username", "userName"), ("Name", "fullName"), ("Email", "emailAddress")],
+        "Active users", "There are **{n} active users** — here's a sample:", cap=40)
+
+
+async def _roles_catalog(headers: dict[str, str] | None) -> FlowResult | None:
+    return await _entity_table(
+        "getAllApplicationRoles_get", headers,
+        [("Role", "roleName"), ("Application", "applicationName"), ("Description", "roleDescription")],
+        "All application roles", "There are **{n} roles** across every application:", cap=50,
+        keep=lambda r: str(r.get("enabled", "Y")).upper() != "N")
+
+
+async def _fund_groups(headers: dict[str, str] | None) -> FlowResult | None:
+    return await _entity_table(
+        "getAllFundGroups_get", headers,
+        [("Fund group", "name"), ("Code", "code"), ("Description", "description")],
+        "Fund groups", "There are **{n} fund groups**:", cap=50,
+        keep=lambda r: str(r.get("enabled", "Y")).upper() != "N")
+
+
+async def _fiscal_years(headers: dict[str, str] | None) -> FlowResult | None:
+    return await _entity_table(
+        "getAllFiscalYears_post", headers,
+        [("Fiscal year", "fiscalYear"), ("Type", "fyTypeDesc"), ("Status", "enabled")],
+        "Fiscal years", "There are **{n} fiscal years**:", cap=50,
+        fmt={"enabled": lambda v: "Active" if str(v).upper() == "Y" else "Inactive"})
+
 # ── intent cues ────────────────────────────────────────────────────────────────
 _MY_ACCESS = re.compile(
     r"\b(my (access|applications?|apps|roles)|what can i (do|access)|apps? i have|"
@@ -141,9 +199,16 @@ async def _dispatch(r: str, intent: Any, app: dict[str, Any] | None,
     if r == "about_app":
         return await _about_app(app, headers, from_current=from_current)
     if r == "roles_catalog":
+        # "roles" while viewing an app → that app; a bare "list all roles" → the full catalogue.
         cur = await _current_app(headers)
-        return await _app_roles(cur, headers, from_current=True) if cur else None
-    # users_list · users_in_app · fund_groups · organizations · fiscal_years → not built yet
+        return await _app_roles(cur, headers, from_current=True) if cur else await _roles_catalog(headers)
+    if r in ("users_list", "users_in_app"):
+        return await _users_list(headers)
+    if r == "fund_groups":
+        return await _fund_groups(headers)
+    if r == "fiscal_years":
+        return await _fiscal_years(headers)
+    # organizations → deferred (no clean "list all orgs" endpoint) → LLM fallback (Option B)
     return None
 
 

@@ -56,6 +56,7 @@ CASES: list[tuple[str, str, dict]] = [
     ("roles in FORMULATION", "app_roles", {"entity": "role", "app": "FORMULATION"}),
     ("what roles does Allocation Planner have", "app_roles", {"app": "ALLOCATION"}),
     ("my roles", "my_roles_all", {"entity": "role", "subject": "self"}),
+    ("list all roles", "roles_catalog", {"entity": "role", "subject": "all"}),
 
     # ── users / who-has-access ──
     ("who can access FORMULATION", "app_users", {"action": "who", "app": "FORMULATION"}),
