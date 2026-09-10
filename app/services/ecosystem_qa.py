@@ -34,6 +34,11 @@ def _list_block(title: str, items: list[str]) -> UIBlock:
     return UIBlock(type="list", title=title, items=items)
 
 
+def _roles_count(n: int) -> str:
+    """Compact access summary — '7 roles' — so an overview doesn't dump every role name."""
+    return f"{n} role" if n == 1 else f"{n} roles"
+
+
 async def _entity_table(tool: str, headers: dict[str, str] | None, cols: list[tuple[str, str]],
                         title: str, lead: str, cap: int = 50,
                         keep=None, fmt: dict[str, Any] | None = None,
@@ -392,9 +397,9 @@ async def _named_access(user: str, headers: dict[str, str] | None) -> FlowResult
             by_app[app].append(role)
     if not by_app:
         return None
-    lead = _say(f"Here's what **{full}** ({user}) can get into — **{len(by_app)} applications**:",
-                f"**{full}** ({user}) has access to **{len(by_app)} applications**:")
-    rows = [[app, ", ".join(sorted(by_app[app]))] for app in sorted(by_app)]
+    lead = _say(f"**{full}** ({user}) has access to **{len(by_app)} applications** — "
+                "ask about any one to see the roles:")
+    rows = [[app, _roles_count(len(by_app[app]))] for app in sorted(by_app)]
     return FlowResult(
         message=lead,
         blocks=[_table_block(f"{full} — access", ["Application", "Roles"], rows)],
@@ -484,10 +489,9 @@ async def _my_access(headers: dict[str, str] | None) -> FlowResult:
         role = str(r.get("roleName") or r.get("role") or "").strip()
         if app and role and role not in by_app.setdefault(app, []):
             by_app[app].append(role)
-    lead = _say(f"Here's what you can get into — **{len(by_app)} applications**:",
-                f"You've got access to **{len(by_app)} applications**:",
-                f"Nice — you can jump into **{len(by_app)} applications**:")
-    rows = [[app, ", ".join(sorted(by_app[app]))] for app in sorted(by_app)]
+    lead = _say(f"You can jump into **{len(by_app)} applications** — ask about any one to see its roles:",
+                f"You've got access to **{len(by_app)} applications** — tell me which to see the roles:")
+    rows = [[app, _roles_count(len(by_app[app]))] for app in sorted(by_app)]
     return FlowResult(
         message=lead,
         blocks=[_table_block("Your access", ["Application", "Roles"], rows)],
