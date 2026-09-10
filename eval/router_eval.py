@@ -66,6 +66,9 @@ CASES: list[tuple[str, str, dict]] = [
     # ── the rest of the ecosystem (rollout targets) ──
     ("list fund groups", "fund_groups", {"entity": "fund_group"}),
     ("show organizations", "organizations", {"entity": "organization"}),
+    ("list divisions", "divisions", {"entity": "division"}),
+    ("list sub-orgs", "org_level", {"entity": "sub_org"}),
+    ("list program offices", "org_level", {"entity": "program_office"}),
     ("list fiscal years", "fiscal_years", {"entity": "fiscal_year"}),
     ("tell me about Formulation", "about_app", {"action": "describe", "app": "FORMULATION"}),
 

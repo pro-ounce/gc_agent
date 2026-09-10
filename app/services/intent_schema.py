@@ -22,8 +22,9 @@ from typing import Any
 
 # ── controlled vocabularies ───────────────────────────────────────────────────
 ACTIONS = ("list", "count", "describe", "who", "assign", "remove", "edit", "generate")
-ENTITIES = ("application", "role", "user", "fund_group", "organization",
-            "fiscal_year", "data_call", "baseline")
+# Organizations are a self-referential tree: org → sub-org → program office → division.
+ENTITIES = ("application", "role", "user", "fund_group", "organization", "sub_org",
+            "program_office", "division", "fiscal_year", "data_call", "baseline")
 SUBJECTS = ("self", "user", "all")   # who the query is about
 
 
@@ -61,6 +62,10 @@ _ENTITY_CUES: list[tuple[str, str]] = [
     ("data_call", r"\bdata calls?\b"),
     ("fiscal_year", r"\bfiscal years?\b|\bbfy\b"),
     ("fund_group", r"\bfund ?groups?\b"),
+    # org hierarchy (most specific first): sub-org · program office · division · organization
+    ("sub_org", r"\bsub[ -]?(?:orgs?|organi[sz]ations?)\b"),
+    ("program_office", r"\bprogram[ -]?offices?\b|\bprog\.? ?office\b"),
+    ("division", r"\bdivisions?\b"),
     ("organization", r"\borgani[sz]ations?\b|\borgs?\b"),
     ("role", r"\broles?\b"),
     ("user", r"\busers?\b|\baccounts?\b"),
@@ -205,6 +210,11 @@ def route(it: Intent) -> str:
         return "fund_groups"
     if e == "organization":
         return "organizations"
+    if e == "division":
+        return "divisions"
+    if e in ("sub_org", "program_office"):
+        # tree-relative levels — fetched under a fund-group/app context, not a flat master list
+        return "org_level"
     if e == "fiscal_year":
         return "fiscal_years"
 

@@ -91,6 +91,27 @@ async def _fiscal_years(headers: dict[str, str] | None) -> FlowResult | None:
         "Fiscal years", "There are **{n} fiscal years**:", cap=50,
         fmt={"enabled": lambda v: "Active" if str(v).upper() == "Y" else "Inactive"})
 
+
+# Org hierarchy: org → sub-org → program office → division (self-referential parentOrganizationId
+# tree). The master lists below are flat; sub-orgs / program offices are tree-relative and
+# fund-group-scoped, so those route to the LLM fallback until we settle their scoping UX.
+async def _organizations(headers: dict[str, str] | None) -> FlowResult | None:
+    return await _entity_table(
+        "getOrganizations_get", headers,
+        [("Organization", "organizationName"), ("Code", "organizationCode"),
+         ("Description", "organizationDescription")],
+        "Organizations", "There are **{n} organizations**:", cap=50,
+        keep=lambda r: str(r.get("enabled", "Y")).upper() != "N")
+
+
+async def _divisions(headers: dict[str, str] | None) -> FlowResult | None:
+    return await _entity_table(
+        "getAllDivisions_post", headers,
+        [("Division", "organizationName"), ("Code", "organizationCode"),
+         ("Description", "organizationDescription")],
+        "Divisions", "There are **{n} divisions**:", cap=50,
+        keep=lambda r: str(r.get("enabled", "Y")).upper() != "N")
+
 # ── intent cues ────────────────────────────────────────────────────────────────
 _MY_ACCESS = re.compile(
     r"\b(my (access|applications?|apps|roles)|what can i (do|access)|apps? i have|"
@@ -208,7 +229,11 @@ async def _dispatch(r: str, intent: Any, app: dict[str, Any] | None,
         return await _fund_groups(headers)
     if r == "fiscal_years":
         return await _fiscal_years(headers)
-    # organizations → deferred (no clean "list all orgs" endpoint) → LLM fallback (Option B)
+    if r == "organizations":
+        return await _organizations(headers)
+    if r == "divisions":
+        return await _divisions(headers)
+    # org_level (sub-orgs / program offices) is tree-relative + fund-group-scoped → LLM fallback
     return None
 
 
