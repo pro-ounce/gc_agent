@@ -68,11 +68,14 @@ async def handle(message: str, headers: dict[str, str] | None) -> FlowResult | N
     if _MUTATION_CUE.search(msg):
         return None
 
-    if _MY_ACCESS.search(msg):
-        return await _my_access(headers)
-
     # An application named in the message steers app-specific answers.
     app = await _mentioned_app(msg, headers)
+
+    if _MY_ACCESS.search(msg):
+        # "my roles in FORMULATION" → scope to that app; plain "my access" → all apps.
+        if app:
+            return await _my_access_in_app(app, headers)
+        return await _my_access(headers)
     if app:
         if _WHO_ACCESS.search(msg):
             return await _app_users(app, headers)
@@ -310,6 +313,37 @@ async def _app_users(app: dict[str, Any], headers: dict[str, str] | None,
         head += f" — here are the first {cap}"
     msg = head + ":\n\n" + _tbl(["User", "Name", "Roles"], trows)
     return FlowResult(message=msg, suggestions=[_chip(f"Roles in {app['name'].split()[0]}", f"roles in {app['code']}", icon="role")])
+
+
+async def _my_access_in_app(app: dict[str, Any], headers: dict[str, str] | None) -> FlowResult:
+    """The caller's own roles in ONE named application (e.g. 'my roles in FORMULATION')."""
+    try:
+        res = await tool_registry.execute("getActiveUserAppRolesByUserId_post", {}, headers)
+        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+    except Exception:  # noqa: BLE001
+        data = None
+    want = {_norm(app.get("name")), _norm(app.get("code"))} - {""}
+    roles: list[str] = []
+    for r in (data or []):
+        if not isinstance(r, dict):
+            continue
+        an = _norm(r.get("applicationName") or "")
+        ac = _norm(r.get("applicationCode") or "")
+        if an in want or ac in want:
+            role = str(r.get("roleName") or r.get("role") or "").strip()
+            if role and role not in roles:
+                roles.append(role)
+    name = app.get("name") or app.get("code")
+    if not roles:
+        return FlowResult(
+            message=f"You don't have any roles in **{name}** right now.",
+            suggestions=[_chip("My access", "my access"),
+                         _chip(f"Roles in {name}", f"roles in {name}")])
+    body = "\n".join(f"- **{x}**" for x in sorted(roles))
+    plural = "role" if len(roles) == 1 else "roles"
+    return FlowResult(
+        message=_say(f"In **{name}**, you have **{len(roles)} {plural}**:\n{body}",
+                     f"Your **{name}** access — **{len(roles)} {plural}**:\n{body}"))
 
 
 async def _my_access(headers: dict[str, str] | None) -> FlowResult:
