@@ -17,6 +17,17 @@ from . import ecosystem as eco
 from . import intent as intent_mod
 from .flows import FlowResult
 from ..mcp.tool_registry import tool_registry
+from ..models.chat import UIBlock
+
+
+def _table_block(title: str, columns: list[str], rows: list[list[Any]]) -> UIBlock:
+    """A structured table the widget renders with its block component (not a markdown dump)."""
+    return UIBlock(type="table", title=title, columns=columns, rows=rows)
+
+
+def _list_block(title: str, items: list[str]) -> UIBlock:
+    """A structured set (e.g. a user's roles in one app) — rendered as chips/rows, not prose."""
+    return UIBlock(type="list", title=title, items=items)
 
 # ── intent cues ────────────────────────────────────────────────────────────────
 _MY_ACCESS = re.compile(
@@ -272,11 +283,11 @@ async def _named_access(user: str, headers: dict[str, str] | None) -> FlowResult
         return None
     lead = _say(f"Here's what **{full}** ({user}) can get into — **{len(by_app)} applications**:",
                 f"**{full}** ({user}) has access to **{len(by_app)} applications**:")
-    lines = [lead, ""]
-    for app in sorted(by_app):
-        lines.append(f"- **{app}** — {', '.join(sorted(by_app[app]))}")
-    return FlowResult(message="\n".join(lines),
-                      suggestions=[_chip("List applications", "list applications")])
+    rows = [[app, ", ".join(sorted(by_app[app]))] for app in sorted(by_app)]
+    return FlowResult(
+        message=lead,
+        blocks=[_table_block(f"{full} — access", ["Application", "Roles"], rows)],
+        suggestions=[_chip("List applications", "list applications")])
 
 
 async def _app_users(app: dict[str, Any], headers: dict[str, str] | None,
@@ -339,11 +350,10 @@ async def _my_access_in_app(app: dict[str, Any], headers: dict[str, str] | None)
             message=f"You don't have any roles in **{name}** right now.",
             suggestions=[_chip("My access", "my access"),
                          _chip(f"Roles in {name}", f"roles in {name}")])
-    body = "\n".join(f"- **{x}**" for x in sorted(roles))
     plural = "role" if len(roles) == 1 else "roles"
-    return FlowResult(
-        message=_say(f"In **{name}**, you have **{len(roles)} {plural}**:\n{body}",
-                     f"Your **{name}** access — **{len(roles)} {plural}**:\n{body}"))
+    lead = _say(f"In **{name}**, you have **{len(roles)} {plural}**:",
+                f"Your **{name}** access — **{len(roles)} {plural}**:")
+    return FlowResult(message=lead, blocks=[_list_block(f"Your roles in {name}", sorted(roles))])
 
 
 async def _my_access(headers: dict[str, str] | None) -> FlowResult:
@@ -363,10 +373,11 @@ async def _my_access(headers: dict[str, str] | None) -> FlowResult:
         role = str(r.get("roleName") or r.get("role") or "").strip()
         if app and role and role not in by_app.setdefault(app, []):
             by_app[app].append(role)
-    lines = [_say(f"Here's what you can get into — **{len(by_app)} applications**:",
-                  f"You've got access to **{len(by_app)} applications**:",
-                  f"Nice — you can jump into **{len(by_app)} applications**:"), ""]
-    for app in sorted(by_app):
-        lines.append(f"- **{app}** — {', '.join(sorted(by_app[app]))}")
-    return FlowResult(message="\n".join(lines),
-                      suggestions=[_chip("List all applications", "list applications")])
+    lead = _say(f"Here's what you can get into — **{len(by_app)} applications**:",
+                f"You've got access to **{len(by_app)} applications**:",
+                f"Nice — you can jump into **{len(by_app)} applications**:")
+    rows = [[app, ", ".join(sorted(by_app[app]))] for app in sorted(by_app)]
+    return FlowResult(
+        message=lead,
+        blocks=[_table_block("Your access", ["Application", "Roles"], rows)],
+        suggestions=[_chip("List all applications", "list applications")])

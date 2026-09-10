@@ -44,6 +44,7 @@ class FlowResult:
     suggestions: list[dict[str, Any]] = field(default_factory=list)
     pending: dict[str, Any] | None = None   # {tool_name, tool_args, summary} → emit confirm
     done: bool = False
+    blocks: list[Any] = field(default_factory=list)  # structured UIBlocks (table/fields/list)
 
 
 def _chip(label: str, send: str | None = None, icon: str | None = None) -> dict[str, Any]:

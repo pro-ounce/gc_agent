@@ -487,6 +487,7 @@ class ChatService:
         return ChatResponse(
             session_id=sid, message_id=str(uuid.uuid4()),
             assistant_message=fr.message,
+            blocks=fr.blocks or [],
             suggestions=[Suggestion(**s) for s in fr.suggestions],
             finish_reason="stop",
         )
@@ -505,6 +506,7 @@ class ChatService:
         return [
             StreamChunk(type="delta", session_id=sid, content=fr.message),
             StreamChunk(type="done", session_id=sid, content=fr.message,
+                        blocks=fr.blocks or [],
                         suggestions=[Suggestion(**s) for s in fr.suggestions],
                         finish_reason="stop"),
         ]
