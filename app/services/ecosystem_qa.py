@@ -18,6 +18,10 @@ from . import intent as intent_mod
 from .flows import FlowResult
 from ..mcp.tool_registry import tool_registry
 from ..models.chat import UIBlock
+from .intent_schema import extract_intent, route as route_intent
+from ..commons.logger import get_logger
+
+log = get_logger(__name__)
 
 
 def _table_block(title: str, columns: list[str], rows: list[list[Any]]) -> UIBlock:
@@ -79,50 +83,67 @@ async def handle(message: str, headers: dict[str, str] | None) -> FlowResult | N
     if _MUTATION_CUE.search(msg):
         return None
 
-    # An application named in the message steers app-specific answers.
+    # ── Option A: parse the query into a structured intent and dispatch on it ──
+    # An application named in the message resolves to its dict + seeds the slot extractor.
     app = await _mentioned_app(msg, headers)
-
-    if _MY_ACCESS.search(msg):
-        # "my roles in FORMULATION" → scope to that app; plain "my access" → all apps.
-        if app:
-            return await _my_access_in_app(app, headers)
-        return await _my_access(headers)
+    apps_map: dict[str, str] = {}
     if app:
-        if _WHO_ACCESS.search(msg):
-            return await _app_users(app, headers)
-        if _ROLES_CUE.search(msg):
-            return await _app_roles(app, headers)
-        if _ABOUT_CUE.search(msg) or _norm(msg) == _norm(app["name"]) or _norm(msg) == _norm(app["code"]):
-            return await _about_app(app, headers)
+        for k in (app.get("name"), app.get("code")):
+            if k:
+                apps_map[str(k).lower()] = str(app.get("code") or "")
+    intent = extract_intent(msg, apps_map)
+    r = route_intent(intent)
 
-    # A named user's access ("what can GCADMIN do"). Only if no application matched above.
-    user = _extract_user(msg)
-    if user:
-        fr = await _named_access(user, headers)
-        if fr is not None:
-            return fr
+    # UNKNOWN / mutation / low confidence → fall through to the LLM router (Option B).
+    # First, honour current-app context: a bare "roles?" / "who has access?" while the user
+    # is viewing an application is about THAT application.
+    if r in ("", "skill_or_flow") or intent.confidence < 0.6:
+        cur = await _current_app(headers) if not app else None
+        if cur and intent.entity == "role":
+            log.bind(func="intent_router", route="app_roles", ctx="current").info("intent_route")
+            return await _app_roles(cur, headers, from_current=True)
+        if cur and (intent.entity == "user" or intent.action == "who"):
+            log.bind(func="intent_router", route="app_users", ctx="current").info("intent_route")
+            return await _app_users(cur, headers, from_current=True)
+        log.bind(func="intent_router", route="escalate", entity=intent.entity,
+                 subject=intent.subject, conf=intent.confidence).info("intent_escalate")
+        return None
 
-    if _LIST_APPS.search(msg):
-        return await _list_apps(headers, show_all=bool(re.search(r"\b(all|every|unlicensed|catalog(ue)?|disabled)\b", msg, re.I)))
+    fr = await _dispatch(r, intent, app, headers)
+    log.bind(func="intent_router", route=r, entity=intent.entity, subject=intent.subject,
+             app=intent.app, conf=intent.confidence, answered=fr is not None).info("intent_route")
+    return fr
 
-    # ── semantic fallback: catch natural rewordings the regex missed ──
-    name, score = await intent_mod.classify(msg)
-    if name:
-        cur = app or await _current_app(headers)   # named app, else the one they're viewing
-        if name == "list_apps":
-            return await _list_apps(headers)
-        if name == "my_access":
-            return await _my_access(headers)
-        if name == "user_access" and user:
-            fr = await _named_access(user, headers)
-            if fr is not None:
-                return fr
-        if cur and name == "roles_app":
-            return await _app_roles(cur, headers, from_current=app is None)
-        if cur and name == "who_access":
-            return await _app_users(cur, headers, from_current=app is None)
-        if cur and name == "about_app":
-            return await _about_app(cur, headers, from_current=app is None)
+
+async def _dispatch(r: str, intent: Any, app: dict[str, Any] | None,
+                    headers: dict[str, str] | None) -> FlowResult | None:
+    """Run the handler an Intent routed to. App-scoped routes fall back to the application the
+    user is viewing when none was named. A route with no handler yet returns None → the LLM
+    router (Option B) answers it (that is the safe fallback, not a wrong guess)."""
+    if r in ("app_roles", "app_users", "about_app", "my_access_in_app") and not app:
+        app = await _current_app(headers)
+        if not app:
+            return None
+    from_current = app is not None and intent.app == ""
+
+    if r == "list_apps":
+        return await _list_apps(headers, show_all=bool(intent.filters.get("show_all")))
+    if r in ("my_access", "my_roles_all"):
+        return await _my_access(headers)
+    if r == "named_access":
+        return await _named_access(intent.user, headers)
+    if r == "my_access_in_app":
+        return await _my_access_in_app(app, headers)
+    if r == "app_roles":
+        return await _app_roles(app, headers, from_current=from_current)
+    if r == "app_users":
+        return await _app_users(app, headers, from_current=from_current)
+    if r == "about_app":
+        return await _about_app(app, headers, from_current=from_current)
+    if r == "roles_catalog":
+        cur = await _current_app(headers)
+        return await _app_roles(cur, headers, from_current=True) if cur else None
+    # users_list · users_in_app · fund_groups · organizations · fiscal_years → not built yet
     return None
 
 
