@@ -119,6 +119,104 @@ async def admin_delete_balloons(request: Request, app: str):
     return {"app": app.upper(), "overrides": balloon_store.all_overrides()}
 
 
+# ── workflows (author/edit the node-graph workflows that the chat engine runs) ──────
+# The node vocabulary the authoring UI offers — mirrors workflows/README.md so the console is
+# self-documenting and a manager/developer can build a flow without reading the source.
+_WF_NODE_TYPES = [
+    {"type": "ask", "purpose": "Prompt the user for a value",
+     "fields": ["field", "prompt", "next", "options_from", "label_key", "value_key", "static", "multi", "optional"]},
+    {"type": "fetch", "purpose": "Call a read tool → stash its result",
+     "fields": ["tool", "args", "as_key", "next"]},
+    {"type": "filter", "purpose": "Shape a list (keep / exclude)",
+     "fields": ["source", "as_key", "keep", "exclude_source", "on", "next"]},
+    {"type": "branch", "purpose": "Route on a collected value",
+     "fields": ["field", "cases", "default"]},
+    {"type": "confirm", "purpose": "Summary + gate the write (confirm / cancel / change)",
+     "fields": ["summary", "next"]},
+    {"type": "mutate", "purpose": "Call a write tool", "fields": ["tool", "arg_map", "next"]},
+    {"type": "say", "purpose": "Terminal message, ends the run", "fields": ["text"]},
+]
+
+
+def _wf_summary(wf) -> dict:
+    """A workflow's spec plus console metadata (is it admin-owned / does it override a repo one)."""
+    from ..services import workflow as _wfmod, workflow_store as _wfs
+    spec = _wfmod.to_dict(wf)
+    custom = wf.id in _wfs.custom_ids()
+    repo_shipped = (_STATIC_DIR.parent / "services" / "workflows" / f"{wf.id}.json").exists()
+    return {**spec, "node_count": len(spec.get("nodes", [])),
+            "custom": custom, "overridden": custom and repo_shipped, "repo": repo_shipped}
+
+
+@router.get("/admin/workflows", summary="All registered workflows + the authoring vocabulary")
+async def admin_workflows(request: Request):
+    _guard(request)
+    from ..services import workflow as _wfmod
+    wfs = [_wf_summary(_wfmod.REGISTRY[k]) for k in sorted(_wfmod.REGISTRY)]
+    return {"workflows": wfs, "node_types": _WF_NODE_TYPES}
+
+
+@router.get("/admin/workflows/tools", summary="Suggest MCP tools for a fetch/mutate node")
+async def admin_workflow_tools(request: Request):
+    """Tool-RAG for the workflow author: given a purpose, return candidate MCP tools with their
+    cleaned descriptions and required fields — so a fetch/mutate node names a real tool."""
+    _guard(request)
+    from ..services import skill_store
+    q = (request.query_params.get("q") or "").strip()
+    if not q:
+        return {"tools": []}
+    return {"tools": await skill_store.suggest_tools(q, int(request.query_params.get("k", "8")))}
+
+
+@router.get("/admin/workflows/{wf_id}", summary="One workflow's authoring spec")
+async def admin_workflow_get(request: Request, wf_id: str):
+    _guard(request)
+    from ..services import workflow as _wfmod
+    wf = _wfmod.REGISTRY.get(wf_id)
+    if not wf:
+        return JSONResponse({"detail": f"no workflow {wf_id!r}"}, status_code=404)
+    return _wf_summary(wf)
+
+
+@router.post("/admin/workflows/validate", summary="Validate a workflow spec (no save)")
+async def admin_workflow_validate(request: Request):
+    _guard(request)
+    from ..services import workflow_store as _wfs
+    spec = await request.json()
+    err = _wfs.validate(spec if isinstance(spec, dict) else {})
+    return {"ok": not err, "error": err}
+
+
+@router.put("/admin/workflows/{wf_id}", summary="Create/update a workflow (validate + hot-register)")
+async def admin_workflow_save(request: Request, wf_id: str):
+    """Author a workflow at runtime: validate the spec through the loader, persist it (KV + flat
+    file, survives deploy), and register it live so the chat engine picks it up on the next turn.
+    The body's `id` must match the path so a rename can't silently orphan the old id."""
+    _guard(request)
+    from ..services import workflow_store as _wfs
+    spec = await request.json()
+    if not isinstance(spec, dict) or not spec.get("id"):
+        return JSONResponse({"detail": "spec must be an object with an 'id'"}, status_code=400)
+    if str(spec["id"]) != wf_id:
+        return JSONResponse({"detail": f"id mismatch: path {wf_id!r} vs body {spec['id']!r}"}, status_code=400)
+    try:
+        wf = _wfs.save_workflow(spec)
+    except Exception as exc:  # noqa: BLE001 — invalid spec: report, don't 500
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    return _wf_summary(wf)
+
+
+@router.delete("/admin/workflows/{wf_id}", summary="Delete an admin-authored workflow")
+async def admin_workflow_delete(request: Request, wf_id: str):
+    _guard(request)
+    from ..services import workflow_store as _wfs
+    if not _wfs.delete_workflow(wf_id):
+        return JSONResponse(
+            {"detail": f"{wf_id!r} is repo-shipped (not admin-authored) — edit its file in the "
+                       "repo, or save an override here first"}, status_code=400)
+    return {"deleted": wf_id}
+
+
 @router.get("/admin/logs", summary="Recent in-memory logs (turns, prompts, errors)")
 async def admin_logs(request: Request):
     _guard(request)

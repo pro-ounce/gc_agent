@@ -60,6 +60,7 @@
     elTabs.innerHTML = groups.map(function(g,i){ return tabBtn(g,g,i===0); }).join("")
       + tabBtn("Metrics","__metrics__",false)
       + tabBtn("Activity","__activity__",false)
+      + tabBtn("Workflows","__workflows__",false)
       + tabBtn("Docs","__docs__",false)
       + tabBtn("Audit","__audit__",false)
       + tabBtn("Backups","__backups__",false)
@@ -68,7 +69,7 @@
       var cards = params.filter(function(p){return p.group===g;}).map(cardFor).join("");
       return '<section class="admin-section'+(i===0?" active":"")+'" data-tab="'+esc(g)+'" role="tabpanel"'
         +' id="panel-'+sid(g)+'" aria-labelledby="tab-'+sid(g)+'" tabindex="0"><div class="cards">'+cards+'</div></section>';
-    }).join("") + metricsSectionHTML() + activitySectionHTML() + docsSectionHTML() + auditSectionHTML() + backupsSectionHTML() + logsSectionHTML();
+    }).join("") + metricsSectionHTML() + activitySectionHTML() + workflowsSectionHTML() + docsSectionHTML() + auditSectionHTML() + backupsSectionHTML() + logsSectionHTML();
     // tab switching — WAI-ARIA tabs: roving tabindex, arrow/Home/End keys, aria-selected.
     var tabEls = Array.prototype.slice.call(elTabs.children);
     function selectTab(btn){
@@ -113,6 +114,7 @@
     initBackups();
     initMetrics();
     initActivity();
+    initWorkflows();
     initDocs();
     initAudit();
     initLogs();
@@ -563,6 +565,235 @@
         +(s.tokens_in!=null?' <span class="pill">'+num(s.tokens_in)+'→'+num(s.tokens_out)+' tok</span>':'')+'</div>'+bar+'</div></div>'+conn;
     }).join("");
     document.getElementById("wf-body").innerHTML=body||'<div class="def">No steps captured.</div>';
+  }
+
+  // ══ Workflows tab — author/edit the node-graph workflows the chat engine runs ══════
+  // (distinct from the per-request "Request workflow" replay above; this builds the flows.)
+  var WF_TYPE_COLOR = { ask:"#6d28d9", fetch:"#2563eb", filter:"#0d9488", branch:"#b45309",
+    confirm:"#7c3aed", mutate:"#dc2626", say:"#16a34a" };
+  var _wfNodeTypes = [], _wfSelId = null, _wfListCache = [], _wfValTimer = null, _wfView = "diagram";
+
+  function workflowsSectionHTML(){
+    return '<section class="admin-section" data-tab="__workflows__" role="tabpanel" id="panel-__workflows__" aria-labelledby="tab-__workflows__" tabindex="0">'
+      +'<div class="wfe-wrap">'
+      // ── left: workflow list ──
+      +'<div class="card wfe-list-card"><div class="top"><span class="lbl">Workflows <span id="wfe-count" class="key"></span></span>'
+      +'<span class="btns"><button id="wfe-new" class="btn" style="padding:5px 11px">+ New</button>'
+      +'<button id="wfe-refresh" class="btn" style="padding:5px 11px">Refresh</button></span></div>'
+      +'<div id="wfe-list" style="margin-top:10px">loading…</div>'
+      +'<div class="def" style="margin-top:12px;line-height:1.6">Workflows are <b>data, not code</b> — the same JSON the agent loads from <span class="mono">services/workflows/*.json</span>. Save here and it validates, persists (survives deploys), and the chat engine picks it up on the next turn.</div>'
+      +'</div>'
+      // ── right: editor ──
+      +'<div class="card wfe-edit-card"><div class="top">'
+      +'<span class="lbl" id="wfe-title">Select a workflow</span>'
+      +'<span class="btns"><span class="wfe-toggle" role="tablist">'
+      +'<button id="wfe-v-diagram" class="wfe-vbtn active" data-v="diagram">Diagram</button>'
+      +'<button id="wfe-v-json" class="wfe-vbtn" data-v="json">JSON</button></span></span></div>'
+      +'<div id="wfe-diagram" class="wfe-diagram">Pick a workflow on the left, or <b>+ New</b> to author one.</div>'
+      +'<div id="wfe-json-wrap" hidden>'
+      +'<textarea id="wfe-json" class="wfe-json mono" spellcheck="false" aria-label="Workflow JSON"></textarea>'
+      +'<details class="wfe-ref"><summary>Node types</summary><div id="wfe-ref"></div></details>'
+      +'</div>'
+      +'<div class="wfe-actions"><span id="wfe-status" class="def"></span><span style="flex:1"></span>'
+      +'<button id="wfe-delete" class="btn" style="color:#b91c1c">Delete</button>'
+      +'<button id="wfe-revert" class="btn">Revert</button>'
+      +'<button id="wfe-save" class="btn primary" disabled>Save &amp; register</button></div>'
+      +'</div></div></section>';
+  }
+
+  function wfBadge(w){
+    if(w.overridden) return '<span class="pill" style="background:var(--amber-wash);color:var(--amber);border-color:#f3ddc0">edited</span>';
+    if(w.custom) return '<span class="pill" style="background:var(--good-wash);color:var(--good);border-color:#b6e3c4">custom</span>';
+    return '<span class="pill" style="opacity:.7">repo</span>';
+  }
+  function renderWfList(){
+    var el=document.getElementById("wfe-list"); if(!el) return;
+    var cnt=document.getElementById("wfe-count"); if(cnt) cnt.textContent="("+_wfListCache.length+")";
+    if(!_wfListCache.length){ el.innerHTML='<div class="def">No workflows registered.</div>'; return; }
+    el.innerHTML=_wfListCache.map(function(w){
+      var on=(w.id===_wfSelId);
+      return '<div class="wfe-item'+(on?" sel":"")+'" data-id="'+esc(w.id)+'" tabindex="0" role="button">'
+        +'<div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline">'
+        +'<span style="font-weight:600;font-size:13.5px">'+esc(w.title||w.id)+'</span>'+wfBadge(w)+'</div>'
+        +'<div class="def" style="margin-top:2px"><span class="mono">'+esc(w.id)+'</span> · '+(w.node_count||0)+' nodes</div>'
+        +'<div class="def" style="margin-top:1px">trigger <span class="mono">'+esc(w.trigger||"")+'</span></div></div>';
+    }).join("");
+  }
+  function loadWorkflows(){
+    var el=document.getElementById("wfe-list"); if(!el) return;
+    fetch(API+"/workflows",{cache:"no-store"}).then(function(r){return r.json();}).then(function(d){
+      _wfListCache=d.workflows||[]; _wfNodeTypes=d.node_types||[];
+      renderWfList(); renderWfRef();
+      if(_wfSelId){ var still=_wfListCache.filter(function(w){return w.id===_wfSelId;})[0];
+        if(still) selectWf(still); }
+    }).catch(function(e){ el.innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; });
+  }
+  function renderWfRef(){
+    var el=document.getElementById("wfe-ref"); if(!el||!_wfNodeTypes.length) return;
+    el.innerHTML=_wfNodeTypes.map(function(n){
+      return '<div style="margin:6px 0"><span class="pill" style="background:'+(WF_TYPE_COLOR[n.type]||"#64748b")+'1a;color:'+(WF_TYPE_COLOR[n.type]||"#64748b")+';border-color:'+(WF_TYPE_COLOR[n.type]||"#64748b")+'55">'+esc(n.type)+'</span> '
+        +'<span class="def" style="color:var(--ink)">'+esc(n.purpose)+'</span>'
+        +'<div class="def mono" style="margin-top:1px">'+esc((n.fields||[]).join(", "))+'</div></div>';
+    }).join("");
+  }
+
+  function setWfStatus(msg,cls){ var s=document.getElementById("wfe-status"); if(s){ s.textContent=msg||""; s.className="def "+(cls||""); s.style.color=(cls==="err")?"#b91c1c":(cls==="ok")?"var(--good)":""; } }
+  function wfEditor(){ return document.getElementById("wfe-json"); }
+  function currentSpec(){ try{ return JSON.parse(wfEditor().value); }catch(e){ return null; } }
+
+  function selectWf(w){
+    _wfSelId=w.id;
+    document.getElementById("wfe-title").innerHTML=esc(w.title||w.id)+' '+wfBadge(w);
+    var spec={id:w.id,title:w.title,trigger:w.trigger,start:w.start,nodes:w.nodes};
+    wfEditor().value=JSON.stringify(spec,null,2);
+    document.getElementById("wfe-delete").style.display=w.custom?"":"none";
+    document.getElementById("wfe-save").disabled=true;
+    setWfStatus(w.repo && !w.custom ? "Repo-shipped — saving creates a live override" : "", "");
+    renderWfList();
+    renderWfDiagram(spec);
+  }
+
+  function newWf(){
+    _wfSelId=null;
+    document.getElementById("wfe-title").textContent="New workflow";
+    var tmpl={ id:"my_workflow", title:"My workflow", trigger:"\\bmy trigger\\b", start:"ask_1",
+      nodes:[ {id:"ask_1",type:"ask",field:"name",prompt:"What is your **name**?",next:"say_1"},
+              {id:"say_1",type:"say",text:"✅ Thanks, $name."} ] };
+    wfEditor().value=JSON.stringify(tmpl,null,2);
+    document.getElementById("wfe-delete").style.display="none";
+    document.getElementById("wfe-save").disabled=false;
+    setWfView("json"); setWfStatus("Edit the template, then Save & register.","");
+    renderWfDiagram(tmpl); renderWfList();
+  }
+
+  function validateWf(){
+    var raw=wfEditor().value, spec;
+    try{ spec=JSON.parse(raw); }catch(e){ setWfStatus("JSON error: "+e.message,"err"); return; }
+    fetch(API+"/workflows/validate",{method:"POST",headers:{"Content-Type":"application/json"},body:raw})
+      .then(function(r){return r.json();}).then(function(d){
+        if(d.ok){ setWfStatus("Valid ✓","ok"); document.getElementById("wfe-save").disabled=false; renderWfDiagram(spec); }
+        else { setWfStatus(d.error||"invalid","err"); document.getElementById("wfe-save").disabled=true; }
+      }).catch(function(e){ setWfStatus("validate failed: "+e.message,"err"); });
+  }
+  function saveWf(){
+    var spec=currentSpec();
+    if(!spec||!spec.id){ setWfStatus("spec needs an id","err"); return; }
+    setWfStatus("saving…","");
+    fetch(API+"/workflows/"+encodeURIComponent(spec.id),{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify(spec)})
+      .then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});})
+      .then(function(res){
+        if(!res.ok){ setWfStatus(res.d.detail||"save failed","err"); return; }
+        setWfStatus("Saved & registered ✓","ok"); _wfSelId=res.d.id;
+        loadWorkflows();
+      }).catch(function(e){ setWfStatus("save failed: "+e.message,"err"); });
+  }
+  function deleteWf(){
+    if(!_wfSelId) return;
+    if(!window.confirm("Delete workflow “"+_wfSelId+"”? This removes the admin-authored copy.")) return;
+    fetch(API+"/workflows/"+encodeURIComponent(_wfSelId),{method:"DELETE"})
+      .then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});})
+      .then(function(res){
+        if(!res.ok){ setWfStatus(res.d.detail||"delete failed","err"); return; }
+        _wfSelId=null; wfEditor().value=""; document.getElementById("wfe-diagram").innerHTML="Deleted.";
+        loadWorkflows();
+      }).catch(function(e){ setWfStatus("delete failed: "+e.message,"err"); });
+  }
+  function setWfView(v){
+    _wfView=v;
+    document.getElementById("wfe-diagram").hidden=(v!=="diagram");
+    document.getElementById("wfe-json-wrap").hidden=(v!=="json");
+    ["diagram","json"].forEach(function(k){ var b=document.getElementById("wfe-v-"+k); if(b) b.classList.toggle("active",k===v); });
+    if(v==="diagram"){ var s=currentSpec(); if(s) renderWfDiagram(s); }
+  }
+
+  // ── flow diagram: a clean layered SVG generated from the spec ──
+  function nodeDetail(n){
+    if(n.type==="ask") return String(n.prompt||"").replace(/\*\*/g,"").replace(/[*_`]/g,"").slice(0,42);
+    if(n.type==="fetch") return "→ "+(n.tool||"?")+(n.as_key?(" ⇒ "+n.as_key):"");
+    if(n.type==="filter") return (n.source||"?")+" ⇒ "+(n.as_key||"?");
+    if(n.type==="branch") return "on "+(n.field||"?");
+    if(n.type==="confirm") return "confirm · cancel · change";
+    if(n.type==="mutate") return "⚡ "+(n.tool||"?");
+    if(n.type==="say") return String(n.text||"").replace(/[*_`]/g,"").slice(0,44);
+    return "";
+  }
+  function renderWfDiagram(spec){
+    var host=document.getElementById("wfe-diagram"); if(!host) return;
+    var nodes=(spec&&spec.nodes)||[];
+    if(!nodes.length){ host.innerHTML='<div class="def">No nodes.</div>'; return; }
+    var byId={}; nodes.forEach(function(n){ byId[n.id]=n; });
+    // edges: next + branch cases/default
+    function edgesOf(n){ var es=[];
+      if(n.next && byId[n.next]) es.push({to:n.next});
+      if(n.type==="branch"){ var c=n.cases||{}; Object.keys(c).forEach(function(k){ if(byId[c[k]]) es.push({to:c[k],label:k}); });
+        if(n.default && byId[n.default]) es.push({to:n.default,label:"else"}); }
+      return es;
+    }
+    // BFS depth from start
+    var depth={}, q=[spec.start], seen={}; depth[spec.start]=0; seen[spec.start]=1;
+    while(q.length){ var id=q.shift(); edgesOf(byId[id]||{}).forEach(function(e){
+      if(!(e.to in seen)){ seen[e.to]=1; depth[e.to]=(depth[id]||0)+1; q.push(e.to); } }); }
+    // any unreached nodes → append at the bottom
+    nodes.forEach(function(n){ if(!(n.id in depth)) depth[n.id]=Math.max.apply(null,Object.keys(depth).map(function(k){return depth[k];}).concat([0]))+1; });
+    // rows
+    var rows={}; nodes.forEach(function(n){ (rows[depth[n.id]]=rows[depth[n.id]]||[]).push(n); });
+    var W=140, H=48, GAPX=34, GAPY=44, PADX=24, PADY=20;
+    var maxCols=Math.max.apply(null,Object.keys(rows).map(function(k){return rows[k].length;}));
+    var svgW=Math.max(560, PADX*2 + maxCols*W + (maxCols-1)*GAPX);
+    var depths=Object.keys(rows).map(Number).sort(function(a,b){return a-b;});
+    var svgH=PADY*2 + depths.length*H + (depths.length-1)*GAPY;
+    var pos={};
+    depths.forEach(function(d,ri){
+      var row=rows[d], n=row.length, rowW=n*W+(n-1)*GAPX, x0=(svgW-rowW)/2, y=PADY+ri*(H+GAPY);
+      row.forEach(function(nd,ci){ pos[nd.id]={x:x0+ci*(W+GAPX), y:y}; });
+    });
+    var parts=['<svg viewBox="0 0 '+svgW+' '+svgH+'" width="'+svgW+'" xmlns="http://www.w3.org/2000/svg" font-family="IBM Plex Sans,system-ui,sans-serif">'];
+    parts.push('<defs><marker id="wfarrow" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#94a3b8"/></marker></defs>');
+    // edges first (under nodes)
+    nodes.forEach(function(n){ var a=pos[n.id]; if(!a) return;
+      edgesOf(n).forEach(function(e){ var b=pos[e.to]; if(!b) return;
+        var x1=a.x+W/2, y1=a.y+H, x2=b.x+W/2, y2=b.y, my=(y1+y2)/2;
+        parts.push('<path d="M'+x1+','+y1+' C'+x1+','+my+' '+x2+','+my+' '+x2+','+(y2-2)+'" fill="none" stroke="#94a3b8" stroke-width="1.5" marker-end="url(#wfarrow)"/>');
+        if(e.label){ parts.push('<rect x="'+((x1+x2)/2-13)+'" y="'+(my-9)+'" width="26" height="16" rx="8" fill="#fff" stroke="#e5e7eb"/>'
+          +'<text x="'+((x1+x2)/2)+'" y="'+(my+2.5)+'" text-anchor="middle" font-size="10" font-weight="600" fill="#b45309">'+esc(e.label)+'</text>'); }
+      });
+    });
+    // nodes
+    nodes.forEach(function(n){ var p=pos[n.id]; if(!p) return; var col=WF_TYPE_COLOR[n.type]||"#64748b";
+      var isStart=(n.id===spec.start);
+      parts.push('<g>'
+        +'<rect x="'+p.x+'" y="'+p.y+'" width="'+W+'" height="'+H+'" rx="9" fill="#fff" stroke="'+(isStart?col:"#e5e7eb")+'" stroke-width="'+(isStart?2:1)+'"/>'
+        +'<rect x="'+p.x+'" y="'+p.y+'" width="4" height="'+H+'" rx="2" fill="'+col+'"/>'
+        +'<text x="'+(p.x+12)+'" y="'+(p.y+18)+'" font-size="11.5" font-weight="700" fill="#111827">'+esc(n.id.slice(0,20))+'</text>'
+        +'<text x="'+(p.x+12)+'" y="'+(p.y+31)+'" font-size="9" font-weight="600" fill="'+col+'" letter-spacing=".04em">'+esc(n.type.toUpperCase())+'</text>'
+        +'<text x="'+(p.x+12)+'" y="'+(p.y+42)+'" font-size="9.5" fill="#6b7280">'+esc(nodeDetail(n))+'</text>'
+        +'</g>');
+    });
+    parts.push('</svg>');
+    host.innerHTML=parts.join("");
+  }
+
+  function initWorkflows(){
+    var refresh=document.getElementById("wfe-refresh"); if(!refresh) return;
+    refresh.addEventListener("click",loadWorkflows);
+    document.getElementById("wfe-new").addEventListener("click",newWf);
+    document.getElementById("wfe-save").addEventListener("click",saveWf);
+    document.getElementById("wfe-delete").addEventListener("click",deleteWf);
+    document.getElementById("wfe-revert").addEventListener("click",function(){ loadWorkflows(); setWfStatus("reverted","" ); });
+    document.getElementById("wfe-v-diagram").addEventListener("click",function(){ setWfView("diagram"); });
+    document.getElementById("wfe-v-json").addEventListener("click",function(){ setWfView("json"); });
+    var ta=document.getElementById("wfe-json");
+    ta.addEventListener("input",function(){
+      document.getElementById("wfe-save").disabled=true;
+      if(_wfValTimer) clearTimeout(_wfValTimer);
+      _wfValTimer=setTimeout(validateWf,400);
+    });
+    var list=document.getElementById("wfe-list");
+    list.addEventListener("click",function(e){ var it=e.target.closest?e.target.closest(".wfe-item"):null;
+      if(it){ var w=_wfListCache.filter(function(x){return x.id===it.getAttribute("data-id");})[0]; if(w) selectWf(w); } });
+    list.addEventListener("keydown",function(e){ if(e.key!=="Enter"&&e.key!==" ")return; var it=e.target.closest?e.target.closest(".wfe-item"):null;
+      if(it){ e.preventDefault(); var w=_wfListCache.filter(function(x){return x.id===it.getAttribute("data-id");})[0]; if(w) selectWf(w); } });
+    loadWorkflows();
   }
 
   function archSvg(){ return `<style>

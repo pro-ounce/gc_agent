@@ -54,6 +54,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:  # noqa: BLE001 — never block startup on custom skills
         log.warning(f"custom skill load failed (non-fatal): {exc}")
 
+    # Load admin-authored workflows (persisted KV + flat file) — layers over the repo-shipped
+    # workflows already registered at import, so runtime edits survive a git deploy.
+    try:
+        from .services.workflow_store import load_custom_workflows
+        load_custom_workflows()
+    except Exception as exc:  # noqa: BLE001 — never block startup on custom workflows
+        log.warning(f"custom workflow load failed (non-fatal): {exc}")
+
     # Rehydrate the metrics/activity ring from disk so the admin dashboards survive restarts.
     try:
         from .commons.logger import load_persisted_metrics
