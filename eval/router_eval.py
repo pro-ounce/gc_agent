@@ -71,6 +71,7 @@ CASES: list[tuple[str, str, dict]] = [
     ("list fund groups", "fund_groups", {"entity": "fund_group"}),
     ("show organizations", "organizations", {"entity": "organization"}),
     ("my offices", "my_offices", {"entity": "organization", "subject": "self"}),
+    ("where can I work as Budget Facilitator", "my_offices", {"subject": "self"}),
     ("list divisions", "divisions", {"entity": "division"}),
     ("list sub-orgs", "org_level", {"entity": "sub_org"}),
     ("list program offices", "org_level", {"entity": "program_office"}),

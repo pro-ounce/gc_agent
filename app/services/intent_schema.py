@@ -66,7 +66,7 @@ _ENTITY_CUES: list[tuple[str, str]] = [
     ("sub_org", r"\bsub[ -]?(?:orgs?|organi[sz]ations?)\b"),
     ("program_office", r"\bprogram[ -]?offices?\b|\bprog\.? ?office\b"),
     ("division", r"\bdivisions?\b"),
-    ("organization", r"\borgani[sz]ations?\b|\borgs?\b|\boffices?\b"),
+    ("organization", r"\borgani[sz]ations?\b|\borgs?\b|\boffices?\b|\bwhere can i (?:work|act)\b"),
     ("role", r"\broles?\b"),
     ("user", r"\busers?\b|\baccounts?\b"),
     ("application", r"\bapplications?\b|\bapps?\b|\baccess\b"),
