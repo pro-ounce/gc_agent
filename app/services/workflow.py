@@ -129,6 +129,26 @@ def _resolve_args(args: dict, data: dict) -> dict:
     return out
 
 
+_EDIT = re.compile(r"\b(change|edit|modif(y|ies)|update|revise|redo|go ?back|back to)\b", re.I)
+_EDIT_STOP = {"the", "a", "an", "which", "in", "that", "to", "your", "only", "they", "don",
+              "have", "already", "name", "should", "access", "grant", "run", "this"}
+
+
+def _edit_target(message: str, wf: "Workflow") -> str:
+    """If the user asks to change/edit a step, return the Ask node id whose field/prompt best
+    matches (so 'change the application' jumps back to the application step). '' if none."""
+    if not _EDIT.search(message or ""):
+        return ""
+    words = set(re.findall(r"[a-z]+", (message or "").lower())) - _EDIT_STOP
+    for nid, node in wf.nodes.items():
+        if not isinstance(node, Ask):
+            continue
+        kw = set(re.findall(r"[a-z]+", (node.field + " " + node.prompt).lower())) - _EDIT_STOP
+        if words & kw:
+            return nid
+    return ""
+
+
 def _match_option(msg: str, opts: list[dict], label_key: str, value_key: str) -> Any:
     """Resolve a user's line to an option's value (exact, then case-insensitive contains)."""
     low = msg.strip().lower()
@@ -174,9 +194,16 @@ async def advance(wf: Workflow, state: dict, message: str,
             data[node.field] = message.strip()               # free text
         state["node"] = node.next
     elif isinstance(node, Confirm):
+        tgt = _edit_target(message, wf)               # "change the application" → walk back
+        if tgt:
+            fld = wf.nodes[tgt].field                 # clear it so the step re-asks cleanly
+            data.pop(fld, None)
+            data.pop(fld + "_label", None)
+            state["node"] = tgt
+            return await _walk(wf, state, execute, headers, trace)
         if not _YES.search(message):
-            return RunStep(message="Okay, I won't run it. Say **confirm** when you're ready.",
-                           options=["confirm", "cancel"])
+            return RunStep(message="Okay — say **confirm** to run it, **cancel** to stop, or "
+                           "**change <step>** to edit.", options=["confirm", "cancel"])
         state["node"] = node.next
 
     # 2) walk silent nodes until we need the user again or finish
@@ -233,8 +260,11 @@ async def _walk(wf: Workflow, state: dict, execute: ToolExec,
             return _render(node, data, trace=trace)
         if isinstance(node, Confirm):
             lines = "\n".join(f"• **{lbl}:** {data.get(f, '—')}" for lbl, f in node.summary)
-            return RunStep(message="Here's what I'll submit — say **confirm** to run it:\n\n" + lines,
-                           options=["confirm", "cancel"], trace=trace)
+            edits = [f"change {lbl.lower()}" for lbl, _ in node.summary]  # walk-back chips
+            return RunStep(
+                message="Here's what I'll submit — **confirm** to run it, or **change <step>** "
+                        "to edit before it runs:\n\n" + lines,
+                options=["confirm", "cancel", *edits], trace=trace)
         if isinstance(node, Say):
             return RunStep(message=node.text, done=True, trace=trace)
         return RunStep(message=f"(unknown node {nid})", done=True, trace=trace)

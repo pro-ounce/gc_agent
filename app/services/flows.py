@@ -20,6 +20,7 @@ The actual write goes through the normal confirm step (``addUserApplicationAndRo
 from __future__ import annotations
 
 import re
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -36,8 +37,12 @@ async def _wf_exec(tool: str, args: dict, headers: dict | None) -> dict:
 
 
 def _wf_to_fr(step: "_wf.RunStep") -> "FlowResult":
-    return FlowResult(message=step.message,
-                      suggestions=[_chip(o) for o in step.options], done=step.done)
+    # Always give the user a visible way out: a Cancel chip on every in-progress step
+    # (unless the step already offers one). It sends "cancel" → the flow fail-safe exit.
+    chips = [_chip(o) for o in step.options]
+    if not step.done and not any(str(o).strip().lower() == "cancel" for o in step.options):
+        chips.append(_chip("✕ Cancel", "cancel"))
+    return FlowResult(message=step.message, suggestions=chips, done=step.done)
 
 
 def _maybe_start_workflow(session: Any, message: str) -> "FlowResult | None":
@@ -45,16 +50,26 @@ def _maybe_start_workflow(session: Any, message: str) -> "FlowResult | None":
     an Ask (rendered synchronously here); async-start workflows are a later addition."""
     for w in _wf.REGISTRY.values():
         if re.search(w.trigger, message or "", re.I):
+            run_id = f"{w.id}-{uuid.uuid4().hex[:12]}"
             state = {"wf": w.id, "node": w.start, "data": {}}
-            session.metadata["flow"] = {"name": "workflow", "wf": w.id, "state": state}
+            session.metadata["flow"] = {"name": "workflow", "wf": w.id, "state": state,
+                                        "run_id": run_id, "seq": 0}
             start_node = w.nodes[w.start]
             if isinstance(start_node, _wf.Ask):
+                _wf_audit("run_started", run_id, wf=w.id, title=w.title)
                 return _wf_to_fr(_wf._render(start_node, state["data"]))
             session.metadata.pop("flow", None)   # unsupported start shape → don't hijack
             return None
     return None
 
 log = get_logger(__name__)
+
+
+def _wf_audit(event: str, run_id: str, **fields: Any) -> None:
+    """Structured workflow audit. Emits a run-level record (``run_id``) and per-node sub-records
+    into the same structured log as the turn — which already carries session_id / request_id —
+    so a workflow run ties to its nodes AND to the individual chat records."""
+    log.bind(event=event, run_id=run_id, **fields).info(f"workflow {event}: {run_id}")
 
 # Intent cues. _YES deliberately includes the flow's own verbs ("assign", "another",
 # "more"); _NO the exit words. At a pick step an unrecognised line just re-shows the list.
@@ -117,6 +132,8 @@ def _is_cancel(msg: str) -> bool:
 def _cancel_flow(session: Any, flow: dict[str, Any]) -> FlowResult:
     """Fail-safe exit: drop the flow and any armed confirm; nothing is written."""
     name = flow.get("name")
+    if name == "workflow":
+        _wf_audit("run_cancelled", flow.get("run_id", flow.get("wf", "")), wf=flow.get("wf"))
     session.metadata.pop("flow", None)
     session.pending_action_id = None
     session.metadata.pop("pending_actions", None)
@@ -256,8 +273,15 @@ async def handle(session: Any, message: str, headers: dict[str, str] | None) -> 
 
     if name == "workflow":
         w = _wf.REGISTRY[flow["wf"]]
+        run_id = flow.get("run_id", flow["wf"])
         step = await _wf.advance(w, flow["state"], msg, _wf_exec, headers)
+        for nid in step.trace:                       # per-node sub-records under the run
+            flow["seq"] = flow.get("seq", 0) + 1
+            nd = w.nodes.get(nid)
+            _wf_audit("node", run_id, seq=flow["seq"], node_id=nid,
+                      node_type=type(nd).__name__ if nd else "?", turn_input=msg[:80])
         if step.done:
+            _wf_audit("run_completed", run_id, wf=w.id)
             session.metadata.pop("flow", None)
         return _wf_to_fr(step)
 
