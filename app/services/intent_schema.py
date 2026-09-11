@@ -164,8 +164,11 @@ def extract_intent(query: str, apps: dict[str, str] | None = None) -> Intent:
             and it.action not in ("assign", "remove", "edit", "generate"):
         it.entity = "application"
 
-    # app + role scope
-    it.app = _match_app(msg, apps)
+    # app + role scope. Strip a trailing "as <role>" clause first, so a role name that
+    # happens to contain an app word ("as Budget Facilitator" → "Budget") can't be mistaken
+    # for the application — an explicit "in <app>" earlier in the query still matches.
+    _app_msg = re.sub(r"\bas (?:an? |the )?[A-Za-z][\w /&.-]*$", "", msg, flags=re.I)
+    it.app = _match_app(_app_msg, apps)
     if re.search(r"\b(all|every|catalog(ue)?|unlicensed|disabled)\b", low):
         it.filters["show_all"] = True
 
