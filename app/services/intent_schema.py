@@ -147,6 +147,17 @@ def extract_intent(query: str, apps: dict[str, str] | None = None) -> Intent:
     else:
         it.subject = "all"
 
+    # Bare-username fallback: an ALL-CAPS token that isn't a known application code/name or a
+    # stopword is very likely a username ("SAUSER access", "what is GCADMIN", "SAUSER access
+    # type"). The named-access handler validates it against real users and falls through if it
+    # isn't one, so a liberal guess here is safe. Only when nothing more specific claimed it.
+    if it.subject == "all":
+        app_norms = {_norm(k) for k in apps} | {_norm(v) for v in apps.values()}
+        for tok in re.findall(r"\b[A-Z][A-Z0-9]{3,}\b", msg):
+            if tok.lower() not in _STOP_USER and _norm(tok) not in app_norms:
+                it.subject, it.user, user = "user", tok, tok
+                break
+
     # A bare access question about someone ("what can GCADMIN do", "my access") is about
     # their APPLICATIONS when no other entity noun was named.
     if not it.entity and it.subject in ("self", "user") \
@@ -192,6 +203,8 @@ def route(it: Intent) -> str:
     if a == "who" or (e == "user" and it.app):
         return "app_users"
     if a == "describe" and e in ("application", ""):
+        if s == "user":
+            return "named_access"          # "what is <user>" → their role × access-type profile
         return "about_app" if it.app else ""
 
     if e == "application":
@@ -203,6 +216,8 @@ def route(it: Intent) -> str:
     if e == "role":
         if s == "self":
             return "my_access_in_app" if it.app else "my_roles_all"
+        if s == "user" and not it.app:
+            return "named_access"          # "<user>'s roles" → their role × access-type profile
         return "app_roles" if it.app else "roles_catalog"
     if e == "user":
         return "users_in_app" if it.app else "users_list"

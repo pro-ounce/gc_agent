@@ -49,6 +49,10 @@ CASES: list[tuple[str, str, dict]] = [
     ("my access", "my_access", {"entity": "application", "subject": "self"}),
     ("what can GCADMIN do", "named_access", {"subject": "user", "user": "GCADMIN"}),
     ("what applications does JSMITH have", "named_access", {"subject": "user"}),
+    ("SAUSER access", "named_access", {"subject": "user", "user": "SAUSER"}),
+    ("what is GCADMIN", "named_access", {"subject": "user", "user": "GCADMIN"}),
+    ("what roles and access type does GCADMIN have", "named_access",
+     {"subject": "user", "user": "GCADMIN"}),
     ("list the applications", "list_apps", {"subject": "all"}),
     ("show all applications", "list_apps", {"subject": "all"}),
 
