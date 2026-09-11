@@ -30,6 +30,9 @@ sample workflow with a stub executor so the graph logic can be seen with no back
 """
 from __future__ import annotations
 
+import glob
+import json
+import os
 import re
 from dataclasses import dataclass, field as _dcfield
 from typing import Any, Awaitable, Callable, Optional
@@ -284,57 +287,86 @@ def _render(node: Ask, data: dict, note: str = "", trace: list[str] | None = Non
     return RunStep(message=msg, options=[c for c in chips if c], trace=trace or [])
 
 
-# ── a sample workflow: grant a user a role in an application ───────────────────
-# Trigger → Ask user → Fetch that user's apps? (kept simple: Fetch all apps) → Ask app →
-# Fetch that app's roles → Ask role → Confirm → Mutate → Say. Shows every node type, incl.
-# data passed node→node ($applicationId into the roles fetch and the mutation).
-GRANT_ACCESS = Workflow(
-    id="grant_access",
-    title="Grant application access",
-    trigger=r"\bgrant .*access\b|\bgive .* access to\b",
-    start="ask_user",
-    nodes={
-        "ask_user": Ask("ask_user", next="fetch_apps", field="userName",
-                        prompt="Which **user** should I grant access to? (their username)"),
-        "fetch_apps": Fetch("fetch_apps", next="ask_app",
-                            tool="getAllApplications_get", as_key="apps"),
-        "ask_app": Ask("ask_app", next="fetch_all_roles", field="applicationId",
-                       prompt="Which **application**?", options_from="apps",
-                       label_key="applicationName", value_key="applicationId"),
-        # Grantable = every role in the app MINUS the roles this user already holds there.
-        "fetch_all_roles": Fetch("fetch_all_roles", next="fetch_user_roles",
-                                 tool="getApplicationRolesByAppId_get",
-                                 args={"applicationId": "$applicationId"}, as_key="all_roles"),
-        "fetch_user_roles": Fetch("fetch_user_roles", next="filter_has",
-                                  tool="getAllUserApplicationRoles_post",
-                                  args={"userName": "$userName"}, as_key="user_roles"),
-        "filter_has": Filter("filter_has", next="filter_grantable", source="user_roles",
-                             as_key="has_roles",
-                             keep={"userName": "$userName", "applicationId": "$applicationId"}),
-        "filter_grantable": Filter("filter_grantable", next="check_grantable", source="all_roles",
-                                   as_key="grantable", exclude_source="has_roles",
-                                   on="applicationRoleId"),
-        "check_grantable": Branch("check_grantable", field="grantable_empty",
-                                  cases={"Y": "say_all", "N": "ask_role"}),
-        "say_all": Say("say_all",
-                       text="This user already holds every role in that application — nothing to grant."),
-        "ask_role": Ask("ask_role", next="confirm", field="roleName",
-                        prompt="Which **role** to grant? _(only roles they don't already have)_",
-                        options_from="grantable", label_key="roleName", value_key="roleName"),
-        # The registry resolves userName→userId and applicationRoleId(name)→id at execute time,
-        # so we hand it names + the numeric applicationId (mirrors the existing assign flow).
-        "confirm": Confirm("confirm", next="do_grant",
-                           summary=(("User", "userName"), ("Application", "applicationId_label"),
-                                    ("Role", "roleName"))),
-        "do_grant": Mutate("do_grant", next="done",
-                           tool="addUserApplicationAndRole_post",
-                           arg_map={"userId": "userName", "applicationId": "applicationId",
-                                    "applicationRoleId": "roleName"}),
-        "done": Say("done", text="✅ Access granted."),
-    },
-)
+# ── author workflows as data (JSON), translate + plug them in ─────────────────
+# A workflow is data, not code: author it as a JSON file (services/workflows/*.json) or via
+# the admin screen, and this loader translates it into the typed node graph and registers it —
+# the same "author it, plug it in" model as the skills mechanism. Node dicts carry a "type"
+# (ask/fetch/filter/branch/confirm/mutate/say) plus that node's fields; see workflows/README.md.
+_NODE_TYPES: dict[str, type] = {
+    "ask": Ask, "fetch": Fetch, "filter": Filter, "branch": Branch,
+    "confirm": Confirm, "mutate": Mutate, "say": Say,
+}
 
-REGISTRY: dict[str, Workflow] = {GRANT_ACCESS.id: GRANT_ACCESS}
+REGISTRY: dict[str, Workflow] = {}
+
+
+def from_dict(spec: dict) -> Workflow:
+    """Translate an authored workflow spec into a Workflow. Validates node types and that every
+    edge/start points at a real node, so a typo fails loudly at author time, not mid-run."""
+    nodes: dict[str, Node] = {}
+    for nd in spec.get("nodes", []):
+        cls = _NODE_TYPES.get(nd.get("type"))
+        if not cls:
+            raise ValueError(f"workflow {spec.get('id')!r}: unknown node type {nd.get('type')!r}")
+        fields = {k: v for k, v in nd.items() if k != "type"}
+        if "static" in fields:
+            fields["static"] = tuple(fields["static"])
+        if "summary" in fields:
+            fields["summary"] = tuple(tuple(x) for x in fields["summary"])
+        nodes[nd["id"]] = cls(**fields)
+    ids = set(nodes)
+    if spec.get("start") not in ids:
+        raise ValueError(f"workflow {spec.get('id')!r}: start {spec.get('start')!r} is not a node")
+    for nid, n in nodes.items():
+        nxt = getattr(n, "next", "")
+        if nxt and nxt not in ids:
+            raise ValueError(f"workflow {spec['id']!r}: {nid}.next → unknown node {nxt!r}")
+        if isinstance(n, Branch):
+            for tgt in list(n.cases.values()) + ([n.default] if n.default else []):
+                if tgt and tgt not in ids:
+                    raise ValueError(f"workflow {spec['id']!r}: {nid} branch → unknown node {tgt!r}")
+    return Workflow(id=spec["id"], trigger=spec["trigger"], start=spec["start"],
+                    title=spec.get("title", ""), nodes=nodes)
+
+
+def to_dict(wf: Workflow) -> dict:
+    """Serialize a Workflow back to the authoring spec (for the admin editor to read)."""
+    def node_dict(n: Node) -> dict:
+        t = next(k for k, c in _NODE_TYPES.items() if type(n) is c)
+        d = {"id": n.id, "type": t}
+        for f in n.__dataclass_fields__:  # type: ignore[attr-defined]
+            if f == "id":
+                continue
+            v = getattr(n, f)
+            if v in ("", (), {}, None):
+                continue
+            d[f] = list(v) if isinstance(v, tuple) else v
+        return d
+    return {"id": wf.id, "title": wf.title, "trigger": wf.trigger, "start": wf.start,
+            "nodes": [node_dict(wf.nodes[k]) for k in wf.nodes]}
+
+
+def register(wf: Workflow) -> None:
+    REGISTRY[wf.id] = wf
+
+
+def load_dir(path: str) -> list[str]:
+    """Load every *.json workflow under `path` into REGISTRY (skipping — and logging — a bad
+    file so one broken workflow can't take the agent down). Returns the ids loaded."""
+    loaded = []
+    for f in sorted(glob.glob(os.path.join(path, "*.json"))):
+        try:
+            with open(f, encoding="utf-8") as fh:
+                register(from_dict(json.load(fh)))
+            loaded.append(os.path.splitext(os.path.basename(f))[0])
+        except Exception as exc:  # noqa: BLE001
+            print(f"[workflow] failed to load {f}: {exc}")
+    return loaded
+
+
+# Load the repo-authored workflows at import; the admin store (if any) layers on top.
+_WORKFLOWS_DIR = os.path.join(os.path.dirname(__file__), "workflows")
+load_dir(_WORKFLOWS_DIR)
 
 
 # ── offline demo: walk the graph with a stub executor (no backend) ─────────────
@@ -351,7 +383,7 @@ if __name__ == "__main__":  # pragma: no cover
         return {"data": canned.get(tool, [])}
 
     async def _demo():
-        wf = GRANT_ACCESS
+        wf = REGISTRY["grant_access"]          # loaded from workflows/grant_access.json
         st: dict = {}
         step = await start(wf, st, _stub)
         script = ["JSMITH", "Formulation Planner", "Budget Administrator", "confirm"]
