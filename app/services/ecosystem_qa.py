@@ -386,36 +386,104 @@ def _extract_user(msg: str) -> str | None:
     return None
 
 
+# Access-type codes (budget_user_details.accessType) → readable names, from the
+# BUDGET_USER_ACCESS_TYPES lookup. Aliases (CFO/DCFO) collapse the code and its short form
+# to one label so a user's access types dedup cleanly.
+_ACCESS_TYPE_NAMES = {
+    "FG": "Fund Group Admin", "FGB": "Fund Group Budget", "FGE": "Fund Group Executive",
+    "EI": "Fund Group Executive Inquiry", "AAA": "Program Office Approver",
+    "AAF": "Program Office Facilitator", "DP": "Division Planner", "FD": "FMD Division Director",
+    "C": "Chief Financial Officer", "CFO": "Chief Financial Officer",
+    "DC": "Deputy Chief Financial Officer", "DCFO": "Deputy Chief Financial Officer",
+    "CO": "Commissioner", "D": "Deputy Commissioner", "AC": "Assistant Commissioner",
+    "DAC": "Deputy Assistant Commissioner", "B": "Budget Facilitator",
+    "IU": "Inquiry User", "AU": "Acquisition Users",
+}
+
+
+def _access_label(r: dict[str, Any]) -> str:
+    """Readable access-type name for a budget_user_details row — prefer the lookup mapping of
+    the code, then the row's own value/desc, then the raw code."""
+    code = str(r.get("accessType") or "").strip()
+    mapped = _ACCESS_TYPE_NAMES.get(code.upper())
+    if mapped:
+        return mapped
+    return str(r.get("accessTypeValue") or r.get("accessTypeDesc") or code).strip()
+
+
+def _cap_join(items: list[str], cap: int = 8) -> str:
+    """Comma-join with a '+N more' tail so a super-admin's long list doesn't wall the card."""
+    items = [i for i in items if i]
+    if not items:
+        return "—"
+    if len(items) <= cap:
+        return ", ".join(items)
+    return ", ".join(items[:cap]) + f" +{len(items) - cap} more"
+
+
 async def _named_access(user: str, headers: dict[str, str] | None) -> FlowResult | None:
-    """A named user's application access + roles, grouped by application. Uses the admin-wide
-    assignment set (the per-user tools are caller-scoped). Returns None (fall through to normal
-    routing) when the name matches no user — so a false-positive match doesn't dead-end."""
-    # Pass the username so the caller-scope isn't injected (the backend returns the platform
-    # set; we filter to the target — correct whether or not the backend honours the filter).
+    """Who a named user *really* is: their application role(s) AND access type(s) per
+    application — because capability is the role (what they can open) crossed with the access
+    type (what data they see), and neither alone tells you. Returns None (fall through) when the
+    name matches no user, so a false-positive match doesn't dead-end."""
+    u = user.strip().lower()
+    # Roles — the admin-wide assignment set, filtered to the target user.
     try:
-        res = await tool_registry.execute("getAllUserApplicationRoles_post", {"userName": user}, headers)
-        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        r1 = await tool_registry.execute("getAllUserApplicationRoles_post", {"userName": user}, headers)
+        roles_data = r1.output.get("data") if getattr(r1, "success", False) and isinstance(r1.output, dict) else None
     except Exception:  # noqa: BLE001
-        data = None
-    rows = [r for r in (data or []) if isinstance(r, dict)
-            and str(r.get("userName") or "").strip().lower() == user.strip().lower()]
-    if not rows:
+        roles_data = None
+    role_rows = [r for r in (roles_data or []) if isinstance(r, dict)
+                 and str(r.get("userName") or "").strip().lower() == u]
+    # Access types — the budget_user_details assignment set, filtered to the target user.
+    try:
+        r2 = await tool_registry.execute("getBudgetUsers_post", {}, headers)
+        bud_data = r2.output.get("data") if getattr(r2, "success", False) and isinstance(r2.output, dict) else None
+    except Exception:  # noqa: BLE001
+        bud_data = None
+    bud_rows = [r for r in (bud_data or []) if isinstance(r, dict)
+                and str(r.get("userName") or "").strip().lower() == u]
+
+    if not role_rows and not bud_rows:
         return None
-    full = str(rows[0].get("fullName") or "").strip() or str(rows[0].get("userName") or user).strip()
-    by_app: dict[str, list[str]] = {}
-    for r in rows:
+
+    full = ""
+    for r in (role_rows or bud_rows):
+        full = (str(r.get("fullName") or "").strip()
+                or f"{r.get('firstName') or ''} {r.get('lastName') or ''}".strip())
+        if full:
+            break
+    full = full or user
+
+    apps: dict[str, dict[str, list[str]]] = {}
+    for r in role_rows:
         app = str(r.get("applicationName") or r.get("applicationCode") or "").strip()
+        if not app:
+            continue
+        e = apps.setdefault(app, {"roles": [], "access": []})
         role = str(r.get("roleName") or r.get("role") or "").strip()
-        if app and role and role not in by_app.setdefault(app, []):
-            by_app[app].append(role)
-    if not by_app:
+        if role and role not in e["roles"]:
+            e["roles"].append(role)
+    for r in bud_rows:
+        app = str(r.get("applicationName") or r.get("applicationCode") or "").strip()
+        if not app:
+            continue
+        e = apps.setdefault(app, {"roles": [], "access": []})
+        at = _access_label(r)
+        if at and at not in e["access"]:
+            e["access"].append(at)
+    if not apps:
         return None
-    lead = _say(f"**{full}** ({user}) has access to **{len(by_app)} applications** — "
-                "ask about any one to see the roles:")
-    rows = [[app, _roles_count(len(by_app[app]))] for app in sorted(by_app)]
+
+    rows = [[app, _cap_join(sorted(apps[app]["roles"])), _cap_join(sorted(apps[app]["access"]))]
+            for app in sorted(apps)]
+    lead = _say(f"**{full}** ({user}) — role × access type across **{len(apps)} applications**. "
+                "Capability is the **role** (what they can open) crossed with the **access type** "
+                "(what data they see), so read them together:")
     return FlowResult(
         message=lead,
-        blocks=[_table_block(f"{full} — access", ["Application", "Roles"], rows)],
+        blocks=[_table_block(f"{full} — role × access type",
+                             ["Application", "Role(s)", "Access type(s)"], rows)],
         suggestions=[_chip("List applications", "list applications")])
 
 
