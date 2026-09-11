@@ -66,7 +66,7 @@ _ENTITY_CUES: list[tuple[str, str]] = [
     ("sub_org", r"\bsub[ -]?(?:orgs?|organi[sz]ations?)\b"),
     ("program_office", r"\bprogram[ -]?offices?\b|\bprog\.? ?office\b"),
     ("division", r"\bdivisions?\b"),
-    ("organization", r"\borgani[sz]ations?\b|\borgs?\b"),
+    ("organization", r"\borgani[sz]ations?\b|\borgs?\b|\boffices?\b"),
     ("role", r"\broles?\b"),
     ("user", r"\busers?\b|\baccounts?\b"),
     ("application", r"\bapplications?\b|\bapps?\b|\baccess\b"),
@@ -224,7 +224,7 @@ def route(it: Intent) -> str:
     if e == "fund_group":
         return "fund_groups"
     if e == "organization":
-        return "organizations"
+        return "my_offices" if s == "self" else "organizations"
     if e == "division":
         return "divisions"
     if e in ("sub_org", "program_office"):

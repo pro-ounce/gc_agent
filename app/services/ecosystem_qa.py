@@ -231,6 +231,8 @@ async def _dispatch(r: str, intent: Any, app: dict[str, Any] | None,
         return await _named_access(intent.user, headers)
     if r == "my_access_in_app":
         return await _my_access_in_app(app, headers)
+    if r == "my_offices":
+        return await _my_offices(app, headers)
     if r == "app_roles":
         return await _app_roles(app, headers, from_current=from_current)
     if r == "app_users":
@@ -550,6 +552,60 @@ async def _app_users(app: dict[str, Any], headers: dict[str, str] | None,
         message=head + ":",
         blocks=[_table_block(f"{app['name']} — users", ["User", "Role(s)", "Access type(s)"], trows)],
         suggestions=[_chip(f"Roles in {app['name'].split()[0]}", f"roles in {app['code']}", icon="role")])
+
+
+def _pick(d: dict[str, Any], *keys: str) -> str:
+    for k in keys:
+        v = str(d.get(k) or "").strip()
+        if v:
+            return v
+    return ""
+
+
+async def _my_offices(app: dict[str, Any] | None, headers: dict[str, str] | None) -> FlowResult | None:
+    """The caller's own offices — the organizations they can act in for the current
+    application, grouped by fund group. Caller-scoped: driven by the logged-in user's token
+    via the by-user cascade (fund groups → organizations), backed by USER_OFFICES_SECURITY_ROLE_V.
+    Returns None to fall through when no application is in context."""
+    if not app:
+        app = await _current_app(headers)
+    if not app:
+        return None
+    app_id = str(app["id"])
+    try:
+        fg_res = await tool_registry.execute("getFundGroupsByUser_post", {"applicationId": app_id}, headers)
+        fgs = fg_res.output.get("data") if getattr(fg_res, "success", False) and isinstance(fg_res.output, dict) else None
+    except Exception:  # noqa: BLE001
+        fgs = None
+    fgs = [f for f in (fgs or []) if isinstance(f, dict)]
+    if not fgs:
+        return FlowResult(message=f"You don't have any fund-group access in **{app['name']}** yet.")
+
+    groups: list[tuple[str, list[str]]] = []
+    for f in fgs:
+        fid = _pick(f, "fundGroupId", "id")
+        fname = _pick(f, "fundGroupName", "name", "fundGroupCode", "code") or fid
+        try:
+            org_res = await tool_registry.execute(
+                "getOrganizationsByUser_post", {"applicationId": app_id, "fundGroupId": fid}, headers)
+            orgs = org_res.output.get("data") if getattr(org_res, "success", False) and isinstance(org_res.output, dict) else None
+        except Exception:  # noqa: BLE001
+            orgs = None
+        names = sorted({_pick(o, "organizationName", "name", "organizationCode")
+                        for o in (orgs or []) if isinstance(o, dict)} - {""})
+        groups.append((fname, names))
+
+    total = sum(len(n) for _, n in groups)
+    if not total:
+        return FlowResult(
+            message=f"You have access to **{len(groups)} fund groups** in **{app['name']}**, "
+                    "but no offices are assigned to you under them yet.")
+    lead = _say(f"In **{app['name']}**, you can act in **{total} offices** across "
+                f"**{len(groups)} fund groups**:")
+    rows = [[fname, _cap_join(names, 8) if names else "—"] for fname, names in groups]
+    return FlowResult(
+        message=lead,
+        blocks=[_table_block(f"My offices — {app['name']}", ["Fund group", "Offices"], rows)])
 
 
 async def _my_access_in_app(app: dict[str, Any], headers: dict[str, str] | None) -> FlowResult:
