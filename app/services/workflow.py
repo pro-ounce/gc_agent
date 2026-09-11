@@ -171,6 +171,18 @@ async def advance(wf: Workflow, state: dict, message: str,
     node = wf.nodes[state["node"]]
     trace: list[str] = []
 
+    # Walk-back edit: at ANY user-facing step, "change <step>" jumps back to that step (its
+    # field is cleared and re-asked; dependent steps downstream re-run). Checked before we
+    # treat the message as an answer, so it works mid-flow, not just at Confirm.
+    if isinstance(node, (Ask, Confirm)):
+        tgt = _edit_target(message, wf)
+        if tgt:
+            fld = wf.nodes[tgt].field
+            data.pop(fld, None)
+            data.pop(fld + "_label", None)
+            state["node"] = tgt
+            return await _walk(wf, state, execute, headers, trace)
+
     # 1) apply the user's answer to the node that was awaiting it
     if isinstance(node, Ask):
         opts = data.get(node.options_from, []) if node.options_from else []
@@ -194,13 +206,6 @@ async def advance(wf: Workflow, state: dict, message: str,
             data[node.field] = message.strip()               # free text
         state["node"] = node.next
     elif isinstance(node, Confirm):
-        tgt = _edit_target(message, wf)               # "change the application" → walk back
-        if tgt:
-            fld = wf.nodes[tgt].field                 # clear it so the step re-asks cleanly
-            data.pop(fld, None)
-            data.pop(fld + "_label", None)
-            state["node"] = tgt
-            return await _walk(wf, state, execute, headers, trace)
         if not _YES.search(message):
             return RunStep(message="Okay — say **confirm** to run it, **cancel** to stop, or "
                            "**change <step>** to edit.", options=["confirm", "cancel"])
