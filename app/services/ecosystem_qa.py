@@ -232,7 +232,7 @@ async def _dispatch(r: str, intent: Any, app: dict[str, Any] | None,
     if r == "my_access_in_app":
         return await _my_access_in_app(app, headers)
     if r == "my_offices":
-        return await _my_offices(app, headers)
+        return await _my_offices(app, headers, role=_office_role(intent.raw))
     if r == "app_roles":
         return await _app_roles(app, headers, from_current=from_current)
     if r == "app_users":
@@ -562,15 +562,54 @@ def _pick(d: dict[str, Any], *keys: str) -> str:
     return ""
 
 
-async def _my_offices(app: dict[str, Any] | None, headers: dict[str, str] | None) -> FlowResult | None:
+# "my offices as a Planning Approver" / "where can I work as Budget Facilitator" → the role.
+_OFFICE_ROLE = re.compile(r"\bas (?:an? |the )?([A-Za-z][A-Za-z /&.-]{2,40}?)(?:\s+in\b|[?.!,]|$)", re.I)
+
+
+def _office_role(query: str) -> str:
+    m = _OFFICE_ROLE.search(query or "")
+    return m.group(1).strip() if m else ""
+
+
+async def _my_offices_for_role(app: dict[str, Any], role: str,
+                               headers: dict[str, str] | None) -> FlowResult:
+    """The caller's offices FOR one security role — via getFilteredOrganizationsByUser_put
+    (role + all fund groups), backed by USER_OFFICES_SECURITY_ROLE_V (WHERE ROLE = role)."""
+    app_id = str(app["id"])
+    try:
+        res = await tool_registry.execute(
+            "getFilteredOrganizationsByUser_put",
+            {"applicationId": app_id, "role": role, "fundGroupIds": []}, headers)
+        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+    except Exception:  # noqa: BLE001
+        data = None
+    orgs = [o for o in (data or []) if isinstance(o, dict)]
+    if not orgs:
+        return FlowResult(
+            message=f"No offices are assigned to you as **{role}** in **{app['name']}** "
+                    "(or that isn't a security role you hold here).")
+    role_shown = _pick(orgs[0], "roleName", "role") or role
+    names = sorted({_pick(o, "organizationName", "name", "organizationCode") for o in orgs} - {""})
+    lead = _say(f"As a **{role_shown}** in **{app['name']}**, you can act in **{len(names)} offices**:")
+    return FlowResult(
+        message=lead,
+        blocks=[_table_block(f"My offices as {role_shown} — {app['name']}", ["Office"],
+                             [[n] for n in names])])
+
+
+async def _my_offices(app: dict[str, Any] | None, headers: dict[str, str] | None,
+                      role: str = "") -> FlowResult | None:
     """The caller's own offices — the organizations they can act in for the current
     application, grouped by fund group. Caller-scoped: driven by the logged-in user's token
     via the by-user cascade (fund groups → organizations), backed by USER_OFFICES_SECURITY_ROLE_V.
-    Returns None to fall through when no application is in context."""
+    When a security role is named, scope to that role via the filtered API. Returns None to
+    fall through when no application is in context."""
     if not app:
         app = await _current_app(headers)
     if not app:
         return None
+    if role:
+        return await _my_offices_for_role(app, role, headers)
     app_id = str(app["id"])
     try:
         fg_res = await tool_registry.execute("getFundGroupsByUser_post", {"applicationId": app_id}, headers)
