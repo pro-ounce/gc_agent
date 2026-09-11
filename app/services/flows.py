@@ -79,7 +79,8 @@ def _chip(label: str, send: str | None = None, icon: str | None = None) -> dict[
     return {"label": label, "send": send if send is not None else label, "icon": icon}
 
 
-_FLOWS = ("onboard", "create_user", "create_skill", "data_call", "formulation_baseline")
+_FLOWS = ("onboard", "create_user", "create_skill", "data_call", "formulation_baseline",
+          "workflow")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _SKILL_INTENT_RE = re.compile(
     r"\b(create|add|make|build|teach|define|register)\b.{0,20}\b(skill|capabilit(y|ies)|"
