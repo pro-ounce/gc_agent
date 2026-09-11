@@ -489,38 +489,59 @@ async def _named_access(user: str, headers: dict[str, str] | None) -> FlowResult
 
 async def _app_users(app: dict[str, Any], headers: dict[str, str] | None,
                      from_current: bool = False) -> FlowResult:
-    """The users who have access to an application (with their roles in it). Filters the
-    admin-wide assignment set by applicationId; capped for readability."""
+    """Who works in an application and — the part that matters — HOW their access is scoped.
+    Everyone with a role can open the app; the ACCESS TYPE is what filters the data they see,
+    constrains their actions, and limits them to their assigned offices/divisions. So the
+    listing pairs each user's role(s) with their access type(s) in this app."""
     try:
-        res = await tool_registry.execute("getAllUserApplicationRoles_post", {"userName": "*"}, headers)
-        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        r1 = await tool_registry.execute("getAllUserApplicationRoles_post", {"userName": "*"}, headers)
+        rdata = r1.output.get("data") if getattr(r1, "success", False) and isinstance(r1.output, dict) else None
     except Exception:  # noqa: BLE001
-        data = None
-    rows = [r for r in (data or []) if isinstance(r, dict) and str(r.get("applicationId") or "") == str(app["id"])]
-    if not rows:
-        return FlowResult(message=f"Looks like nobody has access to **{app['name']}** yet.")
+        rdata = None
+    role_rows = [r for r in (rdata or []) if isinstance(r, dict) and str(r.get("applicationId") or "") == str(app["id"])]
+    try:
+        r2 = await tool_registry.execute("getBudgetUsers_post", {}, headers)
+        bdata = r2.output.get("data") if getattr(r2, "success", False) and isinstance(r2.output, dict) else None
+    except Exception:  # noqa: BLE001
+        bdata = None
+    bud_rows = [r for r in (bdata or []) if isinstance(r, dict) and str(r.get("applicationId") or "") == str(app["id"])]
+
+    if not role_rows and not bud_rows:
+        return FlowResult(message=f"Looks like nobody works in **{app['name']}** yet.")
+
     by_user: dict[str, dict[str, Any]] = {}
-    for r in rows:
+    for r in role_rows:
         u = str(r.get("userName") or "").strip()
         if not u:
             continue
-        e = by_user.setdefault(u, {"name": str(r.get("fullName") or "").strip(), "roles": []})
+        e = by_user.setdefault(u, {"roles": [], "access": []})
         role = str(r.get("roleName") or r.get("role") or "").strip()
         if role and role not in e["roles"]:
             e["roles"].append(role)
+    for r in bud_rows:
+        u = str(r.get("userName") or "").strip()
+        if not u:
+            continue
+        e = by_user.setdefault(u, {"roles": [], "access": []})
+        at = _access_label(r)
+        if at and at not in e["access"]:
+            e["access"].append(at)
+
     n = len(by_user)
-    cap = 20
+    cap = 30
     listed = sorted(by_user.items())[:cap]
-    trows = [[u, e["name"], ", ".join(e["roles"][:3]) + (" …" if len(e["roles"]) > 3 else "")]
-             for u, e in listed]
+    trows = [[u, _cap_join(sorted(e["roles"]), 4), _cap_join(sorted(e["access"]), 4)] for u, e in listed]
     pre = f"Since you're in **{app['name']}**, " if from_current else ""
-    head = pre + _say(f"**{n} people** can get into **{app['name']}**",
-                      f"**{n} users** have access to **{app['name']}**")
+    head = pre + _say(f"**{n} people** work in **{app['name']}** — everyone with a role can open it; "
+                      "what differs is their **access type**, which filters the data they see, "
+                      "constrains their actions, and scopes them to their offices/divisions")
     head = head[0].upper() + head[1:]
     if n > cap:
-        head += f" — here are the first {cap}"
-    msg = head + ":\n\n" + _tbl(["User", "Name", "Roles"], trows)
-    return FlowResult(message=msg, suggestions=[_chip(f"Roles in {app['name'].split()[0]}", f"roles in {app['code']}", icon="role")])
+        head += f" (first {cap})"
+    return FlowResult(
+        message=head + ":",
+        blocks=[_table_block(f"{app['name']} — users", ["User", "Role(s)", "Access type(s)"], trows)],
+        suggestions=[_chip(f"Roles in {app['name'].split()[0]}", f"roles in {app['code']}", icon="role")])
 
 
 async def _my_access_in_app(app: dict[str, Any], headers: dict[str, str] | None) -> FlowResult:
