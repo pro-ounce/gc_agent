@@ -386,18 +386,27 @@ def _extract_user(msg: str) -> str | None:
     return None
 
 
-# Access-type codes (budget_user_details.accessType) → readable names, from the
-# BUDGET_USER_ACCESS_TYPES lookup. Aliases (CFO/DCFO) collapse the code and its short form
-# to one label so a user's access types dedup cleanly.
+# Access-type codes (budget_user_details.accessType) → readable names. Labels match the
+# terminology the Compass UI shows (e.g. the Program Offices admin columns), which for the
+# office-level approver/facilitator differs from the raw BUDGET_USER_ACCESS_TYPES lookup:
+# AAA is shown as "Planning Approver" (lookup: Program Office Approver) and AAF as "Planning
+# Facilitator" (lookup: Program Office Facilitator). Aliases (CFO/DCFO/FMD) collapse a code
+# and its short form to one label so a user's access types dedup cleanly.
 _ACCESS_TYPE_NAMES = {
+    # fund-group level
     "FG": "Fund Group Admin", "FGB": "Fund Group Budget", "FGE": "Fund Group Executive",
-    "EI": "Fund Group Executive Inquiry", "AAA": "Program Office Approver",
-    "AAF": "Program Office Facilitator", "DP": "Division Planner", "FD": "FMD Division Director",
+    "EI": "Fund Group Executive Inquiry",
+    # program-office level (UI terminology)
+    "AAA": "Planning Approver", "AAF": "Planning Facilitator", "B": "Budget Facilitator",
+    # division level
+    "DP": "Division Planner", "FD": "FMD Division Director",
+    # cross-cutting
+    "AU": "Acquisition Users", "IU": "Inquiry User",
+    # executive
     "C": "Chief Financial Officer", "CFO": "Chief Financial Officer",
     "DC": "Deputy Chief Financial Officer", "DCFO": "Deputy Chief Financial Officer",
     "CO": "Commissioner", "D": "Deputy Commissioner", "AC": "Assistant Commissioner",
-    "DAC": "Deputy Assistant Commissioner", "B": "Budget Facilitator",
-    "IU": "Inquiry User", "AU": "Acquisition Users",
+    "DAC": "Deputy Assistant Commissioner",
 }
 
 
