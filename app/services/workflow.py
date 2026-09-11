@@ -66,6 +66,15 @@ class Fetch(Node):
 
 
 @dataclass(frozen=True)
+class Filter(Node):
+    source: str = ""          # data key (a list) to filter
+    as_key: str = ""          # where to store the filtered list (+ "<as_key>_empty" = Y/N)
+    keep: dict = _dcfield(default_factory=dict)   # {field: literal-or-"$ref"} — all must match
+    exclude_source: str = ""  # data key (a list) whose `on` values are removed from source
+    on: str = ""              # match field for exclusion (drop row if row[on] ∈ exclude set)
+
+
+@dataclass(frozen=True)
 class Branch(Node):
     field: str = ""
     cases: dict = _dcfield(default_factory=dict)  # {collected value → next node id}
@@ -199,6 +208,18 @@ async def _walk(wf: Workflow, state: dict, execute: ToolExec,
             data[node.as_key] = [r for r in (rows or []) if isinstance(r, dict)]
             state["node"] = node.next
             continue
+        if isinstance(node, Filter):
+            rows = [r for r in data.get(node.source, []) if isinstance(r, dict)]
+            for f, vref in node.keep.items():
+                want = data.get(vref[1:], "") if isinstance(vref, str) and vref.startswith("$") else vref
+                rows = [r for r in rows if str(r.get(f)) == str(want)]
+            if node.exclude_source:
+                excl = {str(e.get(node.on)) for e in data.get(node.exclude_source, []) if isinstance(e, dict)}
+                rows = [r for r in rows if str(r.get(node.on)) not in excl]
+            data[node.as_key] = rows
+            data[node.as_key + "_empty"] = "Y" if not rows else "N"
+            state["node"] = node.next
+            continue
         if isinstance(node, Branch):
             val = str(data.get(node.field, ""))
             state["node"] = node.cases.get(val, node.default)
@@ -242,15 +263,29 @@ GRANT_ACCESS = Workflow(
                         prompt="Which **user** should I grant access to? (their username)"),
         "fetch_apps": Fetch("fetch_apps", next="ask_app",
                             tool="getAllApplications_get", as_key="apps"),
-        "ask_app": Ask("ask_app", next="fetch_roles", field="applicationId",
+        "ask_app": Ask("ask_app", next="fetch_all_roles", field="applicationId",
                        prompt="Which **application**?", options_from="apps",
                        label_key="applicationName", value_key="applicationId"),
-        "fetch_roles": Fetch("fetch_roles", next="ask_role",
-                             tool="getApplicationRolesByAppId_get",
-                             args={"applicationId": "$applicationId"}, as_key="roles"),
+        # Grantable = every role in the app MINUS the roles this user already holds there.
+        "fetch_all_roles": Fetch("fetch_all_roles", next="fetch_user_roles",
+                                 tool="getApplicationRolesByAppId_get",
+                                 args={"applicationId": "$applicationId"}, as_key="all_roles"),
+        "fetch_user_roles": Fetch("fetch_user_roles", next="filter_has",
+                                  tool="getAllUserApplicationRoles_post",
+                                  args={"userName": "$userName"}, as_key="user_roles"),
+        "filter_has": Filter("filter_has", next="filter_grantable", source="user_roles",
+                             as_key="has_roles",
+                             keep={"userName": "$userName", "applicationId": "$applicationId"}),
+        "filter_grantable": Filter("filter_grantable", next="check_grantable", source="all_roles",
+                                   as_key="grantable", exclude_source="has_roles",
+                                   on="applicationRoleId"),
+        "check_grantable": Branch("check_grantable", field="grantable_empty",
+                                  cases={"Y": "say_all", "N": "ask_role"}),
+        "say_all": Say("say_all",
+                       text="This user already holds every role in that application — nothing to grant."),
         "ask_role": Ask("ask_role", next="confirm", field="roleName",
-                        prompt="Which **role** in that application?", options_from="roles",
-                        label_key="roleName", value_key="roleName"),
+                        prompt="Which **role** to grant? _(only roles they don't already have)_",
+                        options_from="grantable", label_key="roleName", value_key="roleName"),
         # The registry resolves userName→userId and applicationRoleId(name)→id at execute time,
         # so we hand it names + the numeric applicationId (mirrors the existing assign flow).
         "confirm": Confirm("confirm", next="do_grant",
