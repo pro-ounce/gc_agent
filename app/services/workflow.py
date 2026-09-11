@@ -157,6 +157,10 @@ async def advance(wf: Workflow, state: dict, message: str,
                     return _render(node, data, note="Got it — add more, or say **done**.")
             else:
                 data[node.field] = val
+                for o in opts:                                # stash the label for summaries
+                    if o.get(node.value_key) == val:
+                        data[node.field + "_label"] = str(o.get(node.label_key, ""))
+                        break
         else:
             data[node.field] = message.strip()               # free text
         state["node"] = node.next
@@ -244,16 +248,18 @@ GRANT_ACCESS = Workflow(
         "fetch_roles": Fetch("fetch_roles", next="ask_role",
                              tool="getApplicationRolesByAppId_get",
                              args={"applicationId": "$applicationId"}, as_key="roles"),
-        "ask_role": Ask("ask_role", next="confirm", field="roleId",
+        "ask_role": Ask("ask_role", next="confirm", field="roleName",
                         prompt="Which **role** in that application?", options_from="roles",
-                        label_key="roleName", value_key="applicationRoleId"),
+                        label_key="roleName", value_key="roleName"),
+        # The registry resolves userName→userId and applicationRoleId(name)→id at execute time,
+        # so we hand it names + the numeric applicationId (mirrors the existing assign flow).
         "confirm": Confirm("confirm", next="do_grant",
-                           summary=(("User", "userName"), ("Application", "applicationId"),
-                                    ("Role", "roleId"))),
+                           summary=(("User", "userName"), ("Application", "applicationId_label"),
+                                    ("Role", "roleName"))),
         "do_grant": Mutate("do_grant", next="done",
                            tool="addUserApplicationAndRole_post",
-                           arg_map={"userName": "userName", "applicationId": "applicationId",
-                                    "roleId": "roleId"}),
+                           arg_map={"userId": "userName", "applicationId": "applicationId",
+                                    "applicationRoleId": "roleName"}),
         "done": Say("done", text="✅ Access granted."),
     },
 )

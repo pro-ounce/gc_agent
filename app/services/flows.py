@@ -25,6 +25,34 @@ from typing import Any
 
 from ..commons.logger import get_logger
 from ..mcp.tool_registry import tool_registry
+from . import workflow as _wf
+
+
+async def _wf_exec(tool: str, args: dict, headers: dict | None) -> dict:
+    """ToolExec adapter for the node-graph engine — runs a tool via the registry (which applies
+    the name→id resolvers on mutations) and hands back its {data,…} envelope."""
+    res = await tool_registry.execute(tool, args, headers)
+    return res.output if isinstance(res.output, dict) else {"data": res.output}
+
+
+def _wf_to_fr(step: "_wf.RunStep") -> "FlowResult":
+    return FlowResult(message=step.message,
+                      suggestions=[_chip(o) for o in step.options], done=step.done)
+
+
+def _maybe_start_workflow(session: Any, message: str) -> "FlowResult | None":
+    """Open a node-graph workflow if the message matches one's trigger. The first node must be
+    an Ask (rendered synchronously here); async-start workflows are a later addition."""
+    for w in _wf.REGISTRY.values():
+        if re.search(w.trigger, message or "", re.I):
+            state = {"wf": w.id, "node": w.start, "data": {}}
+            session.metadata["flow"] = {"name": "workflow", "wf": w.id, "state": state}
+            start_node = w.nodes[w.start]
+            if isinstance(start_node, _wf.Ask):
+                return _wf_to_fr(_wf._render(start_node, state["data"]))
+            session.metadata.pop("flow", None)   # unsupported start shape → don't hijack
+            return None
+    return None
 
 log = get_logger(__name__)
 
@@ -195,6 +223,10 @@ def maybe_start(session: Any, message: str, skill: Any = None) -> FlowResult | N
     like 'onboard a new person' opens the guided intake too."""
     if is_active(session):
         return None
+    # Declarative node-graph workflows (workflow.py) get first look at the message.
+    wf_started = _maybe_start_workflow(session, message or "")
+    if wf_started:
+        return wf_started
     # Skill authoring intent takes precedence ("create a skill" must not read as create-user).
     if _SKILL_INTENT_RE.search(message or ""):
         return start_create_skill(session, message or "")
@@ -220,6 +252,13 @@ async def handle(session: Any, message: str, headers: dict[str, str] | None) -> 
     # FAIL-SAFE: a cancel/abort/stop command exits ANY flow at ANY stage, cleanly.
     if _is_cancel(msg):
         return _cancel_flow(session, flow)
+
+    if name == "workflow":
+        w = _wf.REGISTRY[flow["wf"]]
+        step = await _wf.advance(w, flow["state"], msg, _wf_exec, headers)
+        if step.done:
+            session.metadata.pop("flow", None)
+        return _wf_to_fr(step)
 
     if name == "onboard":
         # Pivot escape: an unrelated known task (create another user, run a report) ends
