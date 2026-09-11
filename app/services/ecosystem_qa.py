@@ -97,25 +97,38 @@ async def _fiscal_years(headers: dict[str, str] | None) -> FlowResult | None:
         fmt={"enabled": lambda v: "Active" if str(v).upper() == "Y" else "Inactive"})
 
 
-# Org hierarchy: org → sub-org → program office → division (self-referential parentOrganizationId
-# tree). The master lists below are flat; sub-orgs / program offices are tree-relative and
-# fund-group-scoped, so those route to the LLM fallback until we settle their scoping UX.
+# Orgs and sub-orgs live in ONE self-referential table, split only by parentOrganizationId:
+#   parentOrganizationId == -1  → a top-level org / PROGRAM OFFICE
+#   parentOrganizationId  >  0  → a DIVISION (sub-org) under that parent org
+# getOrganizations_get returns the program offices (all -1); getAllDivisions_post returns the
+# divisions (all > 0). We still assert the split in code so a listing can never mislabel rows
+# if an endpoint ever starts returning the whole table.
+def _parent_org(r: dict[str, Any]) -> str:
+    return str(r.get("parentOrganizationId", "")).strip()
+
+
+def _enabled(r: dict[str, Any]) -> bool:
+    return str(r.get("enabled", "Y")).upper() != "N"
+
+
 async def _organizations(headers: dict[str, str] | None) -> FlowResult | None:
+    # Program offices only: parentOrganizationId == -1.
     return await _entity_table(
         "getOrganizations_get", headers,
         [("Organization", "organizationName"), ("Code", "organizationCode"),
          ("Description", "organizationDescription")],
-        "Organizations", "There are **{n} organizations**:", cap=50,
-        keep=lambda r: str(r.get("enabled", "Y")).upper() != "N")
+        "Organizations", "There are **{n} organizations** (program offices):", cap=50,
+        keep=lambda r: _enabled(r) and _parent_org(r) == "-1")
 
 
 async def _divisions(headers: dict[str, str] | None) -> FlowResult | None:
+    # Divisions only: a real parent org (parentOrganizationId > 0), never a program office.
     return await _entity_table(
         "getAllDivisions_post", headers,
         [("Division", "organizationName"), ("Code", "organizationCode"),
          ("Description", "organizationDescription")],
         "Divisions", "There are **{n} divisions**:", cap=50,
-        keep=lambda r: str(r.get("enabled", "Y")).upper() != "N")
+        keep=lambda r: _enabled(r) and _parent_org(r) not in ("", "-1"))
 
 # ── intent cues ────────────────────────────────────────────────────────────────
 _MY_ACCESS = re.compile(
