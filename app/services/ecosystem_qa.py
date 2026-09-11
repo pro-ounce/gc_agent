@@ -386,18 +386,17 @@ def _extract_user(msg: str) -> str | None:
     return None
 
 
-# Access-type codes (budget_user_details.accessType) → readable names. Labels match the
-# terminology the Compass UI shows (e.g. the Program Offices admin columns), which for the
-# office-level approver/facilitator differs from the raw BUDGET_USER_ACCESS_TYPES lookup:
-# AAA is shown as "Planning Approver" (lookup: Program Office Approver) and AAF as "Planning
-# Facilitator" (lookup: Program Office Facilitator). Aliases (CFO/DCFO/FMD) collapse a code
-# and its short form to one label so a user's access types dedup cleanly.
+# Access-type codes (budget_user_details.accessType) → readable names, from the authoritative
+# BUDGET_USER_ACCESS_TYPES lookup. NOTE: the app-role vocabulary (USER_ROLE lookup:
+# planningApprover/planningFacilitator) is SEPARATE from these access types (AAA Program Office
+# Approver / AAF Program Office Facilitator) — see the access-model open questions. Aliases
+# (CFO/DCFO) collapse a code and its short form so a user's access types dedup cleanly.
 _ACCESS_TYPE_NAMES = {
     # fund-group level
     "FG": "Fund Group Admin", "FGB": "Fund Group Budget", "FGE": "Fund Group Executive",
     "EI": "Fund Group Executive Inquiry",
     # program-office level (UI terminology)
-    "AAA": "Planning Approver", "AAF": "Planning Facilitator", "B": "Budget Facilitator",
+    "AAA": "Program Office Approver", "AAF": "Program Office Facilitator", "B": "Budget Facilitator",
     # division level
     "DP": "Division Planner", "FD": "FMD Division Director",
     # cross-cutting
