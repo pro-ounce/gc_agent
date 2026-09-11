@@ -314,7 +314,7 @@ async def _list_apps(headers: dict[str, str] | None, show_all: bool = False) -> 
     msg = head + ":\n\n" + _tbl(cols, rows)
     if not show_all and unlicensed:
         msg += f"\n\n*{unlicensed} more exist in the environment but aren't licensed — just say “list all applications” to see them.*"
-    msg += "\n\nWant a closer look? Try *“about \\<application\\>”*, *“roles in \\<application\\>”*, or *“my access”*."
+    msg += "\n\nWant a closer look? Try *“about [application]”*, *“roles in [application]”*, or *“my access”*."
     chips = [_chip("About Formulation", "about Formulation"),
              _chip("Roles in Formulation", "roles in Formulation"),
              _chip("My access", "my access", icon="role")]
