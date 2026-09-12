@@ -139,7 +139,13 @@ def extract_intent(query: str, apps: dict[str, str] | None = None) -> Intent:
         it.entity = "baseline"
 
     # subject: a named user beats "my"; else self if first-person; else all.
+    app_norms = {_norm(k) for k in apps} | {_norm(v) for v in apps.values()}
     user = _named_user(msg)
+    # A weak "for/of <token>" capture must not mistake an APPLICATION for a user — e.g. "do I
+    # have super admin role FOR FORMULATION" is app scope + self, not user 'formulation'. Dropping
+    # it lets the first-person cue win → the caller's own roles, not a list of all app roles.
+    if user and _norm(user) in app_norms:
+        user = ""
     if user:
         it.subject, it.user = "user", user
     elif _SELF.search(msg):
@@ -152,7 +158,6 @@ def extract_intent(query: str, apps: dict[str, str] | None = None) -> Intent:
     # type"). The named-access handler validates it against real users and falls through if it
     # isn't one, so a liberal guess here is safe. Only when nothing more specific claimed it.
     if it.subject == "all":
-        app_norms = {_norm(k) for k in apps} | {_norm(v) for v in apps.values()}
         for tok in re.findall(r"\b[A-Z][A-Z0-9]{3,}\b", msg):
             if tok.lower() not in _STOP_USER and _norm(tok) not in app_norms:
                 it.subject, it.user, user = "user", tok, tok

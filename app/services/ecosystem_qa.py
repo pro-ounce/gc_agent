@@ -230,7 +230,7 @@ async def _dispatch(r: str, intent: Any, app: dict[str, Any] | None,
     if r == "named_access":
         return await _named_access(intent.user, headers)
     if r == "my_access_in_app":
-        return await _my_access_in_app(app, headers)
+        return await _my_access_in_app(app, headers, getattr(intent, "raw", ""))
     if r == "my_offices":
         return await _my_offices(app, headers, role=_office_role(intent.raw))
     if r == "app_roles":
@@ -647,8 +647,33 @@ async def _my_offices(app: dict[str, Any] | None, headers: dict[str, str] | None
         blocks=[_table_block(f"My offices — {app['name']}", ["Fund group", "Offices"], rows)])
 
 
-async def _my_access_in_app(app: dict[str, Any], headers: dict[str, str] | None) -> FlowResult:
-    """The caller's own roles in ONE named application (e.g. 'my roles in FORMULATION')."""
+# "do I have <role> …", "am I a <role>", "have I got <role>" — captures the role phrase so a
+# self-access question about ONE role gets a direct yes/no, not just a list.
+_ASK_ROLE = re.compile(
+    r"\b(?:do i have|have i got|am i(?: an?| the)?|i have|got)\s+(?:the\s+|an?\s+)?"
+    r"(.+?)\s*(?:\brole\b|\baccess\b|\bin\b|\bfor\b|[?.]|$)", re.I)
+
+
+def _asked_role(query: str) -> str:
+    """The specific role a self-access question names ('do I have super admin role' → 'super
+    admin'), or '' when none is named (a plain 'my roles in X' listing, or 'access to <app>').
+    Strips role/access nouns and leading prepositions so 'access to formulation' / 'in
+    formulation' collapse to the bare app word (which the caller then rejects against the app)."""
+    m = _ASK_ROLE.search(query or "")
+    if not m:
+        return ""
+    ph = re.sub(r"\b(role|access|permission)s?\b", "", m.group(1), flags=re.I)
+    ph = re.sub(r"^\s*(?:the|an?|any|to|in|for|of|at|on|with|from)\s+", "", ph, flags=re.I).strip(" .?")
+    if re.fullmatch(r"(?:the|an?|any|to|in|for|of|at|on|with|from)?", ph, re.I):
+        return ""
+    return ph if 2 <= len(ph) <= 40 else ""
+
+
+async def _my_access_in_app(app: dict[str, Any], headers: dict[str, str] | None,
+                            query: str = "") -> FlowResult:
+    """The caller's own roles in ONE named application (e.g. 'my roles in FORMULATION'). When the
+    query names a specific role ('do I have super admin role for formulation') it answers yes/no
+    from the caller's ACTUAL roles — never a list of all the app's roles."""
     try:
         res = await tool_registry.execute("getActiveUserAppRolesByUserId_post", {}, headers)
         data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
@@ -666,11 +691,28 @@ async def _my_access_in_app(app: dict[str, Any], headers: dict[str, str] | None)
             if role and role not in roles:
                 roles.append(role)
     name = app.get("name") or app.get("code")
+    asked = _asked_role(query)
+    if asked and _norm(asked) in want:      # captured the app name ("in/to <app>"), not a role
+        asked = ""
     if not roles:
-        return FlowResult(
-            message=f"You don't have any roles in **{name}** right now.",
-            suggestions=[_chip("My access", "my access"),
-                         _chip(f"Roles in {name}", f"roles in {name}")])
+        base = (f"No — you don't have the **{asked}** role in **{name}** "
+                f"(you have no roles there at all)." if asked
+                else f"You don't have any roles in **{name}** right now.")
+        return FlowResult(message=base,
+                          suggestions=[_chip("My access", "my access"),
+                                       _chip(f"Roles in {name}", f"roles in {name}")])
+    # Direct yes/no when a specific role was named — grounded in the caller's real roles.
+    if asked:
+        an = _norm(asked)
+        hit = next((r for r in roles if an and (an in _norm(r) or _norm(r) in an)), None)
+        if hit:
+            others = len(roles) - 1
+            extra = f" (plus {others} other {'role' if others == 1 else 'roles'})" if others else ""
+            lead = _say(f"✅ Yes — you have **{hit}** in **{name}**{extra}.")
+        else:
+            lead = _say(f"No — you don't have **{asked}** in **{name}**. "
+                        f"Your **{len(roles)}** role(s) there:")
+        return FlowResult(message=lead, blocks=[_list_block(f"Your roles in {name}", sorted(roles))])
     plural = "role" if len(roles) == 1 else "roles"
     lead = _say(f"In **{name}**, you have **{len(roles)} {plural}**:",
                 f"Your **{name}** access — **{len(roles)} {plural}**:")
