@@ -180,6 +180,26 @@ def _log_turn_source(session_id: str, answered_by: str, **stats: Any) -> None:
         pass
 
 
+def _answer_grounded(tool_outputs: list[tuple[str, Any, bool]]) -> bool:
+    """True when the answer is backed by at least one SUCCESSFUL tool result (live system data)
+    rather than pure model prose. Drives a truthful `grounded` audit flag and the ungrounded
+    guard below — so 'answered from the model's head' is visible and, where clear, flagged."""
+    return any(ok for (_n, _o, ok) in tool_outputs)
+
+
+def _ungrounded_suffix(text: str, skill: Any, grounded: bool) -> str:
+    """A one-line provenance caveat, or '' when none is warranted. Fires ONLY when the turn was
+    pinned to a specific data/action tool (a focused or mutation skill) that the model was
+    supposed to call, yet produced a substantive prose answer with NO successful tool result —
+    the clearest 'not verified against live data' case. Grounded answers, general chat, and
+    unpinned turns get nothing, so it never nags a legitimate reply."""
+    if grounded or not skill or len((text or "").strip()) <= 24:
+        return ""
+    pinned = bool(getattr(skill, "focused", False) or is_mutation(getattr(skill, "tool", "")))
+    return ("_⚠️ This wasn't confirmed against live system data — please verify before relying on it._"
+            if pinned else "")
+
+
 class ChatService:
     """Stateless orchestrator — all state lives in the Session object (Redis)."""
 
@@ -339,7 +359,7 @@ class ChatService:
                 self._log_answer(session_id, lead, blocks)
                 _log_turn_source(session_id, "inference", model=llm_response.model,
                                  skill=(skill.name if skill else ""), app=sel_app, role=sel_role,
-                                 grounded=runtime_config.get_bool("AGENT_ECOSYSTEM_GROUNDING"))
+                                 grounded=_answer_grounded(tool_outputs))
                 session_service.save(session)
                 return ChatResponse(
                     session_id=session_id,
@@ -360,12 +380,19 @@ class ChatService:
         # non-block clients aren't left empty.
         if not final_text.strip() and blocks:
             final_text = blocks_to_text(blocks)
+        # Grounding guard: this exit includes the case where the model answered with prose and no
+        # successful tool call. Log the TRUTHFUL grounded flag, and caveat a pinned-skill answer
+        # that wasn't backed by live data (the "response is never wrong" bar).
+        _grounded = _answer_grounded(tool_outputs)
+        _cav = _ungrounded_suffix(final_text, skill, _grounded)
+        if _cav:
+            final_text = final_text.rstrip() + "\n\n" + _cav
         session.add_assistant(final_text)
         self._log_answer(session_id, final_text, blocks)
         _log_turn_source(session_id, "inference",
                          model=(llm_response.model if llm_response else ""),
                          skill=(skill.name if skill else ""), app=sel_app, role=sel_role,
-                         grounded=runtime_config.get_bool("AGENT_ECOSYSTEM_GROUNDING"))
+                         grounded=_grounded)
         session_service.save(session)
 
         return ChatResponse(
@@ -749,6 +776,16 @@ class ChatService:
                     yield StreamChunk(type="delta", session_id=session_id, content=tail)
                 sblocks = blocks_from_outputs(tool_outputs)
                 text = (text or "").strip() or ("" if sblocks else _EMPTY_FALLBACK)
+                # Grounding guard: this exit is the model's prose with no successful tool call.
+                # Record the truthful grounded flag; caveat a pinned-skill answer that wasn't
+                # backed by live data — streamed as a trailing delta so the chunk matches `text`.
+                _grounded = _answer_grounded(tool_outputs)
+                if turn:
+                    turn.grounded = _grounded
+                _cav = _ungrounded_suffix(text, skill, _grounded)
+                if _cav:
+                    text = text.rstrip() + "\n\n" + _cav
+                    yield StreamChunk(type="delta", session_id=session_id, content="\n\n" + _cav)
                 session.add_assistant(text)
                 self._log_answer(session_id, text, sblocks)
                 session_service.save(session)
@@ -831,6 +868,8 @@ class ChatService:
                     sblocks = _trim_count_dump(session, sblocks)
                     session.add_assistant(answer)
                     self._log_answer(session_id, answer, sblocks)
+                    if turn:
+                        turn.grounded = _answer_grounded(tool_outputs)   # backed by real tool data
                     session_service.save(session)
                     if turn:
                         turn.finish("stop")

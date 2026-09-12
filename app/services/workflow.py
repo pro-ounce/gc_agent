@@ -93,6 +93,9 @@ class Confirm(Node):
 class Mutate(Node):
     tool: str = ""
     arg_map: dict = _dcfield(default_factory=dict)  # {tool arg → data field}
+    # Optional read-back: after the write, confirm the record actually landed before reporting
+    # success. {tool, args (values may be $refs), match {field: value-or-$ref}}. Empty = skip.
+    verify: dict = _dcfield(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -150,6 +153,26 @@ def _edit_target(message: str, wf: "Workflow") -> str:
         if words & kw:
             return nid
     return ""
+
+
+async def _verify_write(spec: dict, data: dict, execute: "ToolExec", headers: dict | None) -> bool:
+    """Read-back check after a write: call the verify tool and confirm a row now matches `match`.
+    `spec` = {tool, args (values may be "$field" refs), match {field: value-or-$ref}}. Returns
+    True only when a matching row is found — an empty result, or a verify that itself errors,
+    returns False so the caller reports honest uncertainty rather than a false success."""
+    tool = spec.get("tool")
+    if not tool:
+        return True                                   # nothing to verify → don't block
+    try:
+        res = await execute(tool, _resolve_args(spec.get("args", {}), data), headers)
+        rows = res.get("data") if isinstance(res, dict) else None
+        want = {f: (data.get(v[1:]) if isinstance(v, str) and v.startswith("$") else v)
+                for f, v in (spec.get("match") or {}).items()}
+        return any(isinstance(r, dict) and all(str(r.get(f)) == str(w) for f, w in want.items())
+                   for r in (rows or []))
+    except Exception as exc:  # noqa: BLE001 — can't confirm ≠ confirmed; report uncertainty
+        print(f"[workflow] verify read-back failed: {exc}")
+        return False
 
 
 def _exec_ok(res: Any) -> bool:
@@ -292,6 +315,12 @@ async def _walk(wf: Workflow, state: dict, execute: ToolExec,
                 # run rather than walking to the success message. Nothing further is changed.
                 return RunStep(message=f"⚠️ That didn't go through — {_exec_err(res)}. Nothing was "
                                "changed. Start over when you're ready.", done=True, trace=trace)
+            if node.verify and not await _verify_write(node.verify, data, execute, headers):
+                # The call returned OK but the record didn't read back — never claim a success we
+                # can't confirm (the "response is never wrong" bar).
+                return RunStep(message="⚠️ The change was submitted, but I couldn't confirm it took "
+                               "effect on a read-back — please re-check before relying on it.",
+                               done=True, trace=trace)
             state["node"] = node.next
             continue
         if isinstance(node, Ask):

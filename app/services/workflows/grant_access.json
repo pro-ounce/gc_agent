@@ -31,7 +31,9 @@
     { "id": "confirm", "type": "confirm", "next": "do_grant",
       "summary": [["User", "userName"], ["Application", "applicationId_label"], ["Role", "roleName"]] },
     { "id": "do_grant", "type": "mutate", "next": "done", "tool": "addUserApplicationAndRole_post",
-      "arg_map": { "userId": "userName", "applicationId": "applicationId", "applicationRoleId": "roleName" } },
+      "arg_map": { "userId": "userName", "applicationId": "applicationId", "applicationRoleId": "roleName" },
+      "verify": { "tool": "getAllUserApplicationRoles_post", "args": { "userName": "$userName" },
+                  "match": { "applicationId": "$applicationId", "roleName": "$roleName" } } },
     { "id": "done", "type": "say", "text": "✅ Access granted." }
   ]
 }
