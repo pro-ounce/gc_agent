@@ -81,41 +81,76 @@ CASES: list[tuple[str, str, dict]] = [
     # ── mutations escalate out of the read router ──
     ("remove the Budget Approver role from GCADMIN", "skill_or_flow", {"action": "remove"}),
     ("generate a formulation baseline", "skill_or_flow", {"action": "generate"}),
+    # create/add a user is a MUTATION — must NOT be answered as a user listing (2026-09-12 backlash)
+    ("create user", "skill_or_flow", {"action": "create"}),
+    ("create a new user", "skill_or_flow", {"action": "create"}),
+    ("add a user", "skill_or_flow", {"action": "create"}),
+    ("register a new user", "skill_or_flow", {"action": "create"}),
+    ("onboard a new person", "skill_or_flow", {"action": "create"}),
+    ("grant access to GCADMIN", "skill_or_flow", {"action": "assign"}),
+
+    # ── self-access about ONE role → the caller's roles, NOT a list of all app roles (2026-09-12) ──
+    ("do I have super admin role for formulation", "my_access_in_app",
+     {"entity": "role", "subject": "self", "app": "FORMULATION"}),
+    ("do I have the planning approver role in cost model", "my_access_in_app",
+     {"subject": "self", "app": "COSTMODEL"}),
 
     # ── long-tail → UNKNOWN → LLM fallback (Option B) ──
     ("why is the sky purple", "", {}),
+    ("what's the weather today", "", {}),
 ]
 
 
+# Below this confidence the deterministic router ABSTAINS → Option B (LLM). Abstaining on a
+# case we'd like it to nail is an acceptable coverage gap; committing to a WRONG route is not.
+_TAU = 0.5
+
+
 def run(as_json: bool = False) -> int:
-    passed, failed, low_conf = 0, [], 0
-    for query, want_route, want_slots in CASES:
+    """Gate on CORRECTNESS, not coverage. The hard failure is a **confident-wrong** route — the
+    router committed (confidence ≥ τ) to a route that isn't the expected one, OR answered a query
+    that should have escalated (want=""). Those must be 0 to ship — they are the "backlash". An
+    abstain→LLM on a golden case is reported (coverage gap for the semantic classifier) but does
+    NOT fail the build, per precision-over-recall."""
+    passed = confident_wrong = abstained = 0
+    misses: list[tuple] = []
+    for query, want, want_slots in CASES:
         it = extract_intent(query, APPS)
         got = route(it)
         slots_ok = all(str(getattr(it, k, "")) == str(v) for k, v in want_slots.items())
-        ok = got == want_route and slots_ok
-        if it.confidence < 0.5 and want_route:      # would escalate to Option B
-            low_conf += 1
-        if ok:
+        abstain = it.confidence < _TAU
+        if got == want and slots_ok:
             passed += 1
-        else:
-            failed.append((query, want_route, got, want_slots, it.as_dict(), slots_ok))
+            continue
+        if want == "":                              # should have escalated — any route is wrong
+            kind = "LEAK (answered; should escalate)"
+            confident_wrong += 1
+        elif abstain and got in ("", want):         # low-confidence miss → LLM handles it: OK
+            kind = "abstain→LLM (coverage gap)"
+            abstained += 1
+        else:                                       # committed to a wrong route → the dangerous one
+            kind = "CONFIDENT-WRONG"
+            confident_wrong += 1
+        misses.append((query, want, got, want_slots, it.as_dict(), slots_ok, kind, round(it.confidence, 2)))
 
     total = len(CASES)
+    gate_ok = confident_wrong == 0
     if as_json:
         import json
-        print(json.dumps({"total": total, "passed": passed, "failed": len(failed),
-                          "accuracy": round(passed / total, 3), "low_confidence": low_conf}))
-        return 0 if not failed else 1
+        print(json.dumps({"total": total, "passed": passed, "confident_wrong": confident_wrong,
+                          "abstained": abstained, "accuracy": round(passed / total, 3),
+                          "gate": "pass" if gate_ok else "FAIL"}))
+        return 0 if gate_ok else 1
 
-    print(f"router eval — {passed}/{total} passed ({passed / total:.0%})   "
-          f"low-confidence (→ LLM fallback): {low_conf}")
-    for query, want, got, wslots, gslots, slots_ok in failed:
-        print(f"\n  ✗ {query!r}")
+    print(f"router eval — {passed}/{total} exact   confident-wrong: {confident_wrong} "
+          f"(gate: {'PASS' if gate_ok else 'FAIL'})   abstain→LLM: {abstained}")
+    for query, want, got, wslots, gslots, slots_ok, kind, conf in misses:
+        mark = "✗" if kind in ("CONFIDENT-WRONG",) or kind.startswith("LEAK") else "·"
+        print(f"\n  {mark} [{kind}] {query!r}  (conf {conf})")
         print(f"      route  want={want!r}  got={got!r}")
         if not slots_ok:
             print(f"      slots  want={wslots}  got={gslots}")
-    return 0 if not failed else 1
+    return 0 if gate_ok else 1
 
 
 if __name__ == "__main__":

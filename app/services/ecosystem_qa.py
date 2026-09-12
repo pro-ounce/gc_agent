@@ -142,8 +142,9 @@ _ROLES_CUE = re.compile(r"\broles?\b", re.I)
 # user Y", "grant access", "revoke …") must fall straight through to the skill/flow path —
 # never be hijacked as a "roles in <app>" listing just because it contains the word "role".
 _MUTATION_CUE = re.compile(
-    r"\b(assign|re-?assign|reassign|grant|allocate|provision|revoke|un-?assign|de-?assign|"
-    r"remove|deactivate|activate|enable|disable|onboard)\b"
+    r"\b(create|add|register|assign|re-?assign|reassign|grant|allocate|provision|revoke|"
+    r"un-?assign|de-?assign|remove|deactivate|activate|enable|disable|onboard)\b"
+    r"|\bnew (user|account|person)\b"
     r"|\b(make|set|mark)\b[^.?]{0,60}\b(default|favou?rite)\b"   # edit: make/set … default/favourite
     r"|\bdefault (app|application)\b|\bfavou?rite\b", re.I)
 _WHO_ACCESS = re.compile(

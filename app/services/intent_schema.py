@@ -52,6 +52,9 @@ _ACTION_CUES: list[tuple[str, str]] = [
     ("remove", r"\b(remove|revoke|unassign|de-?assign|take away|strip)\b"),
     ("edit", r"\b(make|set|mark)\b[^.?]{0,40}\b(default|favou?rite)\b|\b(enable|disable)\b"),
     ("generate", r"\b(generate|run|create|build)\b[^.?]{0,24}\bbaseline\b"),
+    # create/add a user or account → a MUTATION; must leave the read router. Ordered AFTER
+    # generate so "create ... baseline" still routes to the baseline flow, not here.
+    ("create", r"\b(create|add|register|onboard)\b|\bnew (user|account|person)\b"),
     ("who", r"\bwho (can|has|have|is|are)\b|\bwhich users?\b"),
     ("count", r"\bhow many\b|\bcount of\b|\bnumber of\b"),
     ("describe", r"\b(about|describe|what'?s|what is|tell me about|explain|overview of)\b"),
@@ -205,7 +208,7 @@ def route(it: Intent) -> str:
     then falls back to the LLM router (Option B). Mutations route out to the skill/flow path."""
     a, e, s = it.action, it.entity, it.subject
 
-    if a in ("assign", "remove", "edit", "generate"):
+    if a in ("assign", "remove", "edit", "generate", "create"):
         return "skill_or_flow"             # not a read — handled by skills/flows, not here
 
     if a == "who" or (e == "user" and it.app):
