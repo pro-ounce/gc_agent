@@ -31,9 +31,12 @@ from . import workflow as _wf
 
 async def _wf_exec(tool: str, args: dict, headers: dict | None) -> dict:
     """ToolExec adapter for the node-graph engine — runs a tool via the registry (which applies
-    the name→id resolvers on mutations) and hands back its {data,…} envelope."""
+    the name→id resolvers on mutations) and hands back its {data,…} envelope. Carries the
+    registry-level success flag as ``_ok`` so a Mutate node can tell a real write from a
+    rejected one (a business error comes back HTTP-200 with success:false)."""
     res = await tool_registry.execute(tool, args, headers)
-    return res.output if isinstance(res.output, dict) else {"data": res.output}
+    out = res.output if isinstance(res.output, dict) else {"data": res.output}
+    return {**out, "_ok": bool(getattr(res, "success", True))}
 
 
 def _wf_to_fr(step: "_wf.RunStep") -> "FlowResult":

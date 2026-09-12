@@ -152,6 +152,24 @@ def _edit_target(message: str, wf: "Workflow") -> str:
     return ""
 
 
+def _exec_ok(res: Any) -> bool:
+    """Did a tool call actually succeed? A GC business error comes back HTTP-200 with an
+    ApiResponse envelope of success:false (or a 4xx/5xx statusCode), so a Mutate must not treat
+    every non-exception as a win."""
+    if not isinstance(res, dict):
+        return True
+    if res.get("_ok") is False or res.get("success") is False or res.get("error"):
+        return False
+    sc = res.get("statusCode")
+    return not (isinstance(sc, int) and sc >= 400)
+
+
+def _exec_err(res: Any) -> str:
+    if isinstance(res, dict):
+        return str(res.get("message") or res.get("error") or "the request was rejected").strip()
+    return "the request was rejected"
+
+
 def _match_option(msg: str, opts: list[dict], label_key: str, value_key: str) -> Any:
     """Resolve a user's line to an option's value (exact, then case-insensitive contains)."""
     low = msg.strip().lower()
@@ -191,10 +209,17 @@ async def advance(wf: Workflow, state: dict, message: str,
         opts = data.get(node.options_from, []) if node.options_from else []
         if node.optional and (_SKIP.search(message) or _DONE.search(message)):
             data.setdefault(node.field, [] if node.multi else "")
-        elif opts:
+        elif node.options_from:
+            # An options step must resolve to one of the offered choices — NEVER accept arbitrary
+            # text. Otherwise an unrelated line (e.g. a fresh question typed mid-flow) would become
+            # a workflow value and flow straight into a mutation arg. If the options are missing
+            # (empty fetch / stale state), stop rather than guess — don't fabricate an answer.
+            if not opts:
+                return _render(node, data, note="I don't have the choices to offer right now — "
+                               "say **cancel** to stop, then try again.")
             val = _match_option(message, opts, node.label_key, node.value_key)
             if val is None:
-                return _render(node, data, note="I didn't catch that — pick one of the options.")
+                return _render(node, data, note="I didn't catch that — pick one of the options above.")
             if node.multi:
                 data.setdefault(node.field, []).append(val)
                 if not _DONE.search(message):                 # keep collecting until "done"
@@ -206,7 +231,7 @@ async def advance(wf: Workflow, state: dict, message: str,
                         data[node.field + "_label"] = str(o.get(node.label_key, ""))
                         break
         else:
-            data[node.field] = message.strip()               # free text
+            data[node.field] = message.strip()               # genuine free-text field (no options)
         state["node"] = node.next
     elif isinstance(node, Confirm):
         if not _YES.search(message):
@@ -261,7 +286,12 @@ async def _walk(wf: Workflow, state: dict, execute: ToolExec,
             continue
         if isinstance(node, Mutate):
             args = {arg: data.get(src) for arg, src in node.arg_map.items()}
-            await execute(node.tool, args, headers)
+            res = await execute(node.tool, args, headers)
+            if not _exec_ok(res):
+                # The write was rejected (e.g. a business error) — report it honestly and end the
+                # run rather than walking to the success message. Nothing further is changed.
+                return RunStep(message=f"⚠️ That didn't go through — {_exec_err(res)}. Nothing was "
+                               "changed. Start over when you're ready.", done=True, trace=trace)
             state["node"] = node.next
             continue
         if isinstance(node, Ask):
