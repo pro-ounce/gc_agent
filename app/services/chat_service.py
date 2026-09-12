@@ -625,7 +625,7 @@ class ChatService:
                 only=only, slim=slim,
             )
         _log_prompt(session_id, user_id, user_message, tools, mode="stream")
-        async for chunk in self._stream_loop(session, tools, system, request_headers, turn):
+        async for chunk in self._stream_loop(session, tools, system, request_headers, turn, skill):
             yield chunk
 
     async def confirm_stream(
@@ -704,8 +704,10 @@ class ChatService:
         system: str,
         request_headers: dict[str, str] | None,
         turn: "M.TurnMetrics | None" = None,
+        skill: Any = None,
     ) -> AsyncIterator[StreamChunk]:
-        """Shared agentic loop for reply_stream / confirm_stream."""
+        """Shared agentic loop for reply_stream / confirm_stream. `skill` (the turn's pinned
+        skill, if any) is threaded in for the ungrounded-answer caveat on the final prose exit."""
         from ..services.llm_service import _extract_text_tool_calls
 
         session_id = session.session_id
