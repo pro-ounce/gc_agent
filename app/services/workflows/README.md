@@ -42,3 +42,30 @@ the graph. The loader validates that `start` and every edge point at a real node
 `grant_access.json` in this directory is the worked example (every node type, a two-input
 filter, a branch, confirm-gated mutate). Run `python -m app.services.workflow` for an offline
 walk-through with a stub backend.
+
+## Choosing a data tool (correct data, correctly scoped)
+
+The data a node fetches must be relevant to the request — never a global dump where a per-entity
+answer is expected. Two rules:
+
+1. **Prefer a scoped tool; if you use a global one, filter it.** A `filter` node with
+   `keep: {field: "$ref"}` narrows a global result to the entity in play (e.g. grant_access's
+   `filter_has` keeps only the target user's rows). `getAllUserApplicationRoles_post` returns ALL
+   users regardless of its `userName` arg — so it is ALWAYS paired with a `filter_has` on
+   `userName` (+ `applicationId`).
+
+2. **Active vs all — pick by intent.** For *"does the user already have this?"* (grantable
+   exclusion) use the **all-assignments** view so a role held *inactively* is still excluded and
+   isn't re-offered (`getAllUserApplicationRoles_post` + filter, or `getUserAppRoleByUserId_post`).
+   For *"is the access live?"* (a verify-after-write read-back, or listing usable roles) use the
+   **active** view (`getActive…`). grant_access does exactly this: `fetch_user_roles` uses the
+   all-view for grantable, and `do_grant.verify` uses `getActiveUserAppRolesByAppIdAndUserName_post`
+   to confirm the new grant is live.
+
+## verify (read-back after a write)
+
+A `mutate` node may carry `verify: {tool, args, match}`. After the write succeeds, the engine calls
+`tool` (args may be `"$ref"`s) and confirms a returned row matches every `match` field
+(value-or-`$ref`); if none matches — or the verify errors — the run reports the change was submitted
+but could NOT be confirmed, never a false success. Scope `match` to the acting entity (grant_access
+matches `userName` + `roleName`) so another entity's row can't satisfy it.
