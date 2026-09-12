@@ -228,10 +228,12 @@ class ChatService:
         sel_role = eco.selected_role(request_headers)
         if flows.is_active(session):
             fr = await flows.handle(session, user_message, request_headers)
-            if fr is not None:
+            if fr is not None and fr.reroute:
+                user_message = fr.reroute       # broke out of the flow (now cleared) → route fresh
+            elif fr is not None:
                 return self._flow_response(session, fr, source="flow", question=user_message,
                                            app=sel_app, role=sel_role)
-        else:
+        if not flows.is_active(session):        # a fresh intent, or the flow we just switched out of
             src = "meta"
             mr = await meta.handle(user_message, request_headers)
             if mr is None:
@@ -545,7 +547,9 @@ class ChatService:
         skill = None
         if flows.is_active(session):
             fr = await flows.handle(session, user_message, request_headers)
-            if fr is not None:
+            if fr is not None and fr.reroute:
+                user_message = fr.reroute       # broke out of the flow (now cleared) → route fresh
+            elif fr is not None:
                 # Finish metrics + tag the source BEFORE yielding: the consumer may close the
                 # connection on the 'done' chunk, cancelling the generator at the yield — so
                 # any post-yield code (turn.finish) would never run. The chunks are a ready list.
@@ -558,7 +562,7 @@ class ChatService:
                 for ch in chunks:
                     yield ch
                 return
-        else:
+        if not flows.is_active(session):        # a fresh intent, or the flow we just switched out of
             src = "meta"
             mr = await meta.handle(user_message, request_headers)
             if mr is None:

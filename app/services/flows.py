@@ -74,6 +74,40 @@ def _wf_audit(event: str, run_id: str, **fields: Any) -> None:
     so a workflow run ties to its nodes AND to the individual chat records."""
     log.bind(event=event, run_id=run_id, **fields).info(f"workflow {event}: {run_id}")
 
+
+# ── New-intent break: don't let an active workflow swallow an unrelated request ──────
+# A line that clearly opens a NEW request (a read-query, or another workflow's trigger) typed
+# mid-flow should offer to switch — not be consumed as a step answer. Kept high-precision: these
+# openers never look like a username / an app or role pick, so a real answer won't trip them.
+_NEW_INTENT = re.compile(
+    r"^\s*(who\s+can\s+access\b|who\s+has\s+access\b|roles?\s+in\b|about\b|"
+    r"list\s+(the\s+)?(applications?|apps|roles?|users?|offices?|divisions?|organi[sz]ations?)\b|"
+    r"show\s+(me\s+)?(the\s+)?(applications?|apps|roles?|users?|offices?|divisions?|organi[sz]ations?)\b|"
+    r"my\s+access\b|what\s+can\s+\w|where\s+can\s+i\s+work\b|what\s+is\b|help\b)", re.I)
+# Chip sentinels for the switch prompt — unambiguous, never a real step answer.
+_SW_YES = re.compile(r"^__switch__$|^\s*(switch|yes|yep|yeah|go ahead|do that|the other one)\b", re.I)
+_SW_NO = re.compile(r"^__stay__$|^\s*(stay|no|nope|continue|finish|keep going|this one)\b", re.I)
+
+
+def _is_new_intent(msg: str, active_wf: Any) -> bool:
+    """True when `msg` reads as a fresh request rather than an answer to the current step."""
+    m = (msg or "").strip()
+    if not m:
+        return False
+    for other in _wf.REGISTRY.values():        # another workflow's trigger → clearly a new intent
+        if other.id != active_wf.id and re.search(other.trigger, m, re.I):
+            return True
+    return bool(_NEW_INTENT.search(m))
+
+
+def _switch_offer(w: Any, msg: str) -> "FlowResult":
+    """Ask whether to break out of the active workflow to handle a freshly-typed request."""
+    q = msg.strip()
+    q = (q[:70] + "…") if len(q) > 72 else q
+    return FlowResult(
+        message=f"You're partway through **{w.title}**. Switch to “{q}”, or finish this first?",
+        suggestions=[_chip("↪ Switch to that", "__switch__"), _chip(f"Stay in {w.title}", "__stay__")])
+
 # Intent cues. _YES deliberately includes the flow's own verbs ("assign", "another",
 # "more"); _NO the exit words. At a pick step an unrecognised line just re-shows the list.
 _YES = re.compile(r"\b(yes|yeah|yep|sure|ok|okay|please|assign|grant|add|another|more|continue|go ahead|do it)\b", re.I)
@@ -91,6 +125,7 @@ class FlowResult:
     pending: dict[str, Any] | None = None   # {tool_name, tool_args, summary} → emit confirm
     done: bool = False
     blocks: list[Any] = field(default_factory=list)  # structured UIBlocks (table/fields/list)
+    reroute: str | None = None  # user broke out of the flow → answer THIS message as a fresh turn
 
 
 def _chip(label: str, send: str | None = None, icon: str | None = None) -> dict[str, Any]:
@@ -277,6 +312,26 @@ async def handle(session: Any, message: str, headers: dict[str, str] | None) -> 
     if name == "workflow":
         w = _wf.REGISTRY[flow["wf"]]
         run_id = flow.get("run_id", flow["wf"])
+
+        # New-intent break. If we offered a switch last turn, resolve their choice; otherwise
+        # detect a freshly-typed request and offer to switch instead of eating it as an answer.
+        pend = flow.pop("_switch", None)
+        if pend is not None:
+            if _SW_YES.search(msg):
+                _wf_audit("run_switched", run_id, wf=w.id, to=pend[:80])
+                session.metadata.pop("flow", None)              # abandon this flow…
+                return FlowResult(message="", done=True, reroute=pend)  # …and answer the new ask
+            if _SW_NO.search(msg):
+                return _wf_to_fr(_wf._render(w.nodes[flow["state"]["node"]], flow["state"]["data"],
+                                             note="Okay — let's finish this. "))
+            if _is_new_intent(msg, w):        # they typed yet another new request → re-offer
+                flow["_switch"] = msg
+                return _switch_offer(w, msg)
+            # otherwise it reads like a real answer → fall through and apply it (pend dropped)
+        elif _is_new_intent(msg, w):
+            flow["_switch"] = msg
+            return _switch_offer(w, msg)
+
         step = await _wf.advance(w, flow["state"], msg, _wf_exec, headers)
         for nid in step.trace:                       # per-node sub-records under the run
             flow["seq"] = flow.get("seq", 0) + 1
