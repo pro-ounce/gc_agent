@@ -1,19 +1,22 @@
 """
-services/intent_semantic.py
-───────────────────────────
-Option B, semantic-first: classify a query's INTENT (which route/handler it wants) by
-nearest-neighbour over labelled exemplar phrasings, embedded with the same nomic-embed-text
-model tool-RAG uses. This replaces the brittle regex verb/noun cues for the *intent decision*
-only — the concrete SLOTS (which app / user / role) still come from the deterministic extractor,
-and the grounded handlers are unchanged.
+services/intent_semantic.py  ── ⚠️ SHELVED (not wired in), kept for a future revisit
+────────────────────────────────────────────────────────────────────────────────────
+Option B, semantic-first: classify a query's INTENT by nearest-neighbour over labelled exemplar
+phrasings, embedded with the same nomic-embed-text model tool-RAG uses.
 
-Precision over recall: `classify()` returns the predicted route + a confidence (top cosine sim).
-Below `TAU` it returns route "" → the caller ABSTAINS to the LLM (Option B fallback) rather than
-committing to a guess. Fail-open: if embedding is unavailable, it returns ("", 0.0) so the caller
-falls through exactly as today.
+SHELVED 2026-09-12 after calibration (eval/semantic_eval.py) measured it WORSE than the
+deterministic router on the shared corpus: 32/39 with **7 confident-wrong at every τ**, vs the
+deterministic router's **39/39, 0 confident-wrong**. Root cause: the route discriminators are
+SLOTS and VERBS (which app, which user, "who" vs "my", assign vs list), which are lexical — and
+embedding similarity BLURS exactly those. E.g. `roles in FORMULATION` matched a `my_access_in_app`
+exemplar at cosine 1.000 because "roles in an app" ≈ "my roles in an app" in meaning; the word
+"my" (and the username, and the verb) is what decides the route, and that is not semantic.
 
-Not yet wired into the live pipeline (that is Phase 3) — build + calibrate first, gated by
-eval/semantic_eval.py against the same corpus as the regex router.
+Decision: the deterministic router stays PRIMARY (precision-first + eval-gated), UNKNOWNs escalate
+straight to the LLM. This module is left in place, unused, so the idea can be revisited later —
+but only as a slot-AWARE design (deterministic verb/slot signals must win), and validated against
+the 0-confident-wrong gate on a corpus grown from real query logs. Do NOT wire this into the live
+pipeline as-is. See docs/ROUTER-REDESIGN.md § Phase 2 outcome.
 """
 from __future__ import annotations
 

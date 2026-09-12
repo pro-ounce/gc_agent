@@ -1,6 +1,40 @@
 # Intent Router Redesign — Build Plan
 
-**Status:** agreed direction, 2026-09-12. Supersedes the interim "Option A" (regex slots).
+**Status:** in progress, 2026-09-12. Phases 0–1 shipped. **Phase 2 (semantic-first) was tried,
+measured worse, and SHELVED** — see § Phase 2 outcome. The deterministic router stays primary.
+
+## Phase 2 outcome — semantic-first shelved (2026-09-12)
+
+We built the semantic classifier (`app/services/intent_semantic.py`) and calibrated it against the
+same corpus as the regex router (`eval/semantic_eval.py`, τ-sweep). Result:
+
+| | Deterministic (Phases 0–1) | Pure semantic |
+|---|---|---|
+| Correct | **39/39** | 32/39 |
+| Confident-wrong | **0** | **7 (at every τ)** |
+
+Every semantic miss is a case where the discriminator is a **slot or a verb**, not overall meaning:
+`list my roles in X`→my_roles_all (missed the app), `roles in X`→my_access_in_app at cosine **1.000**
+("roles in X" ≈ "my roles in X"), `who can access X`→my_access_in_app (missed "who"), `SAUSER
+access`→my_access (didn't see the username), `assign/grant/remove …`→named_access (missed the verb).
+**Embedding similarity blurs exactly the distinctions that decide the route** — and those signals
+(verb, username, app-scope, self-vs-named) are lexical, which the deterministic extractor already
+gets right.
+
+**Decision:** the deterministic router (precision-first + eval-gated) stays **primary**; its
+UNKNOWNs escalate straight to the LLM (grounded), *not* to a blurry semantic guess. The classifier
+module is **shelved** (left in place, unused, bannered) to revisit later — but only as a
+**slot-aware** design where deterministic verb/slot signals win, validated on the 0-confident-wrong
+gate over a corpus grown from **real query logs**. The eval-first discipline did its job: we
+measured before committing and did not ship a regression.
+
+**Revisit-later note (user):** we went to semantics and came out; look at this again later.
+
+---
+
+*(Original plan below; Phase 2 as written is superseded by the outcome above.)*
+
+**Original direction, 2026-09-12.** Supersedes the interim "Option A" (regex slots).
 
 ## The problem
 
@@ -69,7 +103,7 @@ grant_access · data_call · baseline · edit_assignment` — plus **`other`** (
 
 ## Phased build
 
-**Phase 0 — Eval harness first (the gate).** *Do this before touching routing.*
+**Phase 0 — Eval harness first (the gate). ✅ SHIPPED (`eval/router_eval.py`, 39/39, 0 confident-wrong).**
 - Grow `eval/router_eval.py` into a real corpus: every failure we hit (`create user`→action,
   `do I have <role> for <app>`→`my_access_in_app`), representative reads, and **should-escalate**
   and **should-be-action** cases with explicit expected outcomes.
@@ -77,31 +111,25 @@ grant_access · data_call · baseline · edit_assignment` — plus **`other`** (
   (confident + wrong) that must be **0** to pass.
 - Wire it as a pre-deploy check (and CI). *No routing change ships red.*
 
-**Phase 1 — Hard action gate (quick correctness win).**
-- Mutation-verb guard returns None from the read path (fixes `create user` immediately).
-- Land with Phase 0 cases covering it.
+**Phase 1 — Hard action gate. ✅ SHIPPED.**
+- create/add/register/onboard + assign/grant/revoke/… are mutation actions → `route()` returns
+  `skill_or_flow` and `ecosystem_qa._MUTATION_CUE` bails early. Fixed `create user`→listed-users.
 
-**Phase 2 — Semantic classifier (Option B core).**
-- Curate labelled exemplars per intent (10–30 each), embed via `services/embeddings.py`, index
-  (reuse the tool_index kNN pattern). Classify a query by nearest exemplars → intent + a
-  distance-based confidence.
-- Calibrate the abstain threshold τ on the eval corpus (maximise precision at 0 wrong-answers;
-  report the resulting abstention→LLM rate).
+**Phase 2 — Semantic classifier. ⚠️ BUILT, MEASURED WORSE, SHELVED.** (see § Phase 2 outcome above)
+- Built + calibrated; 7 confident-wrong vs the deterministic router's 0. Discriminators are
+  lexical (verb/slot), which embeddings blur. Module kept in place, unused, for a later
+  slot-aware revisit. NOT wired in.
 
-**Phase 3 — Wire intent = classifier, slots = deterministic.**
-- Replace the *intent decision* with the classifier; keep `_match_app` / named-user / role
-  resolution against the live catalogue for slots. Handlers unchanged.
-- Confident → handler; abstain → LLM+tools (grounding guard already on that path).
+**Phase 3 (revised) — Deterministic stays primary; grow it safely.**
+- No semantic wire-in. Keep the deterministic router as the intent path; UNKNOWN/low-confidence
+  escalates straight to the LLM+tools (grounding guard already there).
+- Improve coverage by **adding eval cases from real query logs** and extending the deterministic
+  cues to pass them — every change gated by 0 confident-wrong. This is the safe, measured lever.
 
-**Phase 4 — Shrink/retire the regex.**
-- Keep regex only as a thin fast-path for a tiny golden set if it measurably helps latency;
-  otherwise delete `extract_intent`'s cue tables. `route()`'s intent→handler map stays (it's the
-  dispatch, not the brittle part).
-
-**Phase 5 — Rollout & measure.**
-- Shadow-run the classifier against live turns (log predicted vs actual) before switching.
-- Watch the admin **harness-vs-inference** ratio + latency; confirm the abstention rate matches the
-  eval projection.
+**Phase 4 — (future) revisit semantics as a slot-aware fallback.**
+- Only if real logs show the deterministic router mis-routing/punting on paraphrases it can't
+  parse. Design constraint: deterministic verb/slot signals must WIN; semantics only breaks ties
+  within a family. Validate on the 0-confident-wrong gate.
 
 ## Success criteria
 
