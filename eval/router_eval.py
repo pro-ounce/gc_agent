@@ -25,18 +25,35 @@ _spec = importlib.util.spec_from_file_location("intent_schema", _p)
 _mod = importlib.util.module_from_spec(_spec)
 sys.modules["intent_schema"] = _mod          # dataclass needs the module registered
 _spec.loader.exec_module(_mod)
-extract_intent, route = _mod.extract_intent, _mod.route
+extract_intent, route, build_app_index = _mod.extract_intent, _mod.route, _mod.build_app_index
 
-# A small slice of the live catalogue: normalised label (name AND code) → code.
-APPS = {
-    "formulation": "FORMULATION", "formulation planner": "FORMULATION",
-    "allocation": "ALLOCATION", "allocation planner": "ALLOCATION",
-    "execution": "EXECUTION", "execution planner": "EXECUTION",
-    "cfo analytics": "CFO", "cost model": "COSTMODEL", "budget": "BUDGET",
-    # multi-word names → exercise distinctive-partial resolution ("smart"→Smart Hub) and the
-    # ambiguity guard (many apps end in "Planner", so "planner" alone resolves nothing).
-    "smart hub": "SMART_HUB", "revenue planner": "REVENUE", "people planner": "PEOPLE",
-}
+# The REAL application catalogue (name, code, short-code). The resolver keys off name, code,
+# code sub-tokens, short-code and curated aliases — all → the canonical code the DB uses. Display
+# name and code are frequently unrelated (Systems Planner→ADMINISTRATION, Allocation Planner→CRP).
+CATALOGUE = [
+    {"name": "Formulation Planner", "code": "FORMULATION", "short": "FOR"},
+    {"name": "P&I Funds Planner", "code": "P_AND_I_FUNDS", "short": "PIF"},
+    {"name": "Revenue Planner", "code": "REVENUE_PLANNER", "short": "REV"},
+    {"name": "Student Planner", "code": "LMS_DOCUMENTATION", "short": "LMS"},
+    {"name": "Support Manager", "code": "SUPPORT_MANAGER", "short": "SUP"},
+    {"name": "Systems Planner", "code": "ADMINISTRATION", "short": "ADM"},
+    {"name": "Smart HuB", "code": "SMART_HUB", "short": "SMA"},
+    {"name": "Forecast Planner", "code": "FORECAST_PLANNER", "short": "FRCP"},
+    {"name": "Allocation Planner", "code": "CRP", "short": "CRP"},
+    {"name": "TBM Planner", "code": "TBMP", "short": "TBM"},
+    {"name": "Execution Planner", "code": "EXECUTION", "short": "EXE"},
+    {"name": "Integrations Planner", "code": "ARC", "short": "ARC"},
+    {"name": "P&I Execution Planner", "code": "P_AND_I_EXECUTION", "short": "PIFE"},
+    {"name": "CFO Analytics", "code": "CFO_ANALYTICS", "short": "CFO"},
+    {"name": "Franchise Formulation Planner", "code": "FRANCHISE_FUNDS_PLANNER", "short": "FFP"},
+    {"name": "People Planner", "code": "PEOPLE_PLANNER", "short": "PPP"},
+    {"name": "Congressional Reports", "code": "CONGRESSIONAL_REPORTS", "short": "CR"},
+    {"name": "Budget Analytics", "code": "BUDGET_ANALYTICS", "short": "BA"},
+    {"name": "TBM", "code": "TBM", "short": "TBM"},
+    {"name": "Reports Manager", "code": "REPORTING", "short": "REP"},
+    {"name": "Cost Model", "code": "COST_MODEL", "short": "CM"},
+]
+APPS = build_app_index(CATALOGUE)
 
 # Each case: (query, expected_route, expected_slots{})  — slots checked only if given.
 CASES: list[tuple[str, str, dict]] = [
@@ -61,19 +78,28 @@ CASES: list[tuple[str, str, dict]] = [
 
     # ── roles ──
     ("roles in FORMULATION", "app_roles", {"entity": "role", "app": "FORMULATION"}),
-    ("what roles does Allocation Planner have", "app_roles", {"app": "ALLOCATION"}),
+    ("what roles does Allocation Planner have", "app_roles", {"app": "CRP"}),
     # distinctive partial app name (the "Roles in Smart" balloon bug, 2026-09-22) →
     # resolve Smart Hub, not a list of ALL 149 roles.
     ("Roles in Smart", "app_roles", {"entity": "role", "app": "SMART_HUB"}),
     ("roles in Smart Hub", "app_roles", {"app": "SMART_HUB"}),
     ("about Smart", "about_app", {"app": "SMART_HUB"}),
-    ("roles in Revenue", "app_roles", {"app": "REVENUE"}),
+    ("roles in Revenue", "app_roles", {"app": "REVENUE_PLANNER"}),
+    # alias/code/short-code resolution → canonical code (Allocation=CRP, docs=LMS, FFP=Franchise)
+    ("roles in Allocation", "app_roles", {"app": "CRP"}),
+    ("roles in CRP", "app_roles", {"app": "CRP"}),
+    ("roles in Execution", "app_roles", {"app": "EXECUTION"}),
+    ("roles in docs", "app_roles", {"app": "LMS_DOCUMENTATION"}),
+    ("roles in lms", "app_roles", {"app": "LMS_DOCUMENTATION"}),
+    ("who can access integrations", "app_users", {"app": "ARC"}),
+    ("roles in FFP", "app_roles", {"app": "FRANCHISE_FUNDS_PLANNER"}),
+    ("roles in franchise", "app_roles", {"app": "FRANCHISE_FUNDS_PLANNER"}),
     ("my roles", "my_roles_all", {"entity": "role", "subject": "self"}),
     ("list all roles", "roles_catalog", {"entity": "role", "subject": "all"}),
 
     # ── users / who-has-access ──
     ("who can access FORMULATION", "app_users", {"action": "who", "app": "FORMULATION"}),
-    ("which users have Cost Model", "app_users", {"app": "COSTMODEL"}),
+    ("which users have Cost Model", "app_users", {"app": "COST_MODEL"}),
     ("list all users", "users_list", {"entity": "user", "subject": "all"}),
 
     # ── the rest of the ecosystem (rollout targets) ──
@@ -102,7 +128,7 @@ CASES: list[tuple[str, str, dict]] = [
     ("do I have super admin role for formulation", "my_access_in_app",
      {"entity": "role", "subject": "self", "app": "FORMULATION"}),
     ("do I have the planning approver role in cost model", "my_access_in_app",
-     {"subject": "self", "app": "COSTMODEL"}),
+     {"subject": "self", "app": "COST_MODEL"}),
 
     # ── long-tail → UNKNOWN → LLM fallback (Option B) ──
     ("why is the sky purple", "", {}),

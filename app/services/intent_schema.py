@@ -90,6 +90,56 @@ _USER_PATS = [
 ]
 
 
+# Colloquial aliases the codes/names don't spell out — curated; extend as users surface more.
+_APP_ALIASES: dict[str, str] = {
+    "docs": "LMS_DOCUMENTATION", "help docs": "LMS_DOCUMENTATION",
+    "helpdocs": "LMS_DOCUMENTATION", "documentation": "LMS_DOCUMENTATION",
+    "integrations": "ARC",
+}
+
+
+def build_app_index(catalogue: list[dict[str, Any]]) -> dict[str, str]:
+    """Map every DISTINCTIVE alias → canonical applicationCode, so a query can name an app by its
+    display name, code, code-tokens, short-code, or a curated colloquial name — all resolving to
+    the one case the DB uses. Priority resolves overlaps deterministically:
+        P0 exact code / short-code / curated alias  >  P1 code sub-token  >  P2 name / name-token.
+    So 'execution' (exact code EXECUTION) beats 'execution' as a token of P_AND_I_EXECUTION, and
+    'formulation' (code FORMULATION) beats the 'Franchise *Formulation* Planner' name-token. A key
+    that stays ambiguous at its top priority is dropped — never guessed."""
+    P0, P1, P2 = 0, 1, 2
+    buckets: dict[str, dict[int, set[str]]] = {}
+
+    def add(key: Any, code: str, pri: int) -> None:
+        k = " ".join(re.split(r"[_\s]+", str(key or "").strip().lower())).strip()
+        if code and len(k.replace(" ", "")) >= 3:
+            buckets.setdefault(k, {}).setdefault(pri, set()).add(code)
+
+    for a in catalogue or []:
+        code = str(a.get("code") or "").strip()
+        if not code:
+            continue
+        add(code, code, P0)                                   # exact code (SMART_HUB → "smart hub")
+        add(a.get("short"), code, P0)                         # short-code (FFP, SMA)
+        for t in re.split(r"[_\s]+", code.lower()):
+            add(t, code, P1)                                  # code sub-tokens (lms, documentation)
+        add(a.get("name"), code, P2)                          # full display name
+        for t in re.findall(r"[a-z0-9]+", str(a.get("name") or "").lower()):
+            add(t, code, P2)                                  # name tokens (allocation, franchise)
+    for alias, code in _APP_ALIASES.items():
+        add(alias, code, P0)
+
+    index: dict[str, str] = {}
+    for key, pris in buckets.items():
+        for p in (P0, P1, P2):
+            codes = pris.get(p)
+            if not codes:
+                continue
+            if len(codes) == 1:
+                index[key] = next(iter(codes))               # unambiguous at this priority → take it
+            break                                            # ambiguous here → drop (don't fall lower)
+    return index
+
+
 def _norm(s: Any) -> str:
     return "".join(ch for ch in str(s or "").lower() if ch.isalnum())
 

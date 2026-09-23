@@ -18,7 +18,7 @@ from . import intent as intent_mod
 from .flows import FlowResult
 from ..mcp.tool_registry import tool_registry
 from ..models.chat import UIBlock
-from .intent_schema import extract_intent, route as route_intent
+from .intent_schema import build_app_index, extract_intent, route as route_intent
 from ..commons.logger import get_logger
 
 log = get_logger(__name__)
@@ -182,14 +182,13 @@ async def handle(message: str, headers: dict[str, str] | None) -> FlowResult | N
         return None
 
     # ── Option A: parse the query into a structured intent and dispatch on it ──
-    # An application named in the message resolves to its dict + seeds the slot extractor.
-    app = await _mentioned_app(msg, headers)
-    apps_map: dict[str, str] = {}
-    if app:
-        for k in (app.get("name"), app.get("code")):
-            if k:
-                apps_map[str(k).lower()] = str(app.get("code") or "")
-    intent = extract_intent(msg, apps_map)
+    # Resolve the application against the WHOLE catalogue — display name, code, code-tokens,
+    # short-code, or a curated colloquial alias all map to the one canonical code the DB uses
+    # (so 'Allocation', 'CRP', 'docs', 'FFP' each land on the right app). The index seeds the
+    # slot extractor; we then look the resolved code back up to the app dict for the handlers.
+    apps_cat = await eco.applications(headers)
+    intent = extract_intent(msg, build_app_index(apps_cat))
+    app = next((a for a in apps_cat if str(a.get("code")) == intent.app), None) if intent.app else None
     r = route_intent(intent)
 
     # UNKNOWN / mutation / low confidence → fall through to the LLM router (Option B).
