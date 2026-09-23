@@ -129,6 +129,17 @@ def is_available(app: dict[str, Any]) -> bool:
     return True
 
 
+def _tidy_name(name: str) -> str:
+    """Normalise odd intra-word capitalisation in an application name for display
+    ('Smart HuB' → 'Smart Hub') while preserving all-caps acronyms (CFO, TBM, P&I) and
+    normal Title/lower words. Display-only; matching lowercases so this never affects routing."""
+    def w(word: str) -> str:
+        if not word.isalpha() or word.isupper() or word.islower() or word == word.capitalize():
+            return word
+        return word.capitalize()          # 'HuB' → 'Hub'
+    return " ".join(w(x) for x in (name or "").split())
+
+
 async def applications(headers: dict[str, str] | None) -> list[dict[str, Any]]:
     """The application catalogue in canonical (switcher) order, each with its own metadata
     and a license-availability flag. Fields come straight from getAllApplications_get."""
@@ -139,7 +150,7 @@ async def applications(headers: dict[str, str] | None) -> list[dict[str, Any]]:
     for a in await _fetch("getAllApplications_get", headers):
         out.append({
             "id": str(a.get("applicationId") or ""),
-            "name": str(a.get("applicationName") or "").strip(),
+            "name": _tidy_name(str(a.get("applicationName") or "").strip()),
             "code": str(a.get("applicationCode") or "").strip(),
             "desc": str(a.get("description") or "").strip(),
             "info": str(a.get("applicationInfo") or "").strip(),
