@@ -94,16 +94,30 @@ def _norm(s: Any) -> str:
     return "".join(ch for ch in str(s or "").lower() if ch.isalnum())
 
 
+# App-name tokens too generic to identify one application on their own — many apps share them,
+# so a partial match on these must NOT resolve a specific app ("roles in Planner" is ambiguous).
+_APP_GENERIC = {"planner", "manager", "hub", "analytics", "model", "app", "application",
+                "system", "tool", "suite", "service", "portal", "center", "centre"}
+
+
 def _match_app(msg: str, apps: dict[str, str]) -> str:
     """Resolve a mentioned application to its code. `apps` maps normalised name/code → code.
-    Whole-word match so 'budgeting' never matches the Budget app."""
+    Whole-word match so 'budgeting' never matches the Budget app. Falls back to a DISTINCTIVE
+    partial ('roles in Smart' → Smart Hub) only when one non-generic token identifies exactly
+    ONE application — an ambiguous/generic token ('planner') resolves nothing, never guesses."""
     words = set(re.findall(r"[a-z0-9]+", msg.lower()))
-    # try the longest known labels first (multi-word names)
+    # 1) full-label match (every token present) — most precise; longest label first.
     for label in sorted(apps, key=len, reverse=True):
         toks = label.split()
-        if all(t in words for t in toks) and toks:
+        if toks and all(t in words for t in toks):
             return apps[label]
-    return ""
+    # 2) distinctive-partial: a non-generic query word that belongs to exactly one app's label.
+    hits: dict[str, str] = {}
+    for label, code in apps.items():
+        for t in label.split():
+            if len(t) >= 4 and t not in _APP_GENERIC and t in words:
+                hits.setdefault(code, t)
+    return next(iter(hits)) if len(hits) == 1 else ""
 
 
 def _named_user(msg: str) -> str:

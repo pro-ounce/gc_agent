@@ -33,6 +33,9 @@ APPS = {
     "allocation": "ALLOCATION", "allocation planner": "ALLOCATION",
     "execution": "EXECUTION", "execution planner": "EXECUTION",
     "cfo analytics": "CFO", "cost model": "COSTMODEL", "budget": "BUDGET",
+    # multi-word names → exercise distinctive-partial resolution ("smart"→Smart Hub) and the
+    # ambiguity guard (many apps end in "Planner", so "planner" alone resolves nothing).
+    "smart hub": "SMART_HUB", "revenue planner": "REVENUE", "people planner": "PEOPLE",
 }
 
 # Each case: (query, expected_route, expected_slots{})  — slots checked only if given.
@@ -59,6 +62,12 @@ CASES: list[tuple[str, str, dict]] = [
     # ── roles ──
     ("roles in FORMULATION", "app_roles", {"entity": "role", "app": "FORMULATION"}),
     ("what roles does Allocation Planner have", "app_roles", {"app": "ALLOCATION"}),
+    # distinctive partial app name (the "Roles in Smart" balloon bug, 2026-09-22) →
+    # resolve Smart Hub, not a list of ALL 149 roles.
+    ("Roles in Smart", "app_roles", {"entity": "role", "app": "SMART_HUB"}),
+    ("roles in Smart Hub", "app_roles", {"app": "SMART_HUB"}),
+    ("about Smart", "about_app", {"app": "SMART_HUB"}),
+    ("roles in Revenue", "app_roles", {"app": "REVENUE"}),
     ("my roles", "my_roles_all", {"entity": "role", "subject": "self"}),
     ("list all roles", "roles_catalog", {"entity": "role", "subject": "all"}),
 
