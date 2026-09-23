@@ -16,6 +16,7 @@ Falls back to a sensible general set for an unknown / no-current-application con
 """
 from __future__ import annotations
 
+import re as _re
 from typing import Any
 
 from . import ecosystem as eco
@@ -104,7 +105,11 @@ async def _build(module: str, headers: dict[str, str] | None, limit: int) -> lis
         ][:limit]
 
     out: list[dict[str, Any]] = []
-    short = app["name"].split()[0]
+    # Concise-but-complete app label: drop only a trailing "Planner"/"Manager" app-type suffix
+    # ("Formulation Planner" → "Formulation"), but keep genuinely two-word names whole
+    # ("Smart Hub", "Cost Model") — the old first-word-only clip turned "Smart Hub" into "Smart".
+    short = _re.sub(r"\s+(planner|manager)$", "", str(app["name"]).strip(), flags=_re.I).strip() \
+        or str(app["name"]).strip()
 
     # 1) admin-pinned balloons from the store (top priority), else the built-in headline set.
     pinned = balloon_store.get_overrides(app["code"]) or [
