@@ -15,6 +15,8 @@ from typing import Any
 
 from . import ecosystem as eco
 from . import intent as intent_mod
+from . import intent_classifier
+from . import runtime_config
 from .flows import FlowResult
 from ..mcp.tool_registry import tool_registry
 from ..models.chat import UIBlock
@@ -181,34 +183,39 @@ async def handle(message: str, headers: dict[str, str] | None) -> FlowResult | N
     if _MUTATION_CUE.search(msg):
         return None
 
-    # ── Option A: parse the query into a structured intent and dispatch on it ──
-    # Resolve the application against the WHOLE catalogue — display name, code, code-tokens,
-    # short-code, or a curated colloquial alias all map to the one canonical code the DB uses
-    # (so 'Allocation', 'CRP', 'docs', 'FFP' each land on the right app). The index seeds the
-    # slot extractor; we then look the resolved code back up to the app dict for the handlers.
+    # ── Resolve SLOTS deterministically, pick the ROUTE with the model classifier ──
+    # Slots (app/user/role) come from the catalogue-driven extractor: display name, code,
+    # code-tokens, short-code, or a curated alias all map to the one canonical code the DB uses.
     apps_cat = await eco.applications(headers)
     intent = extract_intent(msg, build_app_index(apps_cat))
     app = next((a for a in apps_cat if str(a.get("code")) == intent.app), None) if intent.app else None
-    r = route_intent(intent)
 
-    # UNKNOWN / mutation / low confidence → fall through to the LLM router (Option B).
-    # First, honour current-app context: a bare "roles?" / "who has access?" while the user
-    # is viewing an application is about THAT application.
-    if r in ("", "skill_or_flow") or intent.confidence < 0.6:
+    # The model classifier owns the intent DECISION (it generalises to any phrasing); the
+    # deterministic route is the fallback when the classifier abstains (or it's disabled). The
+    # model's confidence isn't trusted (it's over-confident) — the route↔slot consistency check
+    # in _dispatch (an app-scoped route with no resolvable app → escalate) is the real guard.
+    cls_conf = None
+    if runtime_config.get_bool("AGENT_INTENT_CLASSIFIER"):
+        r, cls_conf = await intent_classifier.classify(msg, apps_cat)
+        if not r:
+            r = route_intent(intent)
+    else:
+        r = route_intent(intent)
+
+    # Not a read (an action, or unclear) → hand to the skill/flow/LLM path.
+    if r in ("", "skill_or_flow"):
+        # Honour current-app context for a bare read while viewing an application.
         cur = await _current_app(headers) if not app else None
-        if cur and intent.entity == "role":
-            log.bind(func="intent_router", route="app_roles", ctx="current").info("intent_route")
+        if cur and r == "" and intent.entity == "role":
             return await _app_roles(cur, headers, from_current=True)
-        if cur and (intent.entity == "user" or intent.action == "who"):
-            log.bind(func="intent_router", route="app_users", ctx="current").info("intent_route")
-            return await _app_users(cur, headers, from_current=True)
-        log.bind(func="intent_router", route="escalate", entity=intent.entity,
-                 subject=intent.subject, conf=intent.confidence).info("intent_escalate")
+        log.bind(func="intent_router", route="escalate", cls_conf=cls_conf,
+                 entity=intent.entity).info("intent_escalate")
         return None
 
-    fr = await _dispatch(r, intent, app, headers)
+    fr = await _dispatch(r, intent, app, headers)   # app-scoped routes self-veto → None (escalate)
     log.bind(func="intent_router", route=r, entity=intent.entity, subject=intent.subject,
-             app=intent.app, conf=intent.confidence, answered=fr is not None).info("intent_route")
+             app=intent.app, user=intent.user, cls_conf=cls_conf,
+             answered=fr is not None).info("intent_route")
     return fr
 
 

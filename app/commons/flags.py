@@ -47,6 +47,13 @@ class FeatureFlags:
     ecosystem_grounding: bool = field(
         default_factory=lambda: env_bool("AGENT_ECOSYSTEM_GROUNDING", True)
     )
+    # Model-based intent classifier (router redesign, Option B): one structured LLM call picks the
+    # route (generalises to any phrasing); deterministic slot-resolution fills app/user/role and
+    # vetoes an unresolvable route → escalate. Default ON. Turn OFF to fall back to the pure regex
+    # router instantly if the classifier ever misbehaves live.
+    intent_classifier: bool = field(
+        default_factory=lambda: env_bool("AGENT_INTENT_CLASSIFIER", True)
+    )
 
     # Storage
     redis_enabled: bool = field(default_factory=lambda: env_bool("REDIS_ENABLED", True))
