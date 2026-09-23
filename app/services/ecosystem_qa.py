@@ -173,6 +173,40 @@ _NAMED_ACCESS = [
 _STOP = {"i", "you", "we", "my", "me", "us", "the", "a", "an", "this", "that", "user", "everyone"}
 
 
+# ── Fast-path: the top, unambiguous reads answered WITHOUT the classifier LLM call ──────────
+# Uses the deterministic route (proven on the eval corpus) only when it's a clear read with its
+# slot resolved (or a route whose handler self-validates). The "list-everything" routes
+# (roles_catalog / users_list) and low-confidence intents always go to the classifier — that's
+# where a misroute historically produced a confident-wrong answer.
+_FAST_SELF = {"list_apps", "my_access", "my_roles_all", "my_offices", "fund_groups",
+              "organizations", "divisions", "fiscal_years", "org_level"}
+_FAST_APP = {"app_roles", "app_users", "about_app", "my_access_in_app"}
+# "across ALL applications" cue — the one time a bare read is NOT bounded to the current app.
+_ALL_CUE = re.compile(r"\b(all|every|each|across|catalog(ue)?|entire|whole|platform|ecosystem)\b", re.I)
+
+
+def _fast_route(msg: str, intent: Any, eff_app: Any) -> str:
+    """A deterministic route safe to take WITHOUT the classifier, or "" to defer to it. Honours the
+    application boundary: a bare 'roles'/'users'/'who' while inside an app is about THAT app (unless
+    it explicitly asks 'all')."""
+    if intent.confidence < 0.7:
+        return ""
+    r = route_intent(intent)
+    if r in _FAST_SELF:
+        return r
+    if r in _FAST_APP and eff_app:                   # explicit or current app resolved
+        return r
+    if r == "named_access" and (intent.user or "").strip():   # handler validates the user
+        return r
+    # App boundary: a bare list-everything read INSIDE an application is scoped to that application.
+    if eff_app and not _ALL_CUE.search(msg):
+        if r == "roles_catalog" and intent.subject != "user":
+            return "app_roles"
+        if r == "users_list":
+            return "app_users"
+    return ""
+
+
 async def handle(message: str, headers: dict[str, str] | None) -> FlowResult | None:
     msg = (message or "").strip()
     if not msg:
@@ -189,30 +223,35 @@ async def handle(message: str, headers: dict[str, str] | None) -> FlowResult | N
     apps_cat = await eco.applications(headers)
     intent = extract_intent(msg, build_app_index(apps_cat))
     app = next((a for a in apps_cat if str(a.get("code")) == intent.app), None) if intent.app else None
+    # App boundary: most data is app-bounded. When the user is viewing an application and names no
+    # other, a read defaults to THAT application — the effective scope for app-routes.
+    cur_app = None if app else await _current_app(headers)
+    eff_app = app or cur_app
 
-    # The model classifier owns the intent DECISION (it generalises to any phrasing); the
-    # deterministic route is the fallback when the classifier abstains (or it's disabled). The
-    # model's confidence isn't trusted (it's over-confident) — the route↔slot consistency check
-    # in _dispatch (an app-scoped route with no resolvable app → escalate) is the real guard.
+    # Route: a fast-path answers the top, unambiguous reads WITHOUT the model call; everything else
+    # goes to the classifier (which owns the decision and generalises). The regex route is the
+    # abstain-fallback. Confidence isn't trusted — the route↔slot veto in _dispatch is the guard.
     cls_conf = None
     if runtime_config.get_bool("AGENT_INTENT_CLASSIFIER"):
-        r, cls_conf = await intent_classifier.classify(msg, apps_cat)
-        if not r:
-            r = route_intent(intent)
+        r = _fast_route(msg, intent, eff_app)
+        if r:
+            cls_conf = "fast"
+        else:
+            r, cls_conf = await intent_classifier.classify(msg, apps_cat, cur_app)
+            if not r:
+                r = route_intent(intent)
     else:
         r = route_intent(intent)
 
     # Not a read (an action, or unclear) → hand to the skill/flow/LLM path.
     if r in ("", "skill_or_flow"):
-        # Honour current-app context for a bare read while viewing an application.
-        cur = await _current_app(headers) if not app else None
-        if cur and r == "" and intent.entity == "role":
-            return await _app_roles(cur, headers, from_current=True)
+        if cur_app and r == "" and intent.entity == "role":   # bare read inside an app
+            return await _app_roles(cur_app, headers, from_current=True)
         log.bind(func="intent_router", route="escalate", cls_conf=cls_conf,
                  entity=intent.entity).info("intent_escalate")
         return None
 
-    fr = await _dispatch(r, intent, app, headers)   # app-scoped routes self-veto → None (escalate)
+    fr = await _dispatch(r, intent, eff_app, headers)   # eff_app carries the boundary; handlers veto
     log.bind(func="intent_router", route=r, entity=intent.entity, subject=intent.subject,
              app=intent.app, user=intent.user, cls_conf=cls_conf,
              answered=fr is not None).info("intent_route")

@@ -55,14 +55,23 @@ ROUTES: dict[str, str] = {
 _ROUTE_KEYS = set(ROUTES)
 
 
-def _system_prompt(catalogue: list[dict[str, Any]]) -> str:
+def _system_prompt(catalogue: list[dict[str, Any]], current_app: dict[str, Any] | None = None) -> str:
     apps = ", ".join(f"{a.get('name')} ({a.get('code')})" for a in (catalogue or [])[:40] if a.get("code"))
     routes = "\n".join(f"- {k}: {v}" for k, v in ROUTES.items())
+    boundary = ""
+    if current_app and current_app.get("name"):
+        boundary = (
+            f"\nThe user is CURRENTLY in the {current_app['name']} ({current_app.get('code')}) "
+            "application. Most data is app-bounded: a read that names no application is about THIS "
+            "application (so a bare 'roles' → app_roles, 'who can access' / 'users' → app_users), "
+            "unless it explicitly says 'all applications' / 'every app' / 'the platform'.\n"
+        )
     return (
         "You are an INTENT CLASSIFIER for a federal budget-system assistant. Read the user's "
         "message and choose the ONE route that best matches what they want.\n"
-        'Reply with ONLY a compact JSON object, no prose: {"route":"<route key>","confidence":<0.0-1.0>}.\n\n'
-        "Routes:\n" + routes + "\n\n"
+        'Reply with ONLY a compact JSON object, no prose: {"route":"<route key>","confidence":<0.0-1.0>}.\n'
+        + boundary +
+        "\nRoutes:\n" + routes + "\n\n"
         "Applications (display name → code):\n" + apps + "\n\n"
         "Rules:\n"
         "- Any ACTION on a user/role (create, add, register, onboard, assign, grant, revoke, "
@@ -92,14 +101,16 @@ def _parse(text: str) -> tuple[str, float]:
     return (route, round(max(0.0, min(1.0, conf)), 2))
 
 
-async def classify(query: str, catalogue: list[dict[str, Any]]) -> tuple[str, float]:
+async def classify(query: str, catalogue: list[dict[str, Any]],
+                   current_app: dict[str, Any] | None = None) -> tuple[str, float]:
     """Predict (route, confidence). route "" means abstain → escalate (below TAU, unknown, or the
-    model's own "other"). Fail-open: model/parse failure → ("", 0.0)."""
+    model's own "other"). `current_app` (if the user is viewing one) bounds bare reads to that app.
+    Fail-open: model/parse failure → ("", 0.0)."""
     q = (query or "").strip()
     if not q:
         return ("", 0.0)
     try:
-        resp = await llm().complete([{"role": "user", "content": q}], [], _system_prompt(catalogue))
+        resp = await llm().complete([{"role": "user", "content": q}], [], _system_prompt(catalogue, current_app))
         route, conf = _parse(resp.text or "")
     except Exception as exc:  # noqa: BLE001 — never break a turn on the classifier
         log.warning(f"intent classify failed: {exc}")
@@ -109,14 +120,15 @@ async def classify(query: str, catalogue: list[dict[str, Any]]) -> tuple[str, fl
     return (route, conf)
 
 
-async def score(query: str, catalogue: list[dict[str, Any]]) -> tuple[str, float]:
+async def score(query: str, catalogue: list[dict[str, Any]],
+                current_app: dict[str, Any] | None = None) -> tuple[str, float]:
     """Raw prediction WITHOUT the abstain threshold — (route_or_other, confidence) — for
     τ-calibration in the benchmark. `classify` applies TAU."""
     q = (query or "").strip()
     if not q:
         return ("", 0.0)
     try:
-        resp = await llm().complete([{"role": "user", "content": q}], [], _system_prompt(catalogue))
+        resp = await llm().complete([{"role": "user", "content": q}], [], _system_prompt(catalogue, current_app))
         return _parse(resp.text or "")
     except Exception as exc:  # noqa: BLE001
         log.warning(f"intent score failed: {exc}")
