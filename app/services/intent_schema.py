@@ -86,6 +86,10 @@ _USER_PATS = [
     re.compile(r"\b(?:applications?|apps?|access|roles?) (?:assigned|granted) to (?:the )?([A-Za-z0-9._@-]+)", re.I),
     re.compile(r"\bassigned to (?:the )?([A-Za-z0-9._@-]+)", re.I),
     re.compile(r"\b([A-Za-z0-9._@-]+)'s (?:access|applications?|roles?)\b", re.I),
+    # explicit lookup phrasings, incl. LOWERCASE usernames ('look up user gcadmin', 'who is jsmith')
+    re.compile(r"\blook\s*up\s+(?:the\s+)?(?:user\s+)?([A-Za-z0-9._@-]{3,})\b", re.I),
+    re.compile(r"\buser\s+([A-Za-z0-9._@-]{3,})\b", re.I),
+    re.compile(r"\bwho\s+is\s+([A-Za-z0-9._@-]{3,})\b", re.I),
     re.compile(r"\b(?:for|of) (?:user )?([A-Za-z0-9._@-]+)\b", re.I),
 ]
 
@@ -275,6 +279,10 @@ def route(it: Intent) -> str:
     if a in ("assign", "remove", "edit", "generate", "create"):
         return "skill_or_flow"             # not a read — handled by skills/flows, not here
 
+    # "who is <user>" / "look up <user>" — a resolved user with no app is a NAMED-user lookup,
+    # not a who-can-access-this-app listing.
+    if s == "user" and it.user and not it.app and a in ("who", "list", "describe"):
+        return "named_access"
     if a == "who" or (e == "user" and it.app):
         return "app_users"
     if a == "describe" and e in ("application", ""):

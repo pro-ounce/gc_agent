@@ -70,6 +70,10 @@ CASES: list[tuple[str, str, dict]] = [
     ("what can GCADMIN do", "named_access", {"subject": "user", "user": "GCADMIN"}),
     ("what applications does JSMITH have", "named_access", {"subject": "user"}),
     ("SAUSER access", "named_access", {"subject": "user", "user": "SAUSER"}),
+    # lowercase / lookup-phrasing usernames (the "look up user gcadmin" miss, 2026-09-23)
+    ("look up user gcadmin", "named_access", {"subject": "user", "user": "gcadmin"}),
+    ("who is gcadmin", "named_access", {"subject": "user", "user": "gcadmin"}),
+    ("look up jsmith", "named_access", {"subject": "user"}),
     ("what is GCADMIN", "named_access", {"subject": "user", "user": "GCADMIN"}),
     ("what roles and access type does GCADMIN have", "named_access",
      {"subject": "user", "user": "GCADMIN"}),
