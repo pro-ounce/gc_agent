@@ -91,6 +91,40 @@ async def _fund_groups(headers: dict[str, str] | None) -> FlowResult | None:
         keep=lambda r: str(r.get("enabled", "Y")).upper() != "N")
 
 
+async def _my_fund_groups(app: dict[str, Any] | None,
+                          headers: dict[str, str] | None) -> FlowResult | None:
+    """The CALLER's own fund groups in the current application. Caller-scoped + app-bounded:
+    driven by the logged-in user's token via getFundGroupsByUser_post — NOT the master list.
+    Returns None to fall through (→ LLM) when no application is in context, since fund-group
+    access only means anything within an application."""
+    if not app:
+        app = await _current_app(headers)
+    if not app:
+        return None
+    app_id = str(app["id"])
+    try:
+        res = await tool_registry.execute("getFundGroupsByUser_post", {"applicationId": app_id}, headers)
+        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+    except Exception:  # noqa: BLE001
+        data = None
+    fgs = [f for f in (data or []) if isinstance(f, dict)]
+    if not fgs:
+        return FlowResult(message=f"You don't have any fund-group access in **{app['name']}** yet.")
+    seen: set[str] = set()
+    rows: list[list[str]] = []
+    for f in sorted(fgs, key=lambda x: _pick(x, "fundGroupName", "name", "fundGroupCode", "code")):
+        name = _pick(f, "fundGroupName", "name", "fundGroupCode", "code")
+        code = _pick(f, "fundGroupCode", "code")
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        rows.append([name, code or "—"])
+    lead = _say(f"In **{app['name']}**, you have **{len(rows)} fund groups**:")
+    return FlowResult(
+        message=lead,
+        blocks=[_table_block(f"My fund groups — {app['name']}", ["Fund group", "Code"], rows)])
+
+
 async def _fiscal_years(headers: dict[str, str] | None) -> FlowResult | None:
     return await _entity_table(
         "getAllFiscalYears_post", headers,
@@ -178,8 +212,8 @@ _STOP = {"i", "you", "we", "my", "me", "us", "the", "a", "an", "this", "that", "
 # slot resolved (or a route whose handler self-validates). The "list-everything" routes
 # (roles_catalog / users_list) and low-confidence intents always go to the classifier — that's
 # where a misroute historically produced a confident-wrong answer.
-_FAST_SELF = {"list_apps", "my_access", "my_roles_all", "my_offices", "fund_groups",
-              "organizations", "divisions", "fiscal_years", "org_level"}
+_FAST_SELF = {"list_apps", "my_access", "my_roles_all", "my_offices", "my_fund_groups",
+              "fund_groups", "organizations", "divisions", "fiscal_years", "org_level"}
 _FAST_APP = {"app_roles", "app_users", "about_app", "my_access_in_app"}
 # CROSS-APPLICATION cue — the one time a read inside an app is NOT bounded to it. Only an explicit
 # "all/every/across applications", "the platform/ecosystem", "catalog", or "system-wide" breaks the
@@ -295,6 +329,8 @@ async def _dispatch(r: str, intent: Any, app: dict[str, Any] | None,
         return await _app_roles(cur, headers, from_current=True) if cur else await _roles_catalog(headers)
     if r in ("users_list", "users_in_app"):
         return await _users_list(headers)
+    if r == "my_fund_groups":
+        return await _my_fund_groups(app, headers)
     if r == "fund_groups":
         return await _fund_groups(headers)
     if r == "fiscal_years":

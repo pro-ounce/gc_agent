@@ -110,6 +110,10 @@ CASES: list[tuple[str, str, dict]] = [
 
     # ── the rest of the ecosystem (rollout targets) ──
     ("list fund groups", "fund_groups", {"entity": "fund_group"}),
+    ("all fund groups", "fund_groups", {"entity": "fund_group", "subject": "all"}),
+    ("my fund groups", "my_fund_groups", {"entity": "fund_group", "subject": "self"}),
+    ("what fund groups do I have", "my_fund_groups", {"entity": "fund_group", "subject": "self"}),
+    ("fund groups assigned to me", "my_fund_groups", {"entity": "fund_group", "subject": "self"}),
     ("show organizations", "organizations", {"entity": "organization"}),
     ("my offices", "my_offices", {"entity": "organization", "subject": "self"}),
     ("where can I work as Budget Facilitator", "my_offices", {"subject": "self"}),

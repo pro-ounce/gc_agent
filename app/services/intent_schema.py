@@ -306,7 +306,8 @@ def route(it: Intent) -> str:
     if e == "user":
         return "users_in_app" if it.app else "users_list"
     if e == "fund_group":
-        return "fund_groups"
+        # "my fund groups" is the caller's own fund groups in the current app, not the master list.
+        return "my_fund_groups" if s == "self" else "fund_groups"
     if e == "organization":
         return "my_offices" if s == "self" else "organizations"
     if e == "division":
