@@ -9,6 +9,7 @@ through when the message isn't an ecosystem question.
 """
 from __future__ import annotations
 
+import asyncio
 import random
 import re
 from typing import Any
@@ -91,38 +92,101 @@ async def _fund_groups(headers: dict[str, str] | None) -> FlowResult | None:
         keep=lambda r: str(r.get("enabled", "Y")).upper() != "N")
 
 
-async def _my_fund_groups(app: dict[str, Any] | None,
-                          headers: dict[str, str] | None) -> FlowResult | None:
-    """The CALLER's own fund groups in the current application. Caller-scoped + app-bounded:
-    driven by the logged-in user's token via getFundGroupsByUser_post — NOT the master list.
-    Returns None to fall through (→ LLM) when no application is in context, since fund-group
-    access only means anything within an application."""
-    if not app:
-        app = await _current_app(headers)
-    if not app:
-        return None
-    app_id = str(app["id"])
+async def _caller_fund_groups(app_id: str, headers: dict[str, str] | None) -> list[dict[str, Any]]:
+    """The caller's fund-group rows for ONE application (caller-scoped via the by-user tool)."""
     try:
         res = await tool_registry.execute("getFundGroupsByUser_post", {"applicationId": app_id}, headers)
         data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
     except Exception:  # noqa: BLE001
         data = None
-    fgs = [f for f in (data or []) if isinstance(f, dict)]
+    return [f for f in (data or []) if isinstance(f, dict)]
+
+
+def _fg_name(f: dict[str, Any]) -> str:
+    return _pick(f, "fundGroupName", "name", "fundGroupCode", "code")
+
+
+async def _my_fund_groups(app: dict[str, Any] | None,
+                          headers: dict[str, str] | None) -> FlowResult | None:
+    """The CALLER's own fund groups. Caller-scoped, driven by the logged-in user's token via
+    getFundGroupsByUser_post — NEVER the master list, and never asks the caller for their own id.
+    Bounded to the current application when one is in context; with no application selected it
+    aggregates across the caller's OWN applications (from the caller-scoped access tool) rather
+    than punting to the LLM."""
+    if not app:
+        app = await _current_app(headers)
+    if app:
+        return await _my_fund_groups_in_app(app, headers)
+    return await _my_fund_groups_across_apps(headers)
+
+
+async def _my_fund_groups_in_app(app: dict[str, Any],
+                                 headers: dict[str, str] | None) -> FlowResult:
+    fgs = await _caller_fund_groups(str(app["id"]), headers)
     if not fgs:
         return FlowResult(message=f"You don't have any fund-group access in **{app['name']}** yet.")
     seen: set[str] = set()
     rows: list[list[str]] = []
-    for f in sorted(fgs, key=lambda x: _pick(x, "fundGroupName", "name", "fundGroupCode", "code")):
-        name = _pick(f, "fundGroupName", "name", "fundGroupCode", "code")
-        code = _pick(f, "fundGroupCode", "code")
+    for f in sorted(fgs, key=_fg_name):
+        name = _fg_name(f)
         if not name or name in seen:
             continue
         seen.add(name)
-        rows.append([name, code or "—"])
+        rows.append([name, _pick(f, "fundGroupCode", "code") or "—"])
     lead = _say(f"In **{app['name']}**, you have **{len(rows)} fund groups**:")
     return FlowResult(
         message=lead,
         blocks=[_table_block(f"My fund groups — {app['name']}", ["Fund group", "Code"], rows)])
+
+
+async def _my_fund_groups_across_apps(headers: dict[str, str] | None) -> FlowResult:
+    """No application in context → the caller's fund groups grouped by their OWN applications.
+    Caller-scoped end to end: the caller's apps come from getActiveUserAppRolesByUserId_post (the
+    backend forces the caller's id), and each app's fund groups from the by-user tool."""
+    try:
+        res = await tool_registry.execute("getActiveUserAppRolesByUserId_post", {}, headers)
+        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+    except Exception:  # noqa: BLE001
+        data = None
+    rows_in = [r for r in (data or []) if isinstance(r, dict)]
+    # Catalogue lets us resolve an application id from its code when the access rows omit the id.
+    cat = await eco.applications(headers)
+    by_code = {_norm(a.get("code")): a for a in cat if a.get("code")}
+    # Distinct applications the caller can access → (id, display name).
+    apps: dict[str, str] = {}
+    for r in rows_in:
+        aid = str(_pick(r, "applicationId", "appId") or "").strip()
+        code = str(r.get("applicationCode") or "").strip()
+        name = str(r.get("applicationName") or code).strip()
+        if not aid and code and _norm(code) in by_code:
+            ca = by_code[_norm(code)]
+            aid = str(ca.get("id") or "").strip()
+            name = name or str(ca.get("name") or "").strip()
+        if aid and aid not in apps:
+            apps[aid] = name or aid
+    if not apps:
+        return FlowResult(message="I don't see any application access on your account yet, so there "
+                                  "are no fund groups to show. Open an application and ask again.")
+    # Fetch each app's caller fund groups in parallel.
+    ids = list(apps)
+    results = await asyncio.gather(*[_caller_fund_groups(aid, headers) for aid in ids])
+    rows: list[list[str]] = []
+    distinct: set[str] = set()
+    for aid, fgs in zip(ids, results):
+        names = sorted({_fg_name(f) for f in fgs} - {""})
+        if not names:
+            continue
+        distinct.update(names)
+        rows.append([apps[aid], _cap_join(names, 8)])
+    if not rows:
+        return FlowResult(message="You have application access, but no fund groups are assigned to "
+                                  "you under them yet.")
+    rows.sort(key=lambda r: r[0])
+    lead = _say(f"Across your **{len(rows)} applications**, you have access to "
+                f"**{len(distinct)} fund groups**:")
+    return FlowResult(
+        message=lead,
+        blocks=[_table_block("My fund groups", ["Application", "Fund groups"], rows)])
 
 
 async def _fiscal_years(headers: dict[str, str] | None) -> FlowResult | None:
