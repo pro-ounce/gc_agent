@@ -67,6 +67,8 @@ CASES: list[tuple[str, str, dict]] = [
 
     # ── access, scoped by subject ──
     ("my access", "my_access", {"entity": "application", "subject": "self"}),
+    ("my access for smart hub", "my_access_in_app", {"subject": "self", "app": "SMART_HUB"}),
+    ("my access in formulation", "my_access_in_app", {"subject": "self", "app": "FORMULATION"}),
     ("what can GCADMIN do", "named_access", {"subject": "user", "user": "GCADMIN"}),
     ("what applications does JSMITH have", "named_access", {"subject": "user"}),
     ("SAUSER access", "named_access", {"subject": "user", "user": "SAUSER"}),

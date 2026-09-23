@@ -292,7 +292,8 @@ def route(it: Intent) -> str:
 
     if e == "application":
         if s == "self":
-            return "my_access"
+            # "my access for <app>" is the caller's access IN that app, not the whole list.
+            return "my_access_in_app" if it.app else "my_access"
         if s == "user":
             return "named_access"
         return "list_apps"
