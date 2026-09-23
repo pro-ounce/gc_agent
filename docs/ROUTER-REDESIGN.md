@@ -1,7 +1,48 @@
 # Intent Router Redesign — Build Plan
 
-**Status:** in progress, 2026-09-12. Phases 0–1 shipped. **Phase 2 (semantic-first) was tried,
-measured worse, and SHELVED** — see § Phase 2 outcome. The deterministic router stays primary.
+**Status:** Phase 3 **DONE**, 2026-09-23. The **model intent classifier is live as primary**
+(flag-gated), on top of a catalogue-driven slot resolver. Semantic-embeddings Option B was tried,
+measured worse, and shelved. See § Phase 3 outcome (below) and § Phase 2 outcome.
+
+## Phase 3 outcome — model classifier wired as primary (2026-09-23)
+
+The "as a whole" fix is in. After the embedding classifier failed, we built a **model-based
+classifier** (`app/services/intent_classifier.py`): one structured LLM call → `{route, confidence}`,
+grounded on the route enum + app catalogue. It **generalises to any phrasing** — the end of the
+regex phrasing-treadmill.
+
+- **Benchmark** (`eval/classifier_eval.py`, on the box): **50/51 route-correct**, 1 miss
+  ("what is GCADMIN" → about_app). The model is over-confident (≈1.0 everywhere), so confidence is
+  NOT the guard — the **route↔slot consistency check is** (an app-scoped route with no resolvable
+  app → escalate), which turns that 1 miss into a **safe escalation, not a wrong answer**. Effective
+  confident-wrong ≈ 0.
+- **Wired** (`ecosystem_qa.handle`): classifier owns the route; the deterministic catalogue resolver
+  fills slots and `_dispatch` vetoes unresolvable routes → escalate; the regex route is the
+  abstain-fallback. Gated by **`AGENT_INTENT_CLASSIFIER`** (default ON, runtime-toggleable → instant
+  revert to the regex router). Cost: one model call per read-ish turn (obvious mutations
+  short-circuit first).
+- **Slot resolvers hardened** (deterministic, shared by both paths):
+  - **Apps** — `build_app_index`: name / code / code-tokens / short-code / curated alias →
+    canonical code, priority-resolved, ambiguity dropped (`Allocation`/`CRP`/`docs`/`FFP` all land
+    right). Display name and code are frequently unrelated; the code is the DB identity.
+  - **Users** — lookup phrasings incl. **lowercase** ("look up user gcadmin", "who is gcadmin")
+    now resolve; the handler validates against real users.
+- **Live-verified:** the whole batch of prior misses (`create user`, `do I have…`, `roles in
+  Smart`, aliases, `look up user gcadmin`) now answers correctly or escalates safely — no confident
+  wrong answers.
+- **Evals as the gate:** `router_eval.py` (deterministic fallback) **54/54, 0 confident-wrong**;
+  `classifier_eval.py` (primary) 50/51 with the miss escalating safely.
+
+**Next (optional):** bare-token user lookups ("gcadmin roles") still escalate; extend user
+resolution or have the classifier return the validated user entity. **Jev** drops into the
+classifier slot later (same interface) once the FedRAMP/egress question is cleared.
+
+---
+
+*(Original plan and Phase-2 outcome below.)*
+
+**Status (historical):** Phases 0–1 shipped 2026-09-12. Phase 2 (semantic-first) tried, measured
+worse, SHELVED — see § Phase 2 outcome.
 
 ## Phase 2 outcome — semantic-first shelved (2026-09-12)
 
