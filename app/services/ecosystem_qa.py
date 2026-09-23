@@ -181,8 +181,12 @@ _STOP = {"i", "you", "we", "my", "me", "us", "the", "a", "an", "this", "that", "
 _FAST_SELF = {"list_apps", "my_access", "my_roles_all", "my_offices", "fund_groups",
               "organizations", "divisions", "fiscal_years", "org_level"}
 _FAST_APP = {"app_roles", "app_users", "about_app", "my_access_in_app"}
-# "across ALL applications" cue — the one time a bare read is NOT bounded to the current app.
-_ALL_CUE = re.compile(r"\b(all|every|each|across|catalog(ue)?|entire|whole|platform|ecosystem)\b", re.I)
+# CROSS-APPLICATION cue — the one time a read inside an app is NOT bounded to it. Only an explicit
+# "all/every/across applications", "the platform/ecosystem", "catalog", or "system-wide" breaks the
+# boundary; a bare "all roles" stays app-scoped ("all roles" = all roles IN this app).
+_ALL_CUE = re.compile(
+    r"\b(all|every|each|across)\b[^.?]{0,20}\b(applications?|apps|platform|ecosystem)\b"
+    r"|\b(the )?(platform|ecosystem)\b|\bcatalog(ue)?\b|\b(platform|system)[- ]?wide\b", re.I)
 
 
 def _fast_route(msg: str, intent: Any, eff_app: Any) -> str:
