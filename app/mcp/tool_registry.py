@@ -300,8 +300,8 @@ class ToolRegistry:
             for s in schemas:
                 name = (s.get("function", {}) or {}).get("name", "")
                 owner = svc.get(name)
-                if owner is None or owner in allowed:
-                    kept.append(s)                 # unknown module or allowed module → keep
+                if not owner or owner in allowed:  # unknown/empty module or allowed module → keep
+                    kept.append(s)
                 else:
                     dropped += 1                   # known OTHER module → withhold
             if dropped:
