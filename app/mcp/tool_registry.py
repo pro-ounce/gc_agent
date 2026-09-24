@@ -299,22 +299,32 @@ class ToolRegistry:
         try:
             allowed = await self._allowed_services(request_headers)
             if not allowed:
-                return schemas                     # fail open
+                # No current-app module resolved (no X-Selected-App, or getAllMwConfigs empty) →
+                # fail open. Logged so a turn that SHOULD be scoped but isn't is diagnosable.
+                from ..services import ecosystem as eco
+                log.bind(func="scope_tools", engaged=False, reason="no-current-module",
+                         selected_app=eco.selected_app_code(request_headers) or "").info(
+                    "app-scoping: fail-open (no current-app module resolved)")
+                return schemas
             svc = await self._tool_service_map(request_headers)
             if not svc:
-                return schemas                     # no module map → fail open
-            kept, dropped = [], 0
+                log.bind(func="scope_tools", engaged=False, reason="empty-service-map",
+                         allowed=sorted(allowed)).info(
+                    "app-scoping: fail-open (empty tool→service map)")
+                return schemas
+            kept, dropped_names = [], []
             for s in schemas:
                 name = (s.get("function", {}) or {}).get("name", "")
                 owner = svc.get(name)
                 if not owner or owner in allowed:  # unknown/empty module or allowed module → keep
                     kept.append(s)
                 else:
-                    dropped += 1                   # known OTHER module → withhold
-            if dropped:
-                log.bind(func="scope_tools", kept=len(kept), dropped=dropped,
-                         allowed=sorted(allowed)).info(
-                    f"app-scoped tools: withheld {dropped} other-module tools")
+                    dropped_names.append(name)     # known OTHER module → withhold
+            log.bind(func="scope_tools", engaged=True, kept=len(kept), dropped=len(dropped_names),
+                     allowed=sorted(allowed), mapped=len(svc),
+                     withheld=dropped_names[:12]).info(
+                f"app-scoping: engaged — {len(kept)} kept, {len(dropped_names)} withheld "
+                f"(allowed={sorted(allowed)})")
             return kept or schemas                 # never empty (belt-and-suspenders)
         except Exception as exc:  # noqa: BLE001 — scoping must never break chat
             log.bind(func="scope_tools").warning(f"tool scoping failed (open): {exc}")
