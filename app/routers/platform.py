@@ -135,6 +135,19 @@ def _forward_headers(request: Request) -> dict[str, str]:
     return {h: request.headers[h] for h in forward if h in request.headers}
 
 
+def _headers_with_app(request: Request, app_code: str | None) -> dict[str, str]:
+    """Forwarded headers, but with X-Selected-App backfilled from the request BODY's appCode when
+    the header itself didn't arrive. The widget sends the current application in the POST body
+    (scope=APPLICATION, appCode=…) but the gateway does NOT forward the X-Selected-App header on
+    the chat POST — so without this, every chat turn looks app-less and all app-boundary logic
+    (current-app scoping, named_access bounding, my_* in-app) fails open. Encodes as base64 to
+    match the header's documented format so `ecosystem.selected_app_code` decodes it cleanly."""
+    h = _forward_headers(request)
+    if app_code and not (h.get("X-Selected-App") or h.get("x-selected-app")):
+        h["X-Selected-App"] = base64.b64encode(str(app_code).strip().encode()).decode()
+    return h
+
+
 # Suggestion chips shown on an empty conversation (curated, enterprise-relevant starters).
 # Fallback greeting prompts when there's no current-application context (no module).
 _SUGGESTIONS: tuple[str, ...] = (
@@ -341,7 +354,7 @@ async def agent_reply(
             user_message=body.question,
             user_id=user.id,
             system_prompt=system_prompt,
-            request_headers=_forward_headers(request),
+            request_headers=_headers_with_app(request, app_code),
             detail=body.detail,
         )
     except Exception as exc:  # noqa: BLE001 — surface a clean envelope, never a 500 HTML
@@ -380,6 +393,10 @@ async def agent_reply_stream(
     scope = (body.scope or "GLOBAL").upper()
     app_code = _resolve_app_code(scope, body.appCode)
     system_prompt = _ground(spec.system_prompt, body.context, scope, app_code, user) if spec else ""
+    log.bind(func="reply_stream", scope=scope, app_code=app_code or "",
+             hdr_app=bool(request.headers.get("x-selected-app"))).info(
+        f"chat scope={scope} app={app_code or '(none)'} (header X-Selected-App "
+        f"{'present' if request.headers.get('x-selected-app') else 'absent'})")
 
     async def gen():
         if spec is None:
@@ -401,7 +418,7 @@ async def agent_reply_stream(
             user_message=body.question,
             user_id=user.id,
             system_prompt=system_prompt,
-            request_headers=_forward_headers(request),
+            request_headers=_headers_with_app(request, app_code),
             detail=body.detail,
         ):
             yield {"data": chunk.model_dump_json()}
