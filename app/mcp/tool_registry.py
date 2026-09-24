@@ -235,8 +235,11 @@ class ToolRegistry:
         return amap
 
     async def _tool_service_map(self, request_headers: dict[str, str] | None) -> dict[str, str]:
-        """Cached {toolName → serviceCode} inverted from the MCP service summary
-        (GET /mcp/tools/services). {} on failure so scoping fails open."""
+        """Cached {toolName → serviceCode} for EVERY module. Built from the MCP: enumerate modules
+        via /mcp/tools/services (serviceCode + toolCount), then fetch each module's tool NAMES via
+        /mcp/tools/names/{serviceCode} (fanned out in parallel). {} on failure so scoping fails
+        open."""
+        import asyncio
         now = time.monotonic()
         cache = _TOOLSVC_CACHE
         if cache["map"] is not None and (now - cache["ts"]) < _APP_MAP_TTL:
@@ -244,13 +247,17 @@ class ToolRegistry:
         inv: dict[str, str] = {}
         try:
             summary = await mcp_client.service_tool_summary(request_headers)
-            for sc, val in (summary or {}).items():
-                names = val if isinstance(val, list) else (
-                    val.get("tools") or val.get("toolNames") if isinstance(val, dict) else None)
-                for n in (names or []):
-                    nm = n.get("name") if isinstance(n, dict) else n
-                    if nm:
-                        inv[str(nm)] = str(sc).strip()
+            codes = [str(item.get("serviceCode")).strip() for item in (summary or [])
+                     if isinstance(item, dict) and item.get("serviceCode")]
+            if codes:
+                lists = await asyncio.gather(
+                    *[mcp_client.tool_names_for_service(sc, request_headers) for sc in codes],
+                    return_exceptions=True)
+                for sc, names in zip(codes, lists):
+                    if isinstance(names, list):
+                        for nm in names:
+                            if nm:
+                                inv[str(nm)] = sc
         except Exception as exc:  # noqa: BLE001
             log.bind(func="tool_service_map").warning(f"tool service map load failed: {exc}")
         cache["map"], cache["ts"] = inv, now

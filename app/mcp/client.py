@@ -134,17 +134,32 @@ class MCPClient:
 
     async def service_tool_summary(
         self, extra_headers: dict[str, str] | None = None
-    ) -> dict[str, Any]:
-        """Return the MCP's serviceCode → tool-names map from GET {base}/tools/services
-        (getServiceToolSummary). Used to scope the tools offered to the model by module.
-        Best-effort: returns {} on any error so tool scoping fails open."""
+    ) -> list[dict[str, Any]]:
+        """Service→tool-count summary from GET {base}/tools/services (getServiceToolSummary):
+        [{"serviceCode": ..., "toolCount": n}, ...]. Used to enumerate the modules. Best-effort:
+        [] on any error so tool scoping fails open."""
         try:
             resp = await self._get("/tools/services", extra_headers=extra_headers)
             data = resp.json()
         except Exception:  # noqa: BLE001 — scoping must never break chat
-            return {}
-        result = data.get("result", data) if isinstance(data, dict) else {}
-        return result if isinstance(result, dict) else {}
+            return []
+        result = data.get("result", data) if isinstance(data, dict) else data
+        return result if isinstance(result, list) else []
+
+    async def tool_names_for_service(
+        self, service_code: str, extra_headers: dict[str, str] | None = None
+    ) -> list[str]:
+        """Tool NAMES for one module from GET {base}/tools/names/{serviceCode}
+        (getToolNamesForServiceCode): {"serviceCode","count","tools":[name,...]}. Best-effort:
+        [] on any error."""
+        try:
+            resp = await self._get(f"/tools/names/{service_code}", extra_headers=extra_headers)
+            data = resp.json()
+        except Exception:  # noqa: BLE001
+            return []
+        result = data.get("result", data) if isinstance(data, dict) else data
+        names = result.get("tools") if isinstance(result, dict) else result
+        return [str(n) for n in names if n] if isinstance(names, list) else []
 
     async def execute_tool(
         self,
