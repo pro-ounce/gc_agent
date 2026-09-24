@@ -47,6 +47,7 @@ ROUTES: dict[str, str] = {
     "organizations": "list organizations / offices",
     "divisions": "list divisions",
     "my_offices": "the CALLER's own offices / 'where can I work'",
+    "user_offices": "a NAMED OTHER user's offices/organizations: 'offices for <user>', \"<user>'s offices\"",
     "about_app": "describe / 'about' / 'what is' ONE named application",
     "org_level": "list sub-orgs or program offices",
     "fiscal_years": "list fiscal years",

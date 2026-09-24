@@ -122,6 +122,11 @@ CASES: list[tuple[str, str, dict]] = [
     ("show organizations", "organizations", {"entity": "organization"}),
     ("my offices", "my_offices", {"entity": "organization", "subject": "self"}),
     ("where can I work as Budget Facilitator", "my_offices", {"subject": "self"}),
+    # named OTHER user's offices → guarded, app-aware route, never the master org list
+    ("offices for GCADMIN", "user_offices", {"entity": "organization", "subject": "user", "user": "GCADMIN"}),
+    ("GCADMIN's offices", "user_offices", {"entity": "organization", "subject": "user", "user": "GCADMIN"}),
+    ("what offices does JSMITH have", "user_offices", {"entity": "organization", "subject": "user"}),
+    ("offices assigned to jsmith", "user_offices", {"entity": "organization", "subject": "user", "user": "jsmith"}),
     ("list divisions", "divisions", {"entity": "division"}),
     ("list sub-orgs", "org_level", {"entity": "sub_org"}),
     ("list program offices", "org_level", {"entity": "program_office"}),

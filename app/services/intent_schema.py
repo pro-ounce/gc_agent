@@ -80,12 +80,12 @@ _STOP_USER = {"i", "you", "we", "my", "me", "us", "the", "a", "an", "this",
 # Named-user patterns (same set the legacy extractor learned, kept in one place).
 _USER_PATS = [
     re.compile(r"what can ([A-Za-z0-9._@-]+) (?:do|access)\b", re.I),
-    re.compile(r"what (?:applications?|apps?|access|roles?|fund ?groups?) (?:does|do|has|have) ([A-Za-z0-9._@-]+)", re.I),
+    re.compile(r"what (?:applications?|apps?|access|roles?|fund ?groups?|offices?|organi[sz]ations?) (?:does|do|has|have) ([A-Za-z0-9._@-]+)", re.I),
     re.compile(r"what (?:does|do|has|have) ([A-Za-z0-9._@-]+)\b", re.I),
     re.compile(r"\baccess (?:for|of) ([A-Za-z0-9._@-]+)", re.I),
-    re.compile(r"\b(?:applications?|apps?|access|roles?|fund ?groups?) (?:assigned|granted) to (?:the )?([A-Za-z0-9._@-]+)", re.I),
+    re.compile(r"\b(?:applications?|apps?|access|roles?|fund ?groups?|offices?|organi[sz]ations?) (?:assigned|granted) to (?:the )?([A-Za-z0-9._@-]+)", re.I),
     re.compile(r"\bassigned to (?:the )?([A-Za-z0-9._@-]+)", re.I),
-    re.compile(r"\b([A-Za-z0-9._@-]+)'s (?:access|applications?|roles?|fund ?groups?)\b", re.I),
+    re.compile(r"\b([A-Za-z0-9._@-]+)'s (?:access|applications?|roles?|fund ?groups?|offices?|organi[sz]ations?)\b", re.I),
     # explicit lookup phrasings, incl. LOWERCASE usernames ('look up user gcadmin', 'who is jsmith')
     re.compile(r"\blook\s*up\s+(?:the\s+)?(?:user\s+)?([A-Za-z0-9._@-]{3,})\b", re.I),
     re.compile(r"\buser\s+([A-Za-z0-9._@-]{3,})\b", re.I),
@@ -318,7 +318,13 @@ def route(it: Intent) -> str:
             return "user_fund_groups"
         return "fund_groups"
     if e == "organization":
-        return "my_offices" if s == "self" else "organizations"
+        # "my offices" → the caller's; "<user>'s offices" → that named user's (guarded, app-aware,
+        # never the master org list); a bare "organizations" → the catalogue.
+        if s == "self":
+            return "my_offices"
+        if s == "user":
+            return "user_offices"
+        return "organizations"
     if e == "division":
         return "divisions"
     if e in ("sub_org", "program_office"):

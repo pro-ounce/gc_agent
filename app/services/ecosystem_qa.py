@@ -195,67 +195,115 @@ def _row_fund_group(r: dict[str, Any]) -> str:
     return _pick(r, "fundGroupName", "fundGroupCode")
 
 
-async def _user_fund_groups(user: str, app: dict[str, Any] | None,
-                            headers: dict[str, str] | None) -> FlowResult | None:
-    """A NAMED OTHER user's fund groups — GUARDED. Read from the privileged budget_user_details
-    view (getBudgetUsers_post, the same source _named_access uses), filtered to that user, and
-    NEVER the master list. The named user is a mandatory, validated slot. Once dispatched this
-    ALWAYS returns a guarded result (never None → never a fall-through to a path that could widen
-    to the master list): a not-found / not-visible user gets a definitive no-data message, not a
-    leak. The backend enforces whether THIS caller may see other users' assignments; we only
-    render rows it returns."""
-    u = (user or "").strip()
-    if not u:
-        return None                       # no user at all → escalate (nothing scoped to leak)
+def _row_office(r: dict[str, Any]) -> str:
+    """An office (organization) name from a BudgetUserDetailV row. The view exposes
+    orgName / orgCode / orgNumber; prefer the name, fall back to the code/number."""
+    return _pick(r, "orgName", "orgCode", "orgNumber")
+
+
+async def _budget_rows_for_user(user: str, headers: dict[str, str] | None
+                                ) -> tuple[bool, list[dict[str, Any]]]:
+    """(ok, rows) for a NAMED user from the privileged budget_user_details view (getBudgetUsers,
+    the same source _named_access uses), filtered to that user. ok=False signals a tool failure
+    (as opposed to a genuinely empty result). Caller-scoped by the backend: it only returns rows
+    THIS caller is permitted to see, so we never widen beyond that."""
     try:
         res = await tool_registry.execute("getBudgetUsers_post", {}, headers)
         ok = bool(getattr(res, "success", False)) and isinstance(res.output, dict)
         data = res.output.get("data") if ok else None
     except Exception:  # noqa: BLE001
-        ok, data = False, None
-    if not ok:
-        return FlowResult(message="I couldn't reach the user-assignment data just now, so I can't "
-                                  f"show **{u}**'s fund groups. Please try again in a moment.")
-    rows_all = [r for r in (data or []) if isinstance(r, dict)]
-    ul = u.lower()
-    rows = [r for r in rows_all if str(r.get("userName") or "").strip().lower() == ul]
-    if not rows:
-        # Fund-group access lives only in budget_user_details; no rows → none, or not visible to
-        # this caller. Definitive guarded answer — never the master list.
-        return FlowResult(message=f"I don't see any fund-group assignments for **{u}** — either "
-                                  "that user has none, or your access doesn't include their "
-                                  "assignments.")
-    full = ""
+        return False, []
+    ul = (user or "").strip().lower()
+    rows = [r for r in (data or []) if isinstance(r, dict)
+            and str(r.get("userName") or "").strip().lower() == ul]
+    return ok, rows
+
+
+def _full_name(rows: list[dict[str, Any]], fallback: str) -> str:
     for r in rows:
         full = (str(r.get("fullName") or "").strip()
                 or f"{r.get('firstName') or ''} {r.get('lastName') or ''}".strip())
         if full:
-            break
-    full = full or u
-    # Fund groups grouped by application (optionally bounded to a named app).
+            return full
+    return fallback
+
+
+def _user_scope_rows(rows: list[dict[str, Any]], app: dict[str, Any] | None,
+                     value: Any) -> dict[str, set[str]]:
+    """Group a named user's rows by application → {values}, APP-AWARE: when an application is in
+    context every row is bounded to it, and otherwise each value is presented under its own
+    application. Disabled assignments are dropped. `value(r)` extracts the per-row datum."""
     app_code = _norm(app.get("code")) if app else ""
     by_app: dict[str, set[str]] = {}
     for r in rows:
         if str(r.get("enabled", "Y")).upper() == "N":     # skip disabled assignments
             continue
         aname = str(r.get("applicationName") or r.get("applicationCode") or "").strip()
-        if app_code and _norm(r.get("applicationCode")) != app_code \
-                and _norm(aname) != app_code:
+        if app_code and _norm(r.get("applicationCode")) != app_code and _norm(aname) != app_code:
             continue
-        fg = _row_fund_group(r)
-        if aname and fg:
-            by_app.setdefault(aname, set()).add(fg)
+        v = value(r)
+        if aname and v:
+            by_app.setdefault(aname, set()).add(v)
+    return by_app
+
+
+async def _user_fund_groups(user: str, app: dict[str, Any] | None,
+                            headers: dict[str, str] | None) -> FlowResult | None:
+    """A NAMED OTHER user's fund groups — GUARDED and APP-AWARE. Read from budget_user_details,
+    filtered to that user, bounded to the current/named application, and NEVER the master list.
+    The named user is a mandatory, validated slot. Once dispatched this ALWAYS returns a guarded
+    result (never None → never a fall-through that could widen): a not-found / not-visible user
+    gets a definitive no-data message, not a leak."""
+    u = (user or "").strip()
+    if not u:
+        return None                       # no user at all → escalate (nothing scoped to leak)
+    ok, rows = await _budget_rows_for_user(u, headers)
+    if not ok:
+        return FlowResult(message="I couldn't reach the user-assignment data just now, so I can't "
+                                  f"show **{u}**'s fund groups. Please try again in a moment.")
+    if not rows:
+        return FlowResult(message=f"I don't see any fund-group assignments for **{u}** — either "
+                                  "that user has none, or your access doesn't include their "
+                                  "assignments.")
+    full = _full_name(rows, u)
+    by_app = _user_scope_rows(rows, app, _row_fund_group)
+    scope = f" in **{app['name']}**" if app else ""
     if not by_app:
-        scope = f" in **{app['name']}**" if app else ""
-        return FlowResult(
-            message=f"**{full}** ({u}) has no fund-group assignments{scope} that I can see.")
+        return FlowResult(message=f"**{full}** ({u}) has no fund-group assignments{scope} that I can see.")
     distinct = set().union(*by_app.values())
     trows = [[a, _cap_join(sorted(by_app[a]), 8)] for a in sorted(by_app)]
-    scope = f" in **{app['name']}**" if app else ""
     lead = _say(f"**{full}** ({u}) has access to **{len(distinct)} fund groups**{scope}:")
     return FlowResult(
         message=lead,
         blocks=[_table_block(f"{full} — fund groups", ["Application", "Fund groups"], trows)])
+
+
+async def _user_offices(user: str, app: dict[str, Any] | None,
+                        headers: dict[str, str] | None) -> FlowResult | None:
+    """A NAMED OTHER user's offices/organizations — GUARDED and APP-AWARE. Same shape and same
+    guarantees as _user_fund_groups, off the org fields of budget_user_details (offices are
+    assigned per application + fund group, so the result is always scoped to an application)."""
+    u = (user or "").strip()
+    if not u:
+        return None
+    ok, rows = await _budget_rows_for_user(u, headers)
+    if not ok:
+        return FlowResult(message="I couldn't reach the user-assignment data just now, so I can't "
+                                  f"show **{u}**'s offices. Please try again in a moment.")
+    if not rows:
+        return FlowResult(message=f"I don't see any office assignments for **{u}** — either that "
+                                  "user has none, or your access doesn't include their assignments.")
+    full = _full_name(rows, u)
+    by_app = _user_scope_rows(rows, app, _row_office)
+    scope = f" in **{app['name']}**" if app else ""
+    if not by_app:
+        return FlowResult(message=f"**{full}** ({u}) has no office assignments{scope} that I can see.")
+    distinct = set().union(*by_app.values())
+    trows = [[a, _cap_join(sorted(by_app[a]), 8)] for a in sorted(by_app)]
+    lead = _say(f"**{full}** ({u}) can act in **{len(distinct)} offices**{scope}:")
+    return FlowResult(
+        message=lead,
+        blocks=[_table_block(f"{full} — offices", ["Application", "Offices"], trows)])
 
 
 async def _fiscal_years(headers: dict[str, str] | None) -> FlowResult | None:
@@ -358,6 +406,7 @@ _FAST_APP = {"app_roles", "app_users", "about_app", "my_access_in_app"}
 _REQUIRES: dict[str, str] = {
     "named_access": "user",
     "user_fund_groups": "user",
+    "user_offices": "user",
     "app_roles": "app",
     "app_users": "app",
     "about_app": "app",
@@ -498,6 +547,8 @@ async def _dispatch(r: str, intent: Any, app: dict[str, Any] | None,
         return await _my_fund_groups(app, headers)
     if r == "user_fund_groups":
         return await _user_fund_groups(intent.user, app, headers)
+    if r == "user_offices":
+        return await _user_offices(intent.user, app, headers)
     if r == "fund_groups":
         return await _fund_groups(headers)
     if r == "fiscal_years":
