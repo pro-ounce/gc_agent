@@ -1173,6 +1173,27 @@
     var col=lvl==="high"?"#b91c1c":"#b45309", bg=lvl==="high"?"#fdeaea":"var(--amber-wash)";
     return '<span class="pill" style="background:'+bg+';color:'+col+';border-color:'+col+'66;font-weight:700">'+(lvl==="high"?"⛔":"⚠")+' risk '+sc+' · '+esc(lvl)+'</span>';
   }
+  function _auditHeaders(h){
+    if(!h) return "";
+    var absent = h.selected_app_hdr===false;
+    var chip = absent
+      ? '<span class="pill" style="background:#fdeaea;color:#b91c1c;border-color:#f3c0c0">X-Selected-App ABSENT</span>'
+      : '<span class="pill" style="background:var(--good-wash);color:var(--good);border-color:#b6e3c4">X-Selected-App present</span>';
+    var src = '<span class="pill">app via '+esc(h.app_source||'—')+(h.app_code?' · '+esc(h.app_code):'')+'</span>';
+    var carried=h.carried||{}, secrets=h.secrets||{};
+    var rows=Object.keys(carried).map(function(k){
+      return '<tr><td class="mono">'+esc(k)+'</td><td class="mono" style="opacity:.8;word-break:break-all">'+esc(carried[k])+'</td></tr>';}).join("");
+    var srows=Object.keys(secrets).map(function(k){
+      var v=secrets[k], ok=/^present/.test(v);
+      return '<tr><td class="mono">'+esc(k)+'</td><td class="mono" style="color:'+(ok?'var(--good)':'#b91c1c')+'">'+esc(v)+'</td></tr>';}).join("");
+    return '<details class="au-hdr" style="margin-top:6px"><summary style="cursor:pointer;font-size:12px;color:var(--ink-2);list-style:none">🧭 Request context &nbsp;'+chip+' &nbsp;'+src+'</summary>'
+      +'<table class="api-params" style="margin-top:7px"><thead><tr><th>Header carried</th><th>Value</th></tr></thead><tbody>'
+      +(rows||'<tr><td colspan="2" class="def">no routing headers captured</td></tr>')
+      +(srows?'<tr><td colspan="2" class="def" style="padding-top:9px;font-size:10.5px;text-transform:uppercase;letter-spacing:.04em">credential headers — presence only</td></tr>'+srows:'')
+      +'</tbody></table>'
+      +'<div class="def" style="font-size:11px;margin-top:6px">scope='+esc(h.scope||'—')+' · '+((h.header_names||[]).length)+' headers on the request</div>'
+      +'</details>';
+  }
   function auditRow(e){
     var reasons=(e.risk_reasons&&e.risk_reasons.length)?e.risk_reasons.map(function(f){
       var hi=e.risk_level==="high"; var col=hi?"#b91c1c":"#b45309";
@@ -1189,7 +1210,8 @@
       +'<div class="q" style="display:flex;gap:8px;align-items:baseline;flex-wrap:wrap">'+riskBadge(e)+'<span>'+(e.question?esc(e.question):'<span class="def">(no prompt)</span>')+'</span></div>'
       +(reasons?'<div style="margin-top:5px">'+reasons+'</div>':'')
       +(muts?'<div style="margin-top:4px">'+muts+'</div>':'')
-      +'<div class="meta">'+meta+'</div></div>';
+      +'<div class="meta">'+meta+'</div>'
+      +_auditHeaders(e.headers)+'</div>';
   }
   function loadAudit(){
     var el=document.getElementById("au-list"); if(!el) return;

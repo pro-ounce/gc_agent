@@ -135,6 +135,35 @@ def _forward_headers(request: Request) -> dict[str, str]:
     return {h: request.headers[h] for h in forward if h in request.headers}
 
 
+# Headers whose VALUE is safe to record in the audit trail (routing/trace/fingerprint context).
+_AUDIT_SAFE_HEADERS = (
+    "x-selected-app", "x-selected-role", "x-trace-id", "x-request-id", "x-session-id",
+    "x-forwarded-for", "x-real-ip", "origin", "referer", "user-agent",
+    "x-time-zone", "x-date-time", "content-type", "host", "x-scope", "x-app-code",
+)
+
+
+def _emit_chat_headers(request: Request, scope: str, app_code: str | None) -> None:
+    """Emit a per-turn audit snapshot of the routing/identity headers that were carried, so a
+    header/trace issue (like a missing X-Selected-App) is visible in the AUDIT trail, not only in
+    the raw logs. Bound to the request_id via the logging context, so `_recent_turns` folds it into
+    the turn. Token-bearing headers are recorded as PRESENCE ONLY — their values are never logged."""
+    h = request.headers
+    hdr_app = h.get("x-selected-app") or ""
+    source = "header" if hdr_app else ("body" if app_code else "none")
+    carried = {n: h[n][:256] for n in _AUDIT_SAFE_HEADERS if h.get(n)}
+    # Secret / credential headers → presence + length only, never the value.
+    secret_names = ("authorization", cfg.GC_INTERNAL_HEADER.lower(), cfg.GC_ROLE_HEADER.lower(), "x-int-tkn")
+    tokens = {n: (f"present({len(h[n])})" if h.get(n) else "absent") for n in secret_names}
+    log.bind(
+        event="chat_headers", scope=scope, app_code=app_code or "",
+        app_source=source, selected_app_hdr=bool(hdr_app),
+        carried_headers=carried, secret_headers=tokens,
+        header_names=sorted(k.lower() for k in h.keys()),
+    ).info(f"chat headers: app={app_code or '(none)'} via {source}; "
+           f"X-Selected-App {'present' if hdr_app else 'ABSENT'}")
+
+
 def _headers_with_app(request: Request, app_code: str | None) -> dict[str, str]:
     """Forwarded headers, but with X-Selected-App backfilled from the request BODY's appCode when
     the header itself didn't arrive. The widget sends the current application in the POST body
@@ -347,6 +376,7 @@ async def agent_reply(
         func="agent_reply", agent=agent, session_id=session_id, user_id=user.id,
         scope=scope, app_code=app_code,
     ).info("Platform agent request")
+    _emit_chat_headers(request, scope, app_code)
 
     try:
         result = await chat_service.chat(
@@ -393,10 +423,7 @@ async def agent_reply_stream(
     scope = (body.scope or "GLOBAL").upper()
     app_code = _resolve_app_code(scope, body.appCode)
     system_prompt = _ground(spec.system_prompt, body.context, scope, app_code, user) if spec else ""
-    log.bind(func="reply_stream", scope=scope, app_code=app_code or "",
-             hdr_app=bool(request.headers.get("x-selected-app"))).info(
-        f"chat scope={scope} app={app_code or '(none)'} (header X-Selected-App "
-        f"{'present' if request.headers.get('x-selected-app') else 'absent'})")
+    _emit_chat_headers(request, scope, app_code)
 
     async def gen():
         if spec is None:

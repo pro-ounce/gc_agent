@@ -337,6 +337,7 @@ async def admin_audit(request: Request):
             "mutations": muts,
             "outcome": t.get("outcome"),
             "errors": t.get("errors") or [],
+            "headers": t.get("headers"),   # routing/identity header snapshot (values redacted for secrets)
         })
     # Highest risk first, then most recent — surface what needs review.
     rows.sort(key=lambda r: (r["risk_score"], r["ts"] or ""), reverse=True)
@@ -623,7 +624,16 @@ def _recent_turns(limit: int = 40) -> list[dict]:
             if f.get(k) and not t.get(k):
                 t[k] = f.get(k)
         ev = f.get("event")
-        if ev == "chat_prompt":
+        if ev == "chat_headers":
+            # The routing/identity headers carried on this turn — for tracing header issues
+            # (e.g. a missing X-Selected-App) straight from the audit trail.
+            t["headers"] = {
+                "scope": f.get("scope"), "app_code": f.get("app_code"),
+                "app_source": f.get("app_source"), "selected_app_hdr": f.get("selected_app_hdr"),
+                "carried": f.get("carried_headers") or {}, "secrets": f.get("secret_headers") or {},
+                "header_names": f.get("header_names") or [],
+            }
+        elif ev == "chat_prompt":
             t.update({"question": f.get("question"), "session_id": f.get("session_id"),
                       "user_id": f.get("user_id"), "mode": f.get("mode"), "ts": r.get("ts")})
         elif ev == "turn_summary":
