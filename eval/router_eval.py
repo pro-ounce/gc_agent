@@ -114,6 +114,11 @@ CASES: list[tuple[str, str, dict]] = [
     ("my fund groups", "my_fund_groups", {"entity": "fund_group", "subject": "self"}),
     ("what fund groups do I have", "my_fund_groups", {"entity": "fund_group", "subject": "self"}),
     ("fund groups assigned to me", "my_fund_groups", {"entity": "fund_group", "subject": "self"}),
+    # named OTHER user's fund groups → guarded route, never the master list
+    ("fund groups for GCADMIN", "user_fund_groups", {"entity": "fund_group", "subject": "user", "user": "GCADMIN"}),
+    ("GCADMIN's fund groups", "user_fund_groups", {"entity": "fund_group", "subject": "user", "user": "GCADMIN"}),
+    ("what fund groups does JSMITH have", "user_fund_groups", {"entity": "fund_group", "subject": "user"}),
+    ("fund groups assigned to jsmith", "user_fund_groups", {"entity": "fund_group", "subject": "user", "user": "jsmith"}),
     ("show organizations", "organizations", {"entity": "organization"}),
     ("my offices", "my_offices", {"entity": "organization", "subject": "self"}),
     ("where can I work as Budget Facilitator", "my_offices", {"subject": "self"}),

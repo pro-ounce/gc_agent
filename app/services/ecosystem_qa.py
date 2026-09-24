@@ -189,6 +189,75 @@ async def _my_fund_groups_across_apps(headers: dict[str, str] | None) -> FlowRes
         blocks=[_table_block("My fund groups", ["Application", "Fund groups"], rows)])
 
 
+def _row_fund_group(r: dict[str, Any]) -> str:
+    """A fund-group name from a BudgetUserDetailV row (getBudgetUsers). The view exposes
+    fundGroupName / fundGroupCode / fundGroupId; prefer the name, fall back to the code."""
+    return _pick(r, "fundGroupName", "fundGroupCode")
+
+
+async def _user_fund_groups(user: str, app: dict[str, Any] | None,
+                            headers: dict[str, str] | None) -> FlowResult | None:
+    """A NAMED OTHER user's fund groups — GUARDED. Read from the privileged budget_user_details
+    view (getBudgetUsers_post, the same source _named_access uses), filtered to that user, and
+    NEVER the master list. The named user is a mandatory, validated slot. Once dispatched this
+    ALWAYS returns a guarded result (never None → never a fall-through to a path that could widen
+    to the master list): a not-found / not-visible user gets a definitive no-data message, not a
+    leak. The backend enforces whether THIS caller may see other users' assignments; we only
+    render rows it returns."""
+    u = (user or "").strip()
+    if not u:
+        return None                       # no user at all → escalate (nothing scoped to leak)
+    try:
+        res = await tool_registry.execute("getBudgetUsers_post", {}, headers)
+        ok = bool(getattr(res, "success", False)) and isinstance(res.output, dict)
+        data = res.output.get("data") if ok else None
+    except Exception:  # noqa: BLE001
+        ok, data = False, None
+    if not ok:
+        return FlowResult(message="I couldn't reach the user-assignment data just now, so I can't "
+                                  f"show **{u}**'s fund groups. Please try again in a moment.")
+    rows_all = [r for r in (data or []) if isinstance(r, dict)]
+    ul = u.lower()
+    rows = [r for r in rows_all if str(r.get("userName") or "").strip().lower() == ul]
+    if not rows:
+        # Fund-group access lives only in budget_user_details; no rows → none, or not visible to
+        # this caller. Definitive guarded answer — never the master list.
+        return FlowResult(message=f"I don't see any fund-group assignments for **{u}** — either "
+                                  "that user has none, or your access doesn't include their "
+                                  "assignments.")
+    full = ""
+    for r in rows:
+        full = (str(r.get("fullName") or "").strip()
+                or f"{r.get('firstName') or ''} {r.get('lastName') or ''}".strip())
+        if full:
+            break
+    full = full or u
+    # Fund groups grouped by application (optionally bounded to a named app).
+    app_code = _norm(app.get("code")) if app else ""
+    by_app: dict[str, set[str]] = {}
+    for r in rows:
+        if str(r.get("enabled", "Y")).upper() == "N":     # skip disabled assignments
+            continue
+        aname = str(r.get("applicationName") or r.get("applicationCode") or "").strip()
+        if app_code and _norm(r.get("applicationCode")) != app_code \
+                and _norm(aname) != app_code:
+            continue
+        fg = _row_fund_group(r)
+        if aname and fg:
+            by_app.setdefault(aname, set()).add(fg)
+    if not by_app:
+        scope = f" in **{app['name']}**" if app else ""
+        return FlowResult(
+            message=f"**{full}** ({u}) has no fund-group assignments{scope} that I can see.")
+    distinct = set().union(*by_app.values())
+    trows = [[a, _cap_join(sorted(by_app[a]), 8)] for a in sorted(by_app)]
+    scope = f" in **{app['name']}**" if app else ""
+    lead = _say(f"**{full}** ({u}) has access to **{len(distinct)} fund groups**{scope}:")
+    return FlowResult(
+        message=lead,
+        blocks=[_table_block(f"{full} — fund groups", ["Application", "Fund groups"], trows)])
+
+
 async def _fiscal_years(headers: dict[str, str] | None) -> FlowResult | None:
     return await _entity_table(
         "getAllFiscalYears_post", headers,
@@ -279,6 +348,30 @@ _STOP = {"i", "you", "we", "my", "me", "us", "the", "a", "an", "this", "that", "
 _FAST_SELF = {"list_apps", "my_access", "my_roles_all", "my_offices", "my_fund_groups",
               "fund_groups", "organizations", "divisions", "fiscal_years", "org_level"}
 _FAST_APP = {"app_roles", "app_users", "about_app", "my_access_in_app"}
+
+# ── Mandatory-slot guard (the fundamental) ──────────────────────────────────────────────────
+# Every route that answers about a SPECIFIC scope declares the slot it MUST have resolved before
+# it can run. If that slot is missing, the request is NOT answered with a wider/default listing —
+# it escalates. This is what prevents a scoped question ("<user>'s fund groups", "roles in <app>")
+# from silently degrading into an elevated master-list answer (a data leak). Caller-scoped (my_*)
+# and catalogue routes need no external slot: the caller is the token, a catalogue is public.
+_REQUIRES: dict[str, str] = {
+    "named_access": "user",
+    "user_fund_groups": "user",
+    "app_roles": "app",
+    "app_users": "app",
+    "about_app": "app",
+    "my_access_in_app": "app",
+}
+
+
+def _slot_ok(need: str, intent: Any, eff_app: Any) -> bool:
+    if need == "user":
+        return bool((getattr(intent, "user", "") or "").strip())
+    if need == "app":
+        return eff_app is not None
+    return True
+
 # CROSS-APPLICATION cue — the one time a read inside an app is NOT bounded to it. Only an explicit
 # "all/every/across applications", "the platform/ecosystem", "catalog", or "system-wide" breaks the
 # boundary; a bare "all roles" stays app-scoped ("all roles" = all roles IN this app).
@@ -353,6 +446,14 @@ async def handle(message: str, headers: dict[str, str] | None) -> FlowResult | N
                  entity=intent.entity).info("intent_escalate")
         return None
 
+    # Mandatory-slot guard: a scoped route with its required slot unresolved must NOT be answered
+    # with a wider default (that is the data-leak path). Escalate to the guarded LLM instead.
+    need = _REQUIRES.get(r)
+    if need and not _slot_ok(need, intent, eff_app):
+        log.bind(func="intent_router", route=r, missing=need, cls_conf=cls_conf,
+                 entity=intent.entity).info("intent_missing_slot")
+        return None
+
     fr = await _dispatch(r, intent, eff_app, headers)   # eff_app carries the boundary; handlers veto
     log.bind(func="intent_router", route=r, entity=intent.entity, subject=intent.subject,
              app=intent.app, user=intent.user, cls_conf=cls_conf,
@@ -395,6 +496,8 @@ async def _dispatch(r: str, intent: Any, app: dict[str, Any] | None,
         return await _users_list(headers)
     if r == "my_fund_groups":
         return await _my_fund_groups(app, headers)
+    if r == "user_fund_groups":
+        return await _user_fund_groups(intent.user, app, headers)
     if r == "fund_groups":
         return await _fund_groups(headers)
     if r == "fiscal_years":
