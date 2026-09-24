@@ -396,6 +396,87 @@ async def admin_docs(request: Request):
     }
 
 
+def _pretty_service(sc: str) -> str:
+    """'formulation-service' → 'Formulation', 'p-and-i-execution-service' → 'P And I Execution'."""
+    s = str(sc or "").strip()
+    for suf in ("-service", "_service"):
+        if s.lower().endswith(suf):
+            s = s[: -len(suf)]
+    s = s.replace("-", " ").replace("_", " ").strip()
+    return " ".join(w.upper() if len(w) <= 2 else w.capitalize() for w in s.split()) or (sc or "—")
+
+
+@router.get("/admin/api-catalog", summary="Live API reference — MCP tools grouped by app module")
+async def admin_api_catalog(request: Request):
+    """A modern, dynamic API reference (Swagger-like) built from the LIVE agent tool surface: every
+    MCP tool grouped by its owning application module, with HTTP method, read/write, risk level,
+    confirmation requirement and parameters. Reflects exactly what's loaded right now — when the
+    request carries the caller's token the module map is resolved live, otherwise from warm cache."""
+    _guard(request)
+    from .platform import _forward_headers
+    from ..mcp.tool_registry import tool_registry, is_mutation
+    from ..services import ecosystem as eco
+    import datetime as _dt
+
+    hdrs = _forward_headers(request)
+    tools = await tool_registry.get_tools(request_headers=hdrs)
+    # toolName → serviceCode, appId → serviceCode, appId → application (all fail-open to {}/cache).
+    svc = await tool_registry._tool_service_map(hdrs)
+    mw = await tool_registry._mw_config_map(hdrs)
+    apps = await eco.applications(hdrs)
+    id_to_app = {str(a.get("id")): a for a in apps}
+    svc_to_app = {sc: id_to_app[str(aid)] for aid, sc in mw.items() if str(aid) in id_to_app}
+
+    def _tool_doc(t) -> dict:
+        name = t.name
+        method = name.rsplit("_", 1)[-1].upper() if "_" in name else ""
+        schema = t.input_schema or {}
+        props = schema.get("properties", {}) or {}
+        required = set(schema.get("required", []) or [])
+        params = [{
+            "name": k, "type": (v.get("type") or "string") if isinstance(v, dict) else "string",
+            "required": k in required,
+            "description": (v.get("description") or "") if isinstance(v, dict) else "",
+            "enum": v.get("enum") if isinstance(v, dict) else None,
+        } for k, v in props.items()]
+        return {
+            "name": name, "method": method, "description": t.description or "",
+            "risk": t.risk_level, "mutation": is_mutation(name),
+            "confirm": bool(getattr(t, "requires_confirmation", False)),
+            "params": params,
+        }
+
+    groups: dict[str, list] = {}
+    ungrouped: list = []
+    for t in tools:
+        sc = svc.get(t.name)
+        (groups.setdefault(sc, []) if sc else ungrouped)
+        if sc:
+            groups[sc].append(_tool_doc(t))
+        else:
+            ungrouped.append(_tool_doc(t))
+
+    modules = []
+    for sc, tdocs in groups.items():
+        a = svc_to_app.get(sc)
+        writes = sum(1 for d in tdocs if d["mutation"])
+        modules.append({
+            "serviceCode": sc,
+            "application": a["name"] if a else _pretty_service(sc),
+            "applicationCode": a["code"] if a else "",
+            "count": len(tdocs), "writes": writes, "reads": len(tdocs) - writes,
+            "tools": sorted(tdocs, key=lambda x: x["name"]),
+        })
+    modules.sort(key=lambda m: m["application"].lower())
+    return {
+        "generated_at": _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "total": len(tools),
+        "grouped": bool(svc),
+        "modules": modules,
+        "ungrouped": sorted(ungrouped, key=lambda x: x["name"]),
+    }
+
+
 @router.get("/admin/inference", summary="Harness-vs-inference mix + inference performance")
 async def admin_inference(request: Request):
     """Aggregate the recent turns into the three levers: how many questions the HARNESS

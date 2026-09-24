@@ -61,6 +61,7 @@
       + tabBtn("Metrics","__metrics__",false)
       + tabBtn("Activity","__activity__",false)
       + tabBtn("Workflows","__workflows__",false)
+      + tabBtn("API","__api__",false)
       + tabBtn("Docs","__docs__",false)
       + tabBtn("Audit","__audit__",false)
       + tabBtn("Backups","__backups__",false)
@@ -69,7 +70,7 @@
       var cards = params.filter(function(p){return p.group===g;}).map(cardFor).join("");
       return '<section class="admin-section'+(i===0?" active":"")+'" data-tab="'+esc(g)+'" role="tabpanel"'
         +' id="panel-'+sid(g)+'" aria-labelledby="tab-'+sid(g)+'" tabindex="0"><div class="cards">'+cards+'</div></section>';
-    }).join("") + metricsSectionHTML() + activitySectionHTML() + workflowsSectionHTML() + docsSectionHTML() + auditSectionHTML() + backupsSectionHTML() + logsSectionHTML();
+    }).join("") + metricsSectionHTML() + activitySectionHTML() + workflowsSectionHTML() + apiSectionHTML() + docsSectionHTML() + auditSectionHTML() + backupsSectionHTML() + logsSectionHTML();
     // tab switching — WAI-ARIA tabs: roving tabindex, arrow/Home/End keys, aria-selected.
     var tabEls = Array.prototype.slice.call(elTabs.children);
     function selectTab(btn){
@@ -115,6 +116,7 @@
     initMetrics();
     initActivity();
     initWorkflows();
+    initApi();
     initDocs();
     initAudit();
     initLogs();
@@ -992,6 +994,119 @@
       <text class="mono" x="922" y="1122" text-anchor="end">compass-dev-dbase · JNDI datasources</text>
     </svg>`; }
   // ── Docs tab (live capability + architecture reference) ──
+  // ── API tab (live, Swagger-like reference of the agent's tool surface, grouped by module) ──
+  var _apiData=null, _apiQuery="", _apiRW="all", _apiInit=false;
+  function apiSectionHTML(){
+    return '<section class="admin-section" data-tab="__api__" role="tabpanel" id="panel-__api__" aria-labelledby="tab-__api__" tabindex="0">'
+      +'<div class="card" style="margin-bottom:14px"><div class="top">'
+      +'<span class="lbl">API reference <span id="api-count" class="key"></span></span>'
+      +'<span class="btns"><span id="api-gen" class="def" style="font-size:11px;opacity:.55"></span>'
+      +'<button id="api-refresh" class="btn" style="padding:5px 11px">Refresh</button></span></div>'
+      +'<div class="def" style="margin-top:4px">Every tool the agent can call, grouped by the application module that owns it. '
+      +'<span style="color:var(--good)">Reads</span> are safe lookups; <span style="color:var(--amber)">writes</span> change data.</div>'
+      +'<div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;align-items:center">'
+      +'<input id="api-q" type="search" placeholder="Search tools, descriptions, parameters…" autocomplete="off" '
+      +'style="flex:1;min-width:220px;padding:9px 12px;border:1px solid var(--line);border-radius:9px;background:var(--panel);color:inherit;font-size:13px">'
+      +'<div class="btns" role="group" aria-label="Filter by type">'
+      +'<button type="button" class="btn api-rw active" data-rw="all" style="padding:6px 12px">All</button>'
+      +'<button type="button" class="btn api-rw" data-rw="read" style="padding:6px 12px">Reads</button>'
+      +'<button type="button" class="btn api-rw" data-rw="write" style="padding:6px 12px">Writes</button>'
+      +'</div></div></div>'
+      +'<div id="api-body">loading…</div></section>';
+  }
+  function apiMethodBadge(m){
+    m=(m||"").toUpperCase();
+    var map={GET:["#0369a1","#e0f2fe"],POST:["#15803d","#dcfce7"],PUT:["#b45309","var(--amber-wash)"],DELETE:["#b91c1c","#fdeaea"],PATCH:["#7c3aed","#f3e8ff"]};
+    var c=map[m]||["#475569","#eef2f7"];
+    return '<span class="api-meth" style="color:'+c[0]+';background:'+c[1]+'">'+esc(m||"—")+'</span>';
+  }
+  function apiRiskPill(r){
+    r=(r||"MEDIUM").toUpperCase();
+    if(r==="LOW"||r==="MEDIUM") return '';
+    var c=r==="CRITICAL"?["#b91c1c","#fdeaea"]:["#b45309","var(--amber-wash)"];
+    return '<span class="pill" style="color:'+c[0]+';background:'+c[1]+';border-color:'+c[0]+'44">'+esc(r.charAt(0)+r.slice(1).toLowerCase())+' risk</span>';
+  }
+  function apiToolRow(t){
+    var rw = t.mutation
+      ? '<span class="pill" style="background:var(--amber-wash);color:var(--amber);border-color:#f3ddc0">write</span>'
+      : '<span class="pill" style="background:var(--good-wash);color:var(--good);border-color:#b6e3c4">read</span>';
+    var confirm = t.confirm ? '<span class="pill" style="background:#fdeaea;color:#b91c1c;border-color:#f3c0c0">confirm</span>' : '';
+    var params = t.params||[];
+    var pc = params.length ? params.length+' param'+(params.length>1?'s':'') : 'no params';
+    var ptable = params.length
+      ? '<table class="api-params"><thead><tr><th>Parameter</th><th>Type</th><th>Req</th><th>Description</th></tr></thead><tbody>'
+        + params.map(function(p){
+            var en = (p.enum && p.enum.length) ? '<div class="def" style="font-size:11px;opacity:.7;margin-top:2px">'+p.enum.slice(0,8).map(esc).join(" · ")+(p.enum.length>8?' …':'')+'</div>' : '';
+            return '<tr><td class="mono">'+esc(p.name)+'</td><td class="mono" style="opacity:.7">'+esc(p.type)+'</td>'
+              +'<td>'+(p.required?'<span style="color:#b91c1c;font-weight:700">yes</span>':'<span style="opacity:.4">—</span>')+'</td>'
+              +'<td>'+esc(p.description||'—')+en+'</td></tr>';
+          }).join("")
+        + '</tbody></table>'
+      : '<div class="def" style="padding:6px 2px">This tool takes no parameters.</div>';
+    return '<details class="api-tool"><summary>'
+      + apiMethodBadge(t.method)
+      + '<span class="mono api-tname">'+esc(t.name)+'</span>'
+      + '<span class="api-flags">'+rw+apiRiskPill(t.risk)+confirm+'</span>'
+      + '<span class="api-desc def">'+esc(t.description||'')+'</span>'
+      + '<span class="api-pc def">'+pc+'</span>'
+      + '</summary><div class="api-tbody">'+ptable+'</div></details>';
+  }
+  function apiModuleCard(m, open){
+    return '<details class="api-module"'+(open?' open':'')+'><summary class="api-mhead">'
+      + '<span class="api-mname">'+esc(m.application)+'</span>'
+      + '<span class="mono def" style="font-size:11px">'+esc(m.serviceCode)+'</span>'
+      + '<span class="api-mmeta">'+m.count+' tools · <b style="color:var(--good)">'+m.reads+'</b> read · <b style="color:var(--amber)">'+m.writes+'</b> write</span>'
+      + '</summary><div class="api-mlist">'+ m.tools.map(apiToolRow).join("") +'</div></details>';
+  }
+  function apiMatch(t,q){
+    if(!q) return true; q=q.toLowerCase();
+    if(t.name.toLowerCase().indexOf(q)>=0) return true;
+    if((t.description||"").toLowerCase().indexOf(q)>=0) return true;
+    return (t.params||[]).some(function(p){return (p.name||"").toLowerCase().indexOf(q)>=0;});
+  }
+  function renderApi(){
+    var d=_apiData; if(!d) return;
+    var body=document.getElementById("api-body"); if(!body) return;
+    var cnt=document.getElementById("api-count"); if(cnt) cnt.textContent="("+d.total+" tools · "+((d.modules||[]).length)+" modules)";
+    var gen=document.getElementById("api-gen"); if(gen) gen.textContent=d.generated_at?("loaded "+d.generated_at):"";
+    function filt(list){ return (list||[]).filter(function(t){
+      if(_apiRW==="read" && t.mutation) return false;
+      if(_apiRW==="write" && !t.mutation) return false;
+      return apiMatch(t,_apiQuery); }); }
+    var anyOpen=!!(_apiQuery||_apiRW!=="all"), html="";
+    (d.modules||[]).forEach(function(m){
+      var tools=filt(m.tools); if(!tools.length) return;
+      html += apiModuleCard({application:m.application,serviceCode:m.serviceCode,count:tools.length,
+        reads:tools.filter(function(x){return !x.mutation;}).length,
+        writes:tools.filter(function(x){return x.mutation;}).length, tools:tools}, anyOpen);
+    });
+    var ung=filt(d.ungrouped||[]);
+    if(ung.length) html += apiModuleCard({application:"Unmapped tools",serviceCode:"no module resolved",count:ung.length,
+      reads:ung.filter(function(x){return !x.mutation;}).length, writes:ung.filter(function(x){return x.mutation;}).length, tools:ung}, anyOpen);
+    if(!d.grouped && !(d.modules||[]).length && (d.ungrouped||[]).length)
+      html = '<div class="card" style="margin-bottom:12px"><div class="def">Module grouping warms after one authenticated chat turn — showing all tools together until then.</div></div>' + html;
+    body.innerHTML = html || '<div class="card"><div class="def">No tools match your filter.</div></div>';
+  }
+  function loadApi(){
+    var body=document.getElementById("api-body"); if(body) body.innerHTML='<div class="card"><div class="def">loading…</div></div>';
+    fetch(API+"/api-catalog",{cache:"no-store"}).then(function(r){return r.json();}).then(function(d){ _apiData=d; renderApi(); })
+      .catch(function(e){ if(body) body.innerHTML='<div class="card"><span style="color:#b91c1c">Failed: '+esc(e.message)+'</span></div>'; });
+  }
+  function initApi(){
+    if(!_apiInit){
+      document.addEventListener("input",function(e){ if(e.target&&e.target.id==="api-q"){ _apiQuery=(e.target.value||"").trim(); renderApi(); } });
+      document.addEventListener("click",function(e){
+        var b=e.target&&e.target.closest?e.target.closest(".api-rw"):null;
+        if(b){ _apiRW=b.getAttribute("data-rw");
+          Array.prototype.forEach.call(document.querySelectorAll(".api-rw"),function(x){x.classList.toggle("active",x===b);});
+          renderApi(); }
+        if(e.target&&e.target.id==="api-refresh") loadApi();
+      });
+      _apiInit=true;
+    }
+    loadApi();
+  }
+
   function docsSectionHTML(){
     return '<section class="admin-section" data-tab="__docs__" role="tabpanel" id="panel-__docs__" aria-labelledby="tab-__docs__" tabindex="0">'
       +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Architecture</span>'
