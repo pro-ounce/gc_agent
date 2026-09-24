@@ -45,6 +45,11 @@ def _norm_label(s: Any) -> str:
 # Cache for deterministic application code/name → id resolution (see _resolve_application_id).
 _APP_MAP_CACHE: dict[str, Any] = {"map": None, "ts": 0.0}
 _APP_MAP_TTL = 300.0  # seconds
+# App-scoped tool offering: appId → serviceCode (AppsMwConfigsV) and toolName → serviceCode
+# (MCP service summary), so the tools OFFERED to the model can be bounded to the current app's
+# module + the cross-cutting administration/reporting modules.
+_MWCFG_CACHE: dict[str, Any] = {"map": None, "ts": 0.0}
+_TOOLSVC_CACHE: dict[str, Any] = {"map": None, "ts": 0.0}
 # Cached name→id maps for skill resolvers (fund groups, distribution groups).
 _FG_MAP_CACHE: dict[str, Any] = {"map": None, "ts": 0.0}
 _DG_MAP_CACHE: dict[str, Any] = {"map": None, "ts": 0.0}
@@ -160,10 +165,11 @@ class ToolRegistry:
                     f"read-only: offering {len(tools)}/{total_all} tools (mutations withheld)"
                 )
         if not runtime_config.get_bool("TOOL_RAG_ENABLED") or len(tools) <= cfg.TOOL_RAG_MIN_TOOLS:
-            return _log_schema_cost([_to_tool_schema(t) for t in tools], len(tools))
+            schemas = await self._scope_schemas([_to_tool_schema(t) for t in tools], request_headers)
+            return _log_schema_cost(schemas, len(tools))
         names = await tool_index.search(query, runtime_config.get_int("TOOL_RAG_TOP_K"))
         if not names:
-            return [_to_tool_schema(t) for t in tools]
+            return await self._scope_schemas([_to_tool_schema(t) for t in tools], request_headers)
         # Always offer the resolver tools (id lookups) + any per-call extras (an active
         # skill's backing tool) so name→id chains and actions never break for lack of the
         # tool being retrieved. De-duped, appended after the RAG hits.
@@ -173,7 +179,8 @@ class ToolRegistry:
                 names.append(p)
         by_name = {t.name: t for t in tools}
         picked = [by_name[n] for n in names if n in by_name] or tools
-        return _log_schema_cost([_to_tool_schema(t) for t in picked], len(tools))
+        schemas = await self._scope_schemas([_to_tool_schema(t) for t in picked], request_headers)
+        return _log_schema_cost(schemas, len(tools))
 
     async def _app_map(self, request_headers: dict[str, str] | None) -> dict[str, Any]:
         """Cached {code|name|shortCode (lower) → applicationId} from getAllApplications_get."""
@@ -202,6 +209,109 @@ class ToolRegistry:
             log.bind(func="app_map").warning(f"app map load failed: {exc}")
         cache["map"], cache["ts"] = amap, now
         return amap
+
+    # ── App-scoped tool offering ──────────────────────────────────────────────────────────────
+    async def _mw_config_map(self, request_headers: dict[str, str] | None) -> dict[str, str]:
+        """Cached {str(applicationId) → serviceCode} from getAllMwConfigs_post (AppsMwConfigsV) —
+        the app→module map. Best-effort; {} on failure so scoping fails open."""
+        now = time.monotonic()
+        cache = _MWCFG_CACHE
+        if cache["map"] is not None and (now - cache["ts"]) < _APP_MAP_TTL:
+            return cache["map"]
+        amap: dict[str, str] = {}
+        try:
+            res = await self.execute("getAllMwConfigs_post", {}, request_headers)
+            out = res.output if res.success else None
+            data = out.get("data") if isinstance(out, dict) else out
+            for r in (data or []):
+                if not isinstance(r, dict):
+                    continue
+                aid, sc = r.get("applicationId"), r.get("serviceCode")
+                if aid not in (None, "") and sc and str(r.get("isActive", "Y")).upper() != "N":
+                    amap[str(aid)] = str(sc).strip()
+        except Exception as exc:  # noqa: BLE001 — best-effort; scoping fails open
+            log.bind(func="mw_config_map").warning(f"mw config map load failed: {exc}")
+        cache["map"], cache["ts"] = amap, now
+        return amap
+
+    async def _tool_service_map(self, request_headers: dict[str, str] | None) -> dict[str, str]:
+        """Cached {toolName → serviceCode} inverted from the MCP service summary
+        (GET /mcp/tools/services). {} on failure so scoping fails open."""
+        now = time.monotonic()
+        cache = _TOOLSVC_CACHE
+        if cache["map"] is not None and (now - cache["ts"]) < _APP_MAP_TTL:
+            return cache["map"]
+        inv: dict[str, str] = {}
+        try:
+            summary = await mcp_client.service_tool_summary(request_headers)
+            for sc, val in (summary or {}).items():
+                names = val if isinstance(val, list) else (
+                    val.get("tools") or val.get("toolNames") if isinstance(val, dict) else None)
+                for n in (names or []):
+                    nm = n.get("name") if isinstance(n, dict) else n
+                    if nm:
+                        inv[str(nm)] = str(sc).strip()
+        except Exception as exc:  # noqa: BLE001
+            log.bind(func="tool_service_map").warning(f"tool service map load failed: {exc}")
+        cache["map"], cache["ts"] = inv, now
+        return inv
+
+    async def _allowed_services(self, request_headers: dict[str, str] | None) -> set[str] | None:
+        """Service codes whose tools may be offered in the current app context: the current app's
+        module + administration + reporting. Returns None to signal DO-NOT-SCOPE (fail open) — when
+        there's no current app, or the current app's module can't be resolved — so the app's own
+        tools can never be withheld by a partial map."""
+        from ..services import ecosystem as eco   # lazy: avoid import cycle
+        code = eco.selected_app_code(request_headers)
+        if not code:
+            return None                            # no app context (platform/landing) → no restriction
+        appmap = await self._app_map(request_headers)        # code/name/short(lower) → appId
+        mwmap = await self._mw_config_map(request_headers)   # str(appId) → serviceCode
+        cur_id = appmap.get(code.strip().lower())
+        cur_svc = mwmap.get(str(cur_id)) if cur_id is not None else None
+        if not cur_svc:
+            return None                            # current module unknown → fail open, never over-restrict
+        allowed = {cur_svc}
+        for plat in ("administration", "reporting"):          # cross-cutting modules, always allowed
+            pid = appmap.get(plat)
+            if pid is not None and mwmap.get(str(pid)):
+                allowed.add(mwmap[str(pid)])
+        for sc in set(mwmap.values()):                        # name-convention safety net for admin/reporting
+            s = sc.lower()
+            if "administration" in s or "reporting" in s or s.startswith("admin"):
+                allowed.add(sc)
+        return allowed
+
+    async def _scope_schemas(self, schemas: list[dict[str, Any]],
+                             request_headers: dict[str, str] | None) -> list[dict[str, Any]]:
+        """Withhold schemas for tools KNOWN to belong to ANOTHER module. Allow-unknown + fail-open:
+        a tool whose module we can't identify, or when the current module can't be resolved, is
+        kept — so the current app's, administration's and reporting's tools are never withheld."""
+        if not runtime_config.get_bool("AGENT_TOOL_APP_SCOPING"):
+            return schemas
+        try:
+            allowed = await self._allowed_services(request_headers)
+            if not allowed:
+                return schemas                     # fail open
+            svc = await self._tool_service_map(request_headers)
+            if not svc:
+                return schemas                     # no module map → fail open
+            kept, dropped = [], 0
+            for s in schemas:
+                name = (s.get("function", {}) or {}).get("name", "")
+                owner = svc.get(name)
+                if owner is None or owner in allowed:
+                    kept.append(s)                 # unknown module or allowed module → keep
+                else:
+                    dropped += 1                   # known OTHER module → withhold
+            if dropped:
+                log.bind(func="scope_tools", kept=len(kept), dropped=dropped,
+                         allowed=sorted(allowed)).info(
+                    f"app-scoped tools: withheld {dropped} other-module tools")
+            return kept or schemas                 # never empty (belt-and-suspenders)
+        except Exception as exc:  # noqa: BLE001 — scoping must never break chat
+            log.bind(func="scope_tools").warning(f"tool scoping failed (open): {exc}")
+            return schemas
 
     async def _named_map(
         self, cache: dict[str, Any], tool: str, key_fields: tuple[str, ...],

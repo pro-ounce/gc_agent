@@ -132,6 +132,20 @@ class MCPClient:
             return []
         return result
 
+    async def service_tool_summary(
+        self, extra_headers: dict[str, str] | None = None
+    ) -> dict[str, Any]:
+        """Return the MCP's serviceCode → tool-names map from GET {base}/tools/services
+        (getServiceToolSummary). Used to scope the tools offered to the model by module.
+        Best-effort: returns {} on any error so tool scoping fails open."""
+        try:
+            resp = await self._get("/tools/services", extra_headers=extra_headers)
+            data = resp.json()
+        except Exception:  # noqa: BLE001 — scoping must never break chat
+            return {}
+        result = data.get("result", data) if isinstance(data, dict) else {}
+        return result if isinstance(result, dict) else {}
+
     async def execute_tool(
         self,
         tool_name: str,

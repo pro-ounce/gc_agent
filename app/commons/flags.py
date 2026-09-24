@@ -55,6 +55,14 @@ class FeatureFlags:
         default_factory=lambda: env_bool("AGENT_INTENT_CLASSIFIER", True)
     )
 
+    # Scope the tools OFFERED to the model to the current application's module + the cross-cutting
+    # administration/reporting modules. A functional app never gets another functional module's
+    # tools. Fail-open + allow-unknown: only tools KNOWN to belong to another module are withheld,
+    # and only when the current app's module resolves — so it can never hide the app's own tools.
+    tool_app_scoping: bool = field(
+        default_factory=lambda: env_bool("AGENT_TOOL_APP_SCOPING", True)
+    )
+
     # Storage
     redis_enabled: bool = field(default_factory=lambda: env_bool("REDIS_ENABLED", True))
 

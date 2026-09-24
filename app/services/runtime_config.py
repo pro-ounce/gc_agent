@@ -69,6 +69,8 @@ def _param_specs() -> list[dict]:
               "Inject the app/role/workflow catalogue + current application into the prompt."),
         _spec("AGENT_INTENT_CLASSIFIER", "Model intent classifier", "Toggles", "bool", flags.intent_classifier,
               "Model picks the intent route (generalises); deterministic resolver fills slots + vetoes. Off = regex router."),
+        _spec("AGENT_TOOL_APP_SCOPING", "App-scoped tools", "Toggles", "bool", flags.tool_app_scoping,
+              "Offer the model only the current app's module tools + administration/reporting. Fail-open; off = all tools."),
         _spec("LOG_USER_PROMPTS", "Log user prompts", "Toggles", "bool", flags.log_user_prompts,
               "Log each question + the tools RAG retrieved (chat_prompt line)."),
     ]
