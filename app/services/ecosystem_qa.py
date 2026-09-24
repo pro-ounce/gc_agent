@@ -421,6 +421,16 @@ def _slot_ok(need: str, intent: Any, eff_app: Any) -> bool:
         return eff_app is not None
     return True
 
+
+# The PLATFORM/admin applications. From Smart Hub or Systems Planner an admin sees the wide,
+# cross-application view; from any specific FUNCTIONAL application every read is bounded to that
+# application. This is the privilege-by-context that decides how far a named-user read may range.
+_PLATFORM_APPS = {"SMART_HUB", "ADMINISTRATION"}   # Smart Hub, Systems Planner (ADMINISTRATION)
+
+
+def _is_platform(app: dict[str, Any] | None) -> bool:
+    return bool(app) and str(app.get("code") or "").strip().upper() in _PLATFORM_APPS
+
 # CROSS-APPLICATION cue — the one time a read inside an app is NOT bounded to it. Only an explicit
 # "all/every/across applications", "the platform/ecosystem", "catalog", or "system-wide" breaks the
 # boundary; a bare "all roles" stays app-scoped ("all roles" = all roles IN this app).
@@ -526,7 +536,12 @@ async def _dispatch(r: str, intent: Any, app: dict[str, Any] | None,
     if r in ("my_access", "my_roles_all"):
         return await _my_access(headers)
     if r == "named_access":
-        return await _named_access(intent.user, headers)
+        # App-aware: an explicitly named app, or a functional current app, bounds the profile to
+        # that app. Only Smart Hub / Systems Planner (or no app context) gives the wide cross-app
+        # view — the caller must be in a platform app to range beyond the current application.
+        named = bool(getattr(intent, "app", ""))
+        bound = app if (named or (app and not _is_platform(app))) else None
+        return await _named_access(intent.user, headers, bound_app=bound)
     if r == "my_access_in_app":
         return await _my_access_in_app(app, headers, getattr(intent, "raw", ""))
     if r == "my_offices":
@@ -735,12 +750,17 @@ def _cap_join(items: list[str], cap: int = 8) -> str:
     return ", ".join(items[:cap]) + f" +{len(items) - cap} more"
 
 
-async def _named_access(user: str, headers: dict[str, str] | None) -> FlowResult | None:
+async def _named_access(user: str, headers: dict[str, str] | None,
+                        bound_app: dict[str, Any] | None = None) -> FlowResult | None:
     """Who a named user *really* is: their application role(s) AND access type(s) per
     application — because capability is the role (what they can open) crossed with the access
-    type (what data they see), and neither alone tells you. Returns None (fall through) when the
+    type (what data they see), and neither alone tells you. APP-AWARE: when `bound_app` is set
+    (the caller is in a functional application, or named one) the profile is scoped to THAT
+    application only; the wide cross-app view is reserved for the platform apps (Smart Hub /
+    Systems Planner), decided by the caller in _dispatch. Returns None (fall through) when the
     name matches no user, so a false-positive match doesn't dead-end."""
     u = user.strip().lower()
+    want = ({_norm(bound_app.get("name")), _norm(bound_app.get("code"))} - {""}) if bound_app else None
     # Roles — the admin-wide assignment set, filtered to the target user.
     try:
         r1 = await tool_registry.execute("getAllUserApplicationRoles_post", {"userName": user}, headers)
@@ -769,8 +789,15 @@ async def _named_access(user: str, headers: dict[str, str] | None) -> FlowResult
             break
     full = full or user
 
+    def _in_scope(r: dict[str, Any]) -> bool:
+        if not want:
+            return True
+        return _norm(r.get("applicationName")) in want or _norm(r.get("applicationCode")) in want
+
     apps: dict[str, dict[str, list[str]]] = {}
     for r in role_rows:
+        if not _in_scope(r):
+            continue
         app = str(r.get("applicationName") or r.get("applicationCode") or "").strip()
         if not app:
             continue
@@ -779,6 +806,8 @@ async def _named_access(user: str, headers: dict[str, str] | None) -> FlowResult
         if role and role not in e["roles"]:
             e["roles"].append(role)
     for r in bud_rows:
+        if not _in_scope(r):
+            continue
         app = str(r.get("applicationName") or r.get("applicationCode") or "").strip()
         if not app:
             continue
@@ -787,7 +816,24 @@ async def _named_access(user: str, headers: dict[str, str] | None) -> FlowResult
         if at and at not in e["access"]:
             e["access"].append(at)
     if not apps:
+        # In an app-bounded view a matched user with nothing in this app is a definitive answer,
+        # not a fall-through (which could otherwise be answered wider by the LLM).
+        if bound_app:
+            return FlowResult(
+                message=f"**{full}** ({user}) has no access in **{bound_app['name']}** that I can see.",
+                suggestions=[_chip(f"Roles in {bound_app['name'].split()[0]}", f"roles in {bound_app['code']}", icon="role")])
         return None
+
+    # App-bounded: one application, so drop the redundant Application column.
+    if bound_app:
+        e = next(iter(apps.values()))
+        lead = _say(f"In **{bound_app['name']}**, **{full}** ({user}) has this role × access type — "
+                    "capability is the **role** (what they can open) crossed with the **access "
+                    "type** (what data they see):")
+        return FlowResult(
+            message=lead,
+            blocks=[_table_block(f"{full} — {bound_app['name']}", ["Role(s)", "Access type(s)"],
+                                 [[_cap_join(sorted(e["roles"])), _cap_join(sorted(e["access"]))]])])
 
     rows = [[app, _cap_join(sorted(apps[app]["roles"])), _cap_join(sorted(apps[app]["access"]))]
             for app in sorted(apps)]

@@ -70,6 +70,8 @@ CASES: list[tuple[str, str, dict]] = [
     ("my access for smart hub", "my_access_in_app", {"subject": "self", "app": "SMART_HUB"}),
     ("my access in formulation", "my_access_in_app", {"subject": "self", "app": "FORMULATION"}),
     ("what can GCADMIN do", "named_access", {"subject": "user", "user": "GCADMIN"}),
+    # app-in-query still routes to named_access (dispatch then bounds the profile to that app)
+    ("what can JSMITH do in Formulation", "named_access", {"subject": "user", "user": "JSMITH", "app": "FORMULATION"}),
     ("what applications does JSMITH have", "named_access", {"subject": "user"}),
     ("SAUSER access", "named_access", {"subject": "user", "user": "SAUSER"}),
     # lowercase / lookup-phrasing usernames (the "look up user gcadmin" miss, 2026-09-23)
