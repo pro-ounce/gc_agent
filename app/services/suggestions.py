@@ -37,6 +37,10 @@ _MODULE_BALLOONS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 # fe module / hub aliases → application code
+# Words that, left bare after dropping a "Planner"/"Manager" suffix, no longer name THIS
+# application unambiguously — keep the full display name instead ("Systems Planner", not "Systems").
+_GENERIC_SHORT = {"systems", "system", "platform", "admin", "administration", "general"}
+
 _ALIASES = {
     "smarthub": "SMART_HUB", "smart-hub": "SMART_HUB",
     "admin": "ADMINISTRATION", "admin-app": "ADMINISTRATION", "administration-app": "ADMINISTRATION",
@@ -108,8 +112,11 @@ async def _build(module: str, headers: dict[str, str] | None, limit: int) -> lis
     # Concise-but-complete app label: drop only a trailing "Planner"/"Manager" app-type suffix
     # ("Formulation Planner" → "Formulation"), but keep genuinely two-word names whole
     # ("Smart Hub", "Cost Model") — the old first-word-only clip turned "Smart Hub" into "Smart".
-    short = _re.sub(r"\s+(planner|manager)$", "", str(app["name"]).strip(), flags=_re.I).strip() \
-        or str(app["name"]).strip()
+    # AND keep the full name when the strip would leave a bare, ambiguous word: "Systems Planner"
+    # → "Systems" reads as the admin/platform in general, not this specific application.
+    _full = str(app["name"]).strip()
+    _base = _re.sub(r"\s+(planner|manager)$", "", _full, flags=_re.I).strip()
+    short = _base if (_base and _base.lower() not in _GENERIC_SHORT) else _full
 
     # 1) admin-pinned balloons from the store (top priority), else the built-in headline set.
     pinned = balloon_store.get_overrides(app["code"]) or [
