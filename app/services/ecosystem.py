@@ -20,6 +20,7 @@ so a bad fetch can't break chat, grounding, or the widget bootstrap.
 from __future__ import annotations
 
 import base64
+import re
 import time
 from typing import Any
 
@@ -129,6 +130,26 @@ def is_available(app: dict[str, Any]) -> bool:
     return True
 
 
+_MODULE_WORD = re.compile(r"\bmodules?\b", re.I)
+
+
+def _client_terms(text: str) -> str:
+    """Client-facing terminology: 'module' is internal — the user-facing word is 'application'.
+    Rewrites module/modules → application/applications, preserving case (Module→Application,
+    MODULES→APPLICATIONS) so it reads naturally wherever it lands. Display-only."""
+    def _repl(m: "re.Match[str]") -> str:
+        w = m.group(0)
+        base = "applications" if w.lower().endswith("s") else "application"
+        if w.isupper():
+            return base.upper()
+        if w[:1].isupper():
+            return base[:1].upper() + base[1:]
+        return base
+    out = _MODULE_WORD.sub(_repl, text or "")
+    # Fix the article the rewrite can strand: "a application" → "an application".
+    return re.sub(r"\b([Aa])\s+(?=[Aa]pplication)", lambda m: m.group(1) + "n ", out)
+
+
 def _tidy_name(name: str) -> str:
     """Normalise odd intra-word capitalisation in an application name for display
     ('Smart HuB' → 'Smart Hub') while preserving all-caps acronyms (CFO, TBM, P&I) and
@@ -152,8 +173,8 @@ async def applications(headers: dict[str, str] | None) -> list[dict[str, Any]]:
             "id": str(a.get("applicationId") or ""),
             "name": _tidy_name(str(a.get("applicationName") or "").strip()),
             "code": str(a.get("applicationCode") or "").strip(),
-            "desc": str(a.get("description") or "").strip(),
-            "info": str(a.get("applicationInfo") or "").strip(),
+            "desc": _client_terms(str(a.get("description") or "").strip()),
+            "info": _client_terms(str(a.get("applicationInfo") or "").strip()),
             "url": str(a.get("applicationUrl") or "").strip(),
             "icon": str(a.get("applicationIcon") or "").strip(),
             "short": str(a.get("applicationShortCode") or "").strip(),
