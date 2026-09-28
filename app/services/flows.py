@@ -133,7 +133,7 @@ def _chip(label: str, send: str | None = None, icon: str | None = None) -> dict[
 
 
 _FLOWS = ("onboard", "create_user", "create_skill", "data_call", "formulation_baseline",
-          "workflow")
+          "workflow", "entity_create")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _SKILL_INTENT_RE = re.compile(
     r"\b(create|add|make|build|teach|define|register)\b.{0,20}\b(skill|capabilit(y|ies)|"
@@ -289,6 +289,22 @@ def maybe_start(session: Any, message: str, skill: Any = None) -> FlowResult | N
     # Formulation baseline generation → open the guided flow (mutation stays flow-gated).
     if _BASELINE_INTENT_RE.search(message or ""):
         return start_formulation_baseline(session)
+    # Entity onboarding front door: disambiguate onboard/create BEFORE a skill can pin a
+    # wrong-entity mutation ("create a role" must not become assign_access; a bare "onboard"
+    # must ask, not create a user). A fully-detailed create-user message (has an email) still
+    # goes to the normal skill path so nothing regresses.
+    ent = _detect_entity(message or "")
+    if ent is not None:
+        if ent == "user":
+            if not re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", message or ""):
+                return start_create(session)
+        elif ent in _ENTITY_CREATE:
+            return start_entity_create(session, ent)
+        elif ent == "AMBIGUOUS":
+            from ..services import skills as _sk
+            other = _sk.match(message or "")
+            if other is None or other.name in ("create_user",):
+                return start_entity_create(session, None)   # ask which entity
     from ..services import skills
     sk = skill if skill is not None else skills.match(message or "")
     if sk and sk.name == "create_user" and not re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", message or ""):
@@ -364,6 +380,9 @@ async def handle(session: Any, message: str, headers: dict[str, str] | None) -> 
 
     if name == "formulation_baseline":
         return await _baseline(session, flow, msg, headers)
+
+    if name == "entity_create":
+        return await _entity_create(session, flow, msg, headers)
 
     return None
 
@@ -1247,6 +1266,281 @@ def on_decline(session: Any) -> FlowResult | None:
         # declining an attendee → still offer a reminder; declining a reminder → finish
         return _dc_offer_reminder(flow, prefix="Okay, skipped. ") if flow.get("stage") == "pick_group" \
             else _dc_finish(session, flow)
+    if flow.get("name") == "entity_create":
+        # the single create is the whole point — declining cancels the run cleanly
+        label = _ENTITY_CREATE.get(flow.get("entity", ""), {}).get("label", "item")
+        session.metadata.pop("flow", None)
+        return FlowResult(message=f"Okay — I won't create the {label}. Nothing was saved.", done=True)
     flow["currentAppId"] = flow["currentAppName"] = flow["currentRoleName"] = None
     flow["stage"] = "offer_apps"
     return _offer_another(flow, prefix="Okay, skipped that one. ")
+
+
+# ── Entity onboarding: create user / application / role / menu / privilege ───────
+# "Onboard" and "create/add/set up" are overloaded across platform entities. This front
+# door DISAMBIGUATES the entity first — an ambiguous request asks which entity rather than
+# firing a wrong-entity mutation — then runs a small, confirm-gated create flow for the one
+# the user actually meant. Each spec is declarative: the backing MCP tool, the fields to
+# collect (text / app-picker / role-picker / yes-no), and safe defaults for the rest.
+
+@dataclass(frozen=True)
+class EField:
+    key: str
+    prompt: str
+    kind: str = "text"                 # text | app_picker | role_picker | yesno
+    optional: bool = False
+    suggest_from: str = ""             # code field: propose UPPER(other field) as a default
+
+
+_ENTITY_CREATE: dict[str, dict[str, Any]] = {
+    "application": {
+        "label": "application", "tool": "addApplication_post",
+        "fields": (
+            EField("applicationName", "What's the **application name**?"),
+            EField("applicationCode", "A short **application code**? _(e.g. BUDGET_ANALYTICS)_",
+                   suggest_from="applicationName"),
+            EField("applicationShortCode", "A brief **short code / abbreviation**? _(e.g. BA)_"),
+            EField("description", "A one-line **description**?"),
+            EField("appCategory", "A **category**? _(e.g. Planning, Analytics)_", optional=True),
+            EField("applicationUrl", "The app **URL**? _(optional)_", optional=True),
+        ),
+        # NOTE: addApplication marks only Authorization required; these defaults are best-effort.
+        # appState/appType values should be confirmed against a real create before relying on it.
+        "defaults": {"enabled": "Y", "appState": "ACTIVE", "appType": "INTERNAL",
+                     "isDefault": "N", "applicationVersion": "1.0"},
+    },
+    "role": {
+        "label": "application role", "tool": "addApplicationRole_post",
+        "fields": (
+            EField("applicationId", "Which **application** is this role for?", kind="app_picker"),
+            EField("roleName", "What's the role's **display name**? _(e.g. Budget Viewer)_"),
+            EField("role", "A short **role code**? _(e.g. BUDGET_VIEWER)_", suggest_from="roleName"),
+            EField("roleDescription", "A one-line **description** of the role?"),
+            EField("isAdmin", "Is this an **admin** role?", kind="yesno"),
+        ),
+        "defaults": {"enabled": "Y", "isChatbot": "N"},
+    },
+    "menu": {
+        "label": "menu", "tool": "addMenu_post",
+        "fields": (
+            EField("applicationId", "Which **application** is this menu for?", kind="app_picker"),
+            EField("menuName", "What's the **menu name**?"),
+            EField("menuCode", "A short **menu code**?", suggest_from="menuName"),
+            EField("menuDesc", "A short **description**?", optional=True),
+        ),
+        "defaults": {"enabled": "Y"},
+    },
+    "privilege": {
+        "label": "role privilege", "tool": "addAppRolePrivilege_post",
+        "fields": (
+            EField("applicationRoleId", "Which **role** should this privilege apply to?", kind="role_picker"),
+            EField("readFlag", "Allow **read**?", kind="yesno"),
+            EField("writeFlag", "Allow **write / create**?", kind="yesno"),
+            EField("updateFlag", "Allow **update**?", kind="yesno"),
+            EField("deleteFlag", "Allow **delete**?", kind="yesno"),
+        ),
+        "defaults": {"enabled": "Y"},
+    },
+}
+
+# Entity detection for the onboard/create front door. Requires a CREATE verb; bails on
+# assign/grant/read verbs and on other known tasks (data call / skill / baseline / report),
+# which are routed by their own handlers.
+_EC_VERB = re.compile(r"\b(onboard|create|add|register|provision|make|set\s?up|new)\b", re.I)
+_EC_NOT = re.compile(r"\b(access|assign|grant|give|remove|revoke|unassign|delete|report|"
+                     r"data\s?call|skill|baseline|workflow|report)\b", re.I)
+_EC_ENTITY: tuple[tuple[str, str], ...] = (
+    ("user", r"\b(users?|someone|person|people|employees?|staff|new\s+hire|account)\b"),
+    ("application", r"\b(applications?|apps?|modules?)\b"),
+    ("role", r"\broles?\b"),
+    ("menu", r"\bmenus?\b"),
+    ("privilege", r"\b(privileges?|permissions?)\b"),
+)
+
+
+def _detect_entity(msg: str) -> str | None:
+    """Classify an onboard/create request → an entity key, "AMBIGUOUS", or None (not ours).
+    None means "not an entity-create intent" (let normal routing handle it)."""
+    m = msg or ""
+    if not _EC_VERB.search(m) or _EC_NOT.search(m):
+        return None
+    # "application role" / "app role" is a ROLE, not two entities.
+    if re.search(r"\b(application|app)\s+roles?\b", m, re.I):
+        return "role"
+    hits = [e for e, p in _EC_ENTITY if re.search(p, m, re.I)]
+    if len(hits) == 1:
+        return hits[0]
+    if len(hits) > 1:
+        return "AMBIGUOUS"
+    # A create verb but no entity noun → only treat clear onboarding/new phrasings as ambiguous
+    # (so "create a data call" etc., already excluded above, never reach here as a false ask).
+    if re.search(r"\bonboard\b|\bnew\b", m, re.I):
+        return "AMBIGUOUS"
+    return None
+
+
+_ENTITY_CHIP_ORDER = ("user", "application", "role", "menu", "privilege")
+_ENTITY_CHIP_LABEL = {"user": "User", "application": "Application", "role": "Role",
+                      "menu": "Menu", "privilege": "Privilege"}
+
+
+def _disambiguate_entity() -> FlowResult:
+    chips = [_chip(_ENTITY_CHIP_LABEL[e], e, icon="app") for e in _ENTITY_CHIP_ORDER]
+    chips.append(_chip("Cancel", "cancel", icon="skip"))
+    return FlowResult(
+        message=("**Onboard what?** I can set up a few different things — tell me which and I'll "
+                 "guide you:\n• **User** — a new account (and its access)\n• **Application** — a "
+                 "new application/module\n• **Role** — a new application role\n• **Menu** — a new "
+                 "menu\n• **Privilege** — read/write/update/delete on a role"),
+        suggestions=chips)
+
+
+def start_entity_create(session: Any, entity: str | None) -> FlowResult:
+    """Front door for entity onboarding. `entity` known → its create flow; None → ask which."""
+    if entity == "user":
+        return start_create(session)
+    if entity is None or entity == "AMBIGUOUS" or entity not in _ENTITY_CREATE:
+        session.metadata["flow"] = {"name": "entity_create", "stage": "disambiguate", "data": {}}
+        return _disambiguate_entity()
+    session.metadata["flow"] = {"name": "entity_create", "entity": entity, "stage": "collect",
+                                "idx": 0, "data": {}, "labels": {}}
+    spec = _ENTITY_CREATE[entity]
+    return FlowResult(message=f"Let's set up a new **{spec['label']}**. I'll ask a few things, "
+                              f"then show everything for your confirmation before anything runs.\n\n"
+                              + _efield_prompt(spec["fields"][0]))
+
+
+def _efield_prompt(f: "EField", data: dict[str, Any] | None = None) -> str:
+    p = f.prompt
+    if f.suggest_from and data and data.get(f.suggest_from):
+        sug = re.sub(r"[^A-Za-z0-9]+", "_", str(data[f.suggest_from])).strip("_").upper()
+        if sug:
+            p += f" _(suggested: {sug})_"
+    return p
+
+
+async def _efield_step(flow: dict[str, Any], f: "EField", headers: dict[str, str] | None,
+                       prefix: str = "") -> FlowResult:
+    """Render the current field: pickers show live chips; yes/no shows Yes/No; text just asks."""
+    if f.kind == "app_picker":
+        apps = await _apps(headers)
+        flow.setdefault("_opts", {})["app"] = apps
+        chips, note = _list_chips(apps, "app", [_chip("Cancel", "cancel", icon="skip")]) if apps else ([], "")
+        return FlowResult(message=f"{prefix}{f.prompt}{note}", suggestions=chips or None)
+    if f.kind == "role_picker":
+        # sub-picker: application first, then its roles
+        if not flow.get("_role_app"):
+            apps = await _apps(headers)
+            flow.setdefault("_opts", {})["app"] = apps
+            chips, note = _list_chips(apps, "app", [_chip("Cancel", "cancel", icon="skip")]) if apps else ([], "")
+            return FlowResult(message=f"{prefix}First, which **application** is the role in?{note}",
+                              suggestions=chips or None)
+        roles = await _roles(headers, flow["_role_app"])
+        flow.setdefault("_opts", {})["role"] = roles
+        chips, note = _list_chips(roles, "role", [_chip("Cancel", "cancel", icon="skip")]) if roles else ([], "")
+        return FlowResult(message=f"{prefix}{f.prompt}{note}", suggestions=chips or None)
+    if f.kind == "yesno":
+        return FlowResult(message=f"{prefix}{f.prompt}",
+                          suggestions=[_chip("Yes", "yes", icon="check"), _chip("No", "no", icon="skip")])
+    return FlowResult(message=f"{prefix}{_efield_prompt(f, flow.get('data'))}")
+
+
+def _entity_finalize(flow: dict[str, Any]) -> FlowResult:
+    entity = flow["entity"]
+    spec = _ENTITY_CREATE[entity]
+    args = {**spec.get("defaults", {}), **flow.get("data", {})}
+    labels = flow.get("labels", {})
+    lines = []
+    for f in spec["fields"]:
+        val = labels.get(f.key, flow["data"].get(f.key))
+        if val in (None, ""):
+            val = "—"
+        lines.append(f"- **{f.key}:** {val}")
+    summary = (f"Ready to create this **{spec['label']}**:\n" + "\n".join(lines)
+               + "\n\nShall I go ahead?")
+    return FlowResult(message=summary,
+                      pending={"tool_name": spec["tool"], "tool_args": args, "summary": summary})
+
+
+async def _advance_entity(flow: dict[str, Any], headers: dict[str, str] | None,
+                          prefix: str = "") -> FlowResult:
+    spec = _ENTITY_CREATE[flow["entity"]]
+    flow["idx"] += 1
+    flow.pop("_role_app", None)
+    if flow["idx"] >= len(spec["fields"]):
+        flow["stage"] = "confirm"
+        return _entity_finalize(flow)
+    return await _efield_step(flow, spec["fields"][flow["idx"]], headers, prefix=prefix)
+
+
+async def _entity_create(session: Any, flow: dict[str, Any], msg: str,
+                         headers: dict[str, str] | None) -> FlowResult:
+    stage = flow.get("stage")
+
+    if stage == "disambiguate":
+        ent = None
+        low = msg.strip().lower()
+        for e in _ENTITY_CHIP_ORDER:
+            if e in low or _ENTITY_CHIP_LABEL[e].lower() in low:
+                ent = e
+                break
+        if ent is None:
+            ent = _detect_entity(msg)
+            if ent in (None, "AMBIGUOUS"):
+                return _disambiguate_entity()
+        session.metadata.pop("flow", None)
+        return start_entity_create(session, ent)
+
+    if stage != "collect":
+        return FlowResult(message="Please use **Confirm** or **Cancel** above to finish.")
+
+    spec = _ENTITY_CREATE[flow["entity"]]
+    f: EField = spec["fields"][flow["idx"]]
+    data = flow.setdefault("data", {})
+    labels = flow.setdefault("labels", {})
+
+    if f.kind == "app_picker":
+        apps = (flow.get("_opts", {}) or {}).get("app") or await _apps(headers)
+        app = _match(msg, apps)
+        if not app:
+            return await _efield_step(flow, f, headers, prefix="I didn't catch that — pick one. ")
+        data[f.key] = app["id"]; labels[f.key] = app["name"]
+        return await _advance_entity(flow, headers)
+
+    if f.kind == "role_picker":
+        if not flow.get("_role_app"):
+            apps = (flow.get("_opts", {}) or {}).get("app") or await _apps(headers)
+            app = _match(msg, apps)
+            if not app:
+                return await _efield_step(flow, f, headers, prefix="Pick an application first. ")
+            flow["_role_app"] = app["id"]; flow["_role_app_name"] = app["name"]
+            return await _efield_step(flow, f, headers)
+        roles = (flow.get("_opts", {}) or {}).get("role") or await _roles(headers, flow["_role_app"])
+        role = _match(msg, roles)
+        if not role:
+            return await _efield_step(flow, f, headers, prefix="Pick a role. ")
+        data[f.key] = role["id"]; labels[f.key] = f"{flow.get('_role_app_name','')} · {role['name']}"
+        return await _advance_entity(flow, headers)
+
+    if f.kind == "yesno":
+        yn = _yn(msg)
+        if yn is None:
+            return await _efield_step(flow, f, headers, prefix="Please choose Yes or No. ")
+        data[f.key] = yn; labels[f.key] = "Yes" if yn == "Y" else "No"
+        return await _advance_entity(flow, headers)
+
+    # free text
+    text = msg.strip()
+    if not text:
+        if f.optional:
+            return await _advance_entity(flow, headers)
+        return FlowResult(message=_efield_prompt(f, data))
+    if f.suggest_from and text.lower() in ("suggest", "suggested", "use suggested", "ok", "yes"):
+        text = re.sub(r"[^A-Za-z0-9]+", "_", str(data.get(f.suggest_from, ""))).strip("_").upper() or text
+    data[f.key] = text; labels[f.key] = text
+    return await _advance_entity(flow, headers)
+
+
+# Tools whose confirmed mutation ends an entity_create flow (no continuation) — used by
+# chat_service._post_confirm_flow to clear the flow after the single write succeeds.
+ENTITY_CREATE_TOOLS = frozenset(spec["tool"] for spec in _ENTITY_CREATE.values())

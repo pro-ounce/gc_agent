@@ -494,6 +494,9 @@ class ChatService:
             fr = flows.baseline_after_generate(session)
             if fr is not None:
                 return _fr(fr)
+        # ── Entity onboarding (user/app/role/menu/privilege): single create → end the flow ──
+        if flows.is_active(session) and tool_name in flows.ENTITY_CREATE_TOOLS:
+            session.metadata.pop("flow", None)
         fu = skills.follow_up_for(tool_name, args)
         return (f"{final_text}\n\n{fu}" if fu else final_text), []
 
