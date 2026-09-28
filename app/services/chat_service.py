@@ -266,6 +266,7 @@ class ChatService:
             # thread it into flow-start so 'onboard a new person' opens the guided intake too.
             skill = skills.match(user_message) or await skills.match_semantic(user_message)
             started = flows.maybe_start(session, user_message, skill=skill)
+            started = await self._gate_onboarding(session, started, request_headers)
             if started is not None:
                 return self._flow_response(session, started, source="flow", question=user_message,
                                            app=sel_app, role=sel_role)
@@ -458,6 +459,25 @@ class ChatService:
         session.pending_action_id = pending.id
         return pending
 
+    async def _gate_onboarding(
+        self, session: Session, started: "flows.FlowResult | None",
+        headers: dict[str, str] | None,
+    ) -> "flows.FlowResult | None":
+        """Authority gate: onboarding is an ADMINISTRATION action, so if a fresh onboarding flow
+        just started, verify the caller holds an admin role in Administration. If not, cancel the
+        flow and return a refusal — before any details are collected or anything is created."""
+        if started is None or not flows.is_onboarding_flow(session):
+            return started
+        allowed, why = await flows.authorize_onboarding(headers)
+        if allowed:
+            return started
+        flow = session.metadata.get("flow") or {}
+        log.bind(func="onboarding_gate", event="onboarding_denied",
+                 flow=flow.get("name"), entity=flow.get("entity")).warning(
+            "onboarding refused: caller lacks an admin role in Administration")
+        session.metadata.pop("flow", None)
+        return flows.FlowResult(message=why, done=True)
+
     async def _post_confirm_flow(
         self, session: Session, tool_name: str, tool_args: dict[str, Any], final_text: str,
         request_headers: dict[str, str] | None = None,
@@ -601,6 +621,8 @@ class ChatService:
             if mr is None:      # resolve skill (keyword → semantic) for flow-start + the model
                 skill = skills.match(user_message) or await skills.match_semantic(user_message)
             started = mr or flows.maybe_start(session, user_message, skill=skill)
+            if mr is None:      # only a fresh flow needs the onboarding authority gate
+                started = await self._gate_onboarding(session, started, request_headers)
             if started is not None:
                 chunks = self._flow_chunks(session, started)
                 turn.answered_by = src if mr is not None else "flow"

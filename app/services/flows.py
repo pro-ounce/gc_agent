@@ -1290,24 +1290,30 @@ class EField:
     kind: str = "text"                 # text | app_picker | role_picker | yesno
     optional: bool = False
     suggest_from: str = ""             # code field: propose UPPER(other field) as a default
+    unique_among: str = ""             # verify the value isn't already taken: "app_code"
 
 
+# Field lists + defaults VERIFIED against the administration entity contracts (NOT-NULL /
+# unique columns) and live records, 2026-09-28. addApplication marks only Authorization
+# "required" in its schema, but the Application entity makes applicationName/Code/Order/
+# description/Url/Icon NOT-NULL (Code + Order also unique) — so those are collected, order is
+# auto-assigned (max+10, unique), and appState/appType are left EMPTY (every live app has "").
 _ENTITY_CREATE: dict[str, dict[str, Any]] = {
     "application": {
         "label": "application", "tool": "addApplication_post",
         "fields": (
             EField("applicationName", "What's the **application name**?"),
-            EField("applicationCode", "A short **application code**? _(e.g. BUDGET_ANALYTICS)_",
-                   suggest_from="applicationName"),
+            EField("applicationCode", "A unique **application code**? _(e.g. BUDGET_ANALYTICS)_",
+                   suggest_from="applicationName", unique_among="app_code"),
             EField("applicationShortCode", "A brief **short code / abbreviation**? _(e.g. BA)_"),
             EField("description", "A one-line **description**?"),
-            EField("appCategory", "A **category**? _(e.g. Planning, Analytics)_", optional=True),
-            EField("applicationUrl", "The app **URL**? _(optional)_", optional=True),
+            EField("applicationUrl", "The app **URL path**? _(e.g. /budget-analytics)_"),
+            EField("applicationIcon", "The **icon path**? _(e.g. /assets/images/appsIcons/ba.svg)_"),
+            EField("appCategory", "A **category**? _(e.g. Planner, Analytics)_", optional=True),
         ),
-        # NOTE: addApplication marks only Authorization required; these defaults are best-effort.
-        # appState/appType values should be confirmed against a real create before relying on it.
-        "defaults": {"enabled": "Y", "appState": "ACTIVE", "appType": "INTERNAL",
-                     "isDefault": "N", "applicationVersion": "1.0"},
+        "defaults": {"enabled": "Y", "isDefault": "N", "appState": "", "appType": "",
+                     "applicationVersion": "1"},
+        "auto_order": True,   # applicationOrder = max(existing)+10, computed at finalize (unique)
     },
     "role": {
         "label": "application role", "tool": "addApplicationRole_post",
@@ -1326,6 +1332,7 @@ _ENTITY_CREATE: dict[str, dict[str, Any]] = {
             EField("applicationId", "Which **application** is this menu for?", kind="app_picker"),
             EField("menuName", "What's the **menu name**?"),
             EField("menuCode", "A short **menu code**?", suggest_from="menuName"),
+            EField("menuType", "What's the **menu type**? _(e.g. MODULE, SCREEN, REPORT)_"),
             EField("menuDesc", "A short **description**?", optional=True),
         ),
         "defaults": {"enabled": "Y"},
@@ -1445,10 +1452,25 @@ async def _efield_step(flow: dict[str, Any], f: "EField", headers: dict[str, str
     return FlowResult(message=f"{prefix}{_efield_prompt(f, flow.get('data'))}")
 
 
-def _entity_finalize(flow: dict[str, Any]) -> FlowResult:
+async def _next_app_order(headers: dict[str, str] | None) -> int:
+    """The next free applicationOrder (max existing + 10) — APPLICATION_ORDER is NOT-NULL +
+    unique, so a new app must not collide. Falls back to a high value if the list can't load."""
+    try:
+        res = await tool_registry.execute("getAllApplications_get", {}, headers)
+        data = res.output.get("data") if isinstance(res.output, dict) else None
+        orders = [int(a["applicationOrder"]) for a in (data or [])
+                  if isinstance(a, dict) and str(a.get("applicationOrder", "")).strip().lstrip("-").isdigit()]
+        return (max(orders) + 10) if orders else 1000
+    except Exception:  # noqa: BLE001
+        return 1000
+
+
+async def _entity_finalize(flow: dict[str, Any], headers: dict[str, str] | None) -> FlowResult:
     entity = flow["entity"]
     spec = _ENTITY_CREATE[entity]
     args = {**spec.get("defaults", {}), **flow.get("data", {})}
+    if spec.get("auto_order"):                       # application: assign a unique order
+        args["applicationOrder"] = await _next_app_order(headers)
     labels = flow.get("labels", {})
     lines = []
     for f in spec["fields"]:
@@ -1456,6 +1478,8 @@ def _entity_finalize(flow: dict[str, Any]) -> FlowResult:
         if val in (None, ""):
             val = "—"
         lines.append(f"- **{f.key}:** {val}")
+    if spec.get("auto_order"):
+        lines.append(f"- **applicationOrder:** {args['applicationOrder']} _(auto)_")
     summary = (f"Ready to create this **{spec['label']}**:\n" + "\n".join(lines)
                + "\n\nShall I go ahead?")
     return FlowResult(message=summary,
@@ -1469,7 +1493,7 @@ async def _advance_entity(flow: dict[str, Any], headers: dict[str, str] | None,
     flow.pop("_role_app", None)
     if flow["idx"] >= len(spec["fields"]):
         flow["stage"] = "confirm"
-        return _entity_finalize(flow)
+        return await _entity_finalize(flow, headers)
     return await _efield_step(flow, spec["fields"][flow["idx"]], headers, prefix=prefix)
 
 
@@ -1537,6 +1561,13 @@ async def _entity_create(session: Any, flow: dict[str, Any], msg: str,
         return FlowResult(message=_efield_prompt(f, data))
     if f.suggest_from and text.lower() in ("suggest", "suggested", "use suggested", "ok", "yes"):
         text = re.sub(r"[^A-Za-z0-9]+", "_", str(data.get(f.suggest_from, ""))).strip("_").upper() or text
+    if f.unique_among == "app_code":                 # APPLICATION_CODE is unique — pre-check
+        code = re.sub(r"\s+", "_", text).upper()
+        apps = await _apps(headers)
+        if any(str(a.get("code", "")).upper() == code for a in apps):
+            return FlowResult(message=f"**{code}** is already taken by another application. "
+                                      "Please pick a different code.")
+        text = code
     data[f.key] = text; labels[f.key] = text
     return await _advance_entity(flow, headers)
 
@@ -1544,3 +1575,63 @@ async def _entity_create(session: Any, flow: dict[str, Any], msg: str,
 # Tools whose confirmed mutation ends an entity_create flow (no continuation) — used by
 # chat_service._post_confirm_flow to clear the flow after the single write succeeds.
 ENTITY_CREATE_TOOLS = frozenset(spec["tool"] for spec in _ENTITY_CREATE.values())
+
+
+# ── Onboarding authorization ────────────────────────────────────────────────────
+# Onboarding is an ADMINISTRATION action: the caller must be assigned the Administration
+# application AND hold an admin app-role in it (an ADMINISTRATION role whose definition has
+# isAdmin=Y — SYSTEM_ADMIN / GC_ADMIN / BUDGET_ADMIN / SUPER_ADMIN). Verified before a flow
+# starts so an unauthorized caller is refused up front, never after collecting details.
+_ADMIN_APP_CODE = "ADMINISTRATION"
+_ADMIN_ROLE_FALLBACK = frozenset({"SUPER_ADMIN", "SYSTEM_ADMIN", "GC_ADMIN", "BUDGET_ADMIN"})
+_ADMIN_ROLES_CACHE: dict[str, Any] = {"codes": None, "ts": 0.0}
+_ONBOARDING_FLOWS = frozenset({"create_user", "entity_create", "onboard"})
+
+
+def is_onboarding_flow(session: Any) -> bool:
+    f = session.metadata.get("flow")
+    return bool(f) and f.get("name") in _ONBOARDING_FLOWS
+
+
+async def _admin_role_codes(headers: dict[str, str] | None) -> set[str]:
+    """Admin role codes in ADMINISTRATION (isAdmin=Y) — the roles that authorize onboarding.
+    Cached ~10 min; falls back to the known set if the definitions can't be read."""
+    import time as _t
+    c = _ADMIN_ROLES_CACHE
+    if c["codes"] and (_t.monotonic() - c["ts"]) < 600:
+        return c["codes"]
+    codes: set[str] = set()
+    try:
+        res = await tool_registry.execute("getAllApplicationRoles_get", {}, headers)
+        data = res.output.get("data") if isinstance(res.output, dict) else None
+        for r in (data or []):
+            if isinstance(r, dict) and str(r.get("applicationCode", "")).upper() == _ADMIN_APP_CODE \
+               and str(r.get("isAdmin", "")).upper() in ("Y", "TRUE", "1"):
+                codes.add(str(r.get("role", "")).upper())
+    except Exception:  # noqa: BLE001
+        pass
+    codes = codes or set(_ADMIN_ROLE_FALLBACK)
+    c["codes"] = codes
+    c["ts"] = _t.monotonic()
+    return codes
+
+
+async def authorize_onboarding(headers: dict[str, str] | None) -> tuple[bool, str]:
+    """(allowed, refusal_message). The caller must hold an admin role in ADMINISTRATION.
+    Fail CLOSED: if their access can't be read, deny — never onboard without proven authority."""
+    admin_codes = await _admin_role_codes(headers)
+    try:
+        res = await tool_registry.execute("getActiveUserAppRolesByUserId_post", {}, headers)
+        rows = res.output.get("data") if isinstance(res.output, dict) else None
+    except Exception:  # noqa: BLE001
+        rows = None
+    if rows is None:
+        return False, ("I couldn't verify your administrator access just now, so I can't run an "
+                       "onboarding action. Please try again, or use the Administration app.")
+    for r in rows:
+        if isinstance(r, dict) and str(r.get("applicationCode", "")).upper() == _ADMIN_APP_CODE \
+           and str(r.get("role", "")).upper() in admin_codes:
+            return True, ""
+    return False, ("Onboarding is an administrator action, and your access doesn't include an "
+                   "admin role in the **Administration** application — so I can't create that on "
+                   "your behalf. Please ask a system administrator, or use the Administration app.")
