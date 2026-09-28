@@ -1477,13 +1477,24 @@ async def _efield_step(flow: dict[str, Any], f: "EField", headers: dict[str, str
         chips, note = _list_chips(roles, "role", [_chip("Cancel", "cancel", icon="skip")]) if roles else ([], "")
         return FlowResult(message=f"{prefix}{f.prompt}{note}", suggestions=chips or None)
     if f.kind == "menu_picker":
+        # Prerequisite gate: a role needs an attached menu. Ask whether one already exists or
+        # should be created first, before showing the picker.
+        if flow.get("_menu_stage") != "pick":
+            flow["_menu_stage"] = "choice"
+            return FlowResult(
+                message=(f"{prefix}A role opens an attached **menu**. Are you ready with the "
+                         "menu, or should I set one up first?"),
+                suggestions=[_chip("Pick an existing menu", "pick an existing menu", icon="menu-2"),
+                             _chip("Create a new menu first", "create a new menu first", icon="plus"),
+                             _chip("Cancel", "cancel", icon="skip")])
         app_id = (flow.get("data") or {}).get("applicationId")
         menus = await _menus(headers, app_id)
         flow.setdefault("_opts", {})["menu"] = menus
+        tail = [_chip("Create a new menu instead", "create a new menu first", icon="plus"),
+                _chip("Cancel", "cancel", icon="skip")]
         if not menus:
-            return FlowResult(message=f"{prefix}{f.prompt} _(type the menu name)_",
-                              suggestions=[_chip("Cancel", "cancel", icon="skip")])
-        chips, note = _list_chips(menus, "app", [_chip("Cancel", "cancel", icon="skip")])
+            return FlowResult(message=f"{prefix}{f.prompt} _(type the menu name)_", suggestions=tail)
+        chips, note = _list_chips(menus, "app", tail)
         return FlowResult(message=f"{prefix}{f.prompt}{note}", suggestions=chips)
     if f.kind == "yesno":
         return FlowResult(message=f"{prefix}{f.prompt}",
@@ -1586,6 +1597,15 @@ async def _entity_create(session: Any, flow: dict[str, Any], msg: str,
         return await _advance_entity(flow, headers)
 
     if f.kind == "menu_picker":
+        low = msg.strip().lower()
+        wants_new = bool(re.search(r"\b(create|new|set ?up|make|build)\b", low)) and \
+            (flow.get("_menu_stage") == "choice" or "menu" in low)
+        if wants_new:
+            return await _start_menu_subflow(session, flow, headers)
+        if flow.get("_menu_stage") == "choice":
+            # anything not "create" → pick an existing one
+            flow["_menu_stage"] = "pick"
+            return await _efield_step(flow, f, headers)
         app_id = data.get("applicationId")
         menus = (flow.get("_opts", {}) or {}).get("menu") or await _menus(headers, app_id)
         menu = _match(msg, menus)
@@ -1618,6 +1638,52 @@ async def _entity_create(session: Any, flow: dict[str, Any], msg: str,
         text = code
     data[f.key] = text; labels[f.key] = text
     return await _advance_entity(flow, headers)
+
+
+async def _start_menu_subflow(session: Any, role_flow: dict[str, Any],
+                              headers: dict[str, str] | None) -> FlowResult:
+    """Dependency chain: the role needs a menu that doesn't exist yet — suspend the role flow,
+    run a menu-create flow first (inheriting the role's application), and mark it to RESUME the
+    role at its confirm once the menu is created."""
+    app_id = (role_flow.get("data") or {}).get("applicationId")
+    app_label = (role_flow.get("labels") or {}).get("applicationId", "")
+    menu_flow = {"name": "entity_create", "entity": "menu", "stage": "collect", "idx": 0,
+                 "data": {"applicationId": app_id}, "labels": {"applicationId": app_label},
+                 "_resume_to": role_flow}
+    session.metadata["flow"] = menu_flow
+    # applicationId is inherited from the role, so skip the app picker and prompt the next field.
+    return await _advance_entity(menu_flow, headers,
+                                 prefix="Let's set up the **menu** for this role first. ")
+
+
+async def resume_role_after_menu(session: Any, tool_args: dict[str, Any],
+                                 headers: dict[str, str] | None) -> FlowResult | None:
+    """After a menu is created INSIDE a role flow (the _resume_to marker), attach the new menu
+    to the role and resume it at its confirm gate. Returns None for a standalone menu create."""
+    flow = session.metadata.get("flow")
+    if not flow or flow.get("name") != "entity_create" or not flow.get("_resume_to"):
+        return None
+    role_flow = flow["_resume_to"]
+    app_id = (role_flow.get("data") or {}).get("applicationId")
+    menu_name = str((tool_args or {}).get("menuName") or "").strip()
+    # addMenu returns no id → look the new menu up by name in its application.
+    new_id = None
+    for m in await _menus(headers, app_id):
+        if str(m["name"]).strip().lower() == menu_name.lower():
+            new_id = m["id"]
+            break
+    session.metadata["flow"] = role_flow
+    role_flow.setdefault("data", {})
+    role_flow.setdefault("labels", {})
+    if new_id is None:                       # couldn't resolve → let them pick it from the list
+        role_flow["_menu_stage"] = "pick"
+        fld = _ENTITY_CREATE["role"]["fields"][role_flow["idx"]]
+        return await _efield_step(role_flow, fld, headers,
+                                  prefix=f"Menu **{menu_name}** created. Now attach it to the role — ")
+    role_flow["data"]["menuId"] = new_id
+    role_flow["labels"]["menuId"] = menu_name
+    return await _advance_entity(role_flow, headers,
+                                 prefix=f"Menu **{menu_name}** created and attached. ")
 
 
 # Tools whose confirmed mutation ends an entity_create flow (no continuation) — used by

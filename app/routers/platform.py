@@ -218,15 +218,25 @@ async def _identity(request: Request, user: "User") -> dict:
     return {"userName": user.username, "firstName": first, "fullName": full, "displayName": display}
 
 
-def _resume_hint(user: "User", session_id: str = "") -> dict:
-    """The caller's most recent conversation → 'pick up where you left off' hint."""
+def _resume_hint(user: "User", session_id: str = "", module: str = "") -> dict:
+    """The caller's most recent conversation IN THE CURRENT MODULE → 'pick up where you left
+    off'. Scoped by the app the session was last used in (session.metadata['app']) so the hint
+    never surfaces a Formulation topic while the caller is in Smart Hub. `module` empty = no
+    filter (falls back to the global most-recent)."""
+    module = (module or "").strip().lower()
+
+    def _in_module(s) -> bool:
+        return not module or str((s.metadata or {}).get("app", "")).strip().lower() == module
+
     sess = session_service.get(session_id) if session_id else None
+    if sess is not None and not _in_module(sess):
+        sess = None                                   # passed session is another app → search
     if sess is None:
         listed = session_service.list_sessions(user.id) or []
         listed.sort(key=lambda s: str(s.get("updated_at") or ""), reverse=True)
         for item in listed:
             s = session_service.get(item.get("session_id", ""))
-            if s and any(m.role == "user" for m in s.messages):
+            if s and _in_module(s) and any(m.role == "user" for m in s.messages):
                 sess = s
                 break
     if not sess or not sess.messages:
@@ -276,14 +286,14 @@ async def agent_questions(
             return ApiResponse.ok(message="ok", data={"task": None})
         return ApiResponse.ok(message="ok", data={"task": t.model_dump()})
     ident = await _identity(request, user)
-    try:
-        resume = _resume_hint(user)
-    except Exception:  # noqa: BLE001 — never fail the bootstrap on a resume lookup
-        resume = {"hasHistory": False}
     # Context-aware balloons for the module/screen the widget is currently on. The ?module=
     # query param is dropped by the gateway on some paths, so fall back to the X-Selected-App
     # header (sent on every request). Always returns a set (default when module is unknown).
     module = (module or "").strip() or _module_from_header(request)
+    try:
+        resume = _resume_hint(user, module=module)   # scoped to the current app, not global
+    except Exception:  # noqa: BLE001 — never fail the bootstrap on a resume lookup
+        resume = {"hasHistory": False}
     from ..services.suggestions import module_suggestions
     from ..services.ecosystem import selected_role as _sel_role
     fheaders = _forward_headers(request)
@@ -322,8 +332,8 @@ async def agent_resume(
     user: User = Depends(get_current_user),
 ) -> ApiResponse:
     """Look at the caller's most recent conversation and return their last question, so the UI
-    can offer a 'pick up where you left off' suggestion."""
-    return ApiResponse.ok(message="ok", data=_resume_hint(user, sessionId))
+    can offer a 'pick up where you left off' suggestion — scoped to the current application."""
+    return ApiResponse.ok(message="ok", data=_resume_hint(user, sessionId, _module_from_header(request)))
 
 
 @router.get("/{agent}/tasks", summary="List the caller's recent background tasks")

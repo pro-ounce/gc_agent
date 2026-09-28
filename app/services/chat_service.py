@@ -239,12 +239,17 @@ class ChatService:
         session = session_service.get_or_create(session_id, user_id)
         session.add_user(user_message)
         session.metadata["detail"] = (detail or "standard").lower()
+        # Stamp the app this turn happened in, so 'pick up where you left off' is scoped to the
+        # current application/module (not a global last conversation across apps).
+        _sa = eco.selected_app_code(request_headers)
+        if _sa:
+            session.metadata["app"] = _sa
         session_service.save(session)
 
         # Guided flow active (e.g. onboarding)? Advance it deterministically — no LLM.
         # Or a fresh intent (create user without full detail) may START a guided intake.
         skill = None
-        sel_app = eco.selected_app_code(request_headers)
+        sel_app = _sa
         sel_role = eco.selected_role(request_headers)
         if flows.is_active(session):
             fr = await flows.handle(session, user_message, request_headers)
@@ -505,7 +510,17 @@ class ChatService:
         args = tool_args or {}
 
         def _fr(fr):
+            # A resumed flow may hand back ANOTHER confirm-gated step (e.g. create-menu →
+            # resume create-role): arm its pending so the caller can surface a fresh confirm.
+            if getattr(fr, "pending", None):
+                self._arm_flow_pending(session, fr)
             return f"{final_text}\n\n{fr.message}", [Suggestion(**s) for s in fr.suggestions]
+
+        # Menu created as a prerequisite INSIDE a role flow → attach it + resume the role.
+        if flows.is_active(session) and tool_name == "addMenu_post":
+            fr = await flows.resume_role_after_menu(session, args, request_headers)
+            if fr is not None:
+                return _fr(fr)
 
         if tool_name == "addUser_post":
             return _fr(flows.start_onboarding(session, args.get("firstName"), args.get("userName")))
@@ -607,6 +622,8 @@ class ChatService:
         session.add_user(user_message)
         session.metadata["last_user_message"] = user_message
         session.metadata["detail"] = (detail or "standard").lower()
+        if turn.app:                       # scope 'pick up where you left off' to this app
+            session.metadata["app"] = turn.app
         session_service.save(session)
 
         # Guided flow active (e.g. onboarding)? Advance it deterministically — no LLM.
@@ -759,6 +776,16 @@ class ChatService:
         session_service.save(session)
         if turn:
             turn.finish("stop")
+        # A post-confirm resume may have armed another confirm (menu created → role confirm).
+        chained = None
+        if session.pending_action_id:
+            praw = (session.metadata.get("pending_actions") or {}).get(session.pending_action_id)
+            if praw:
+                chained = PendingAction(**praw)
+        if chained is not None:
+            yield StreamChunk(type="confirm_required", session_id=session_id, content=lead,
+                              blocks=blocks, pending_action=chained, finish_reason="confirm_required")
+            return
         yield StreamChunk(type="done", session_id=session_id, content=lead,
                           blocks=blocks, suggestions=suggestions, finish_reason="stop")
 
@@ -1264,14 +1291,22 @@ class ChatService:
         session.add_assistant(final_text)
         session_service.save(session)
 
+        # A post-confirm resume may have armed ANOTHER confirm (e.g. menu created → role
+        # confirm) — surface it as a fresh confirm_required instead of ending the turn.
+        chained = None
+        if session.pending_action_id:
+            praw = (session.metadata.get("pending_actions") or {}).get(session.pending_action_id)
+            if praw:
+                chained = PendingAction(**praw)
         return ChatResponse(
             session_id=session_id,
             message_id=str(uuid.uuid4()),
             assistant_message=final_text,
             blocks=blocks,
             suggestions=suggestions,
+            pending_action=chained,
             tool_calls_made=[pending.tool_name],
-            finish_reason="stop",
+            finish_reason="confirm_required" if chained else "stop",
         )
 
     # ── Prompt execution ──────────────────────────────────────────────────────
