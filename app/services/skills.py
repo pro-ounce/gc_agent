@@ -326,6 +326,10 @@ SKILLS: list[Skill] = [
         keywords=(
             "create a data call", "create data call", "new data call", "set up a data call",
             "setup a data call", "start a data call", "add a data call", "schedule a data call",
+            # "data collection" is the common paraphrase — keep it keyword-reachable so the
+            # trigger doesn't depend on the (stricter) mutation semantic threshold.
+            "create a data collection", "set up a data collection", "new data collection",
+            "start a data collection",
         ),
         tool="saveDataCalls_post",
         required=("title", "fiscalYear", "fundGroupId"),
@@ -433,18 +437,36 @@ def by_name(name: str) -> Skill | None:
 _SEM_CACHE: dict[str, list] = {}
 _SEM_VER: int | None = None
 
+# Precision over recall for writes: a MUTATION skill needs a stricter semantic score than a read
+# before it may be pinned, so a read paraphrase that drifts toward an action tool (e.g. "list
+# applications" ≈ assign_access at 0.72) can't pin it. Gated by eval/skill_routing_eval.py, which
+# swept this value to the lowest with zero read→mutation leaks. Env-overridable for live tuning.
+def _mutation_tau() -> float:
+    import os
+    try:
+        return float(os.environ.get("AGENT_SKILL_MUTATION_TAU", "0.72"))
+    except (TypeError, ValueError):
+        return 0.72
+
 
 async def match_semantic(query: str, threshold: float = 0.66) -> Skill | None:
     global _SEM_VER
     from . import intent as _intent
+    from ..mcp.tool_registry import is_mutation
     ver = len(SKILLS)
     if _SEM_VER != ver:
         _SEM_CACHE.clear()
         _SEM_VER = ver
     groups = {s.name: [s.summary or s.name, *list(s.keywords[:6])]
               for s in SKILLS if (s.summary or s.keywords)}
-    name, _score = await _intent.classify_among(query, groups, threshold, _SEM_CACHE)
-    return by_name(name) if name else None
+    # Score against the read threshold first; then hold mutation skills to the stricter bar.
+    name, score = await _intent.classify_among(query, groups, threshold, _SEM_CACHE)
+    if not name:
+        return None
+    sk = by_name(name)
+    if sk is not None and is_mutation(sk.tool) and score < _mutation_tau():
+        return None                       # would-be write pin didn't clear the stricter bar
+    return sk
 
 
 def grounding(s: Skill) -> str:
