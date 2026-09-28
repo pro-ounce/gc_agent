@@ -297,6 +297,11 @@ class AppConfig:
     # Empty = allow all (rely on gateway/firewall). Set e.g. "127.0.0.1,::1" for loopback-only.
     ACTUATOR_ALLOWED_IPS: list[str] = env_list("ACTUATOR_ALLOWED_IPS")
 
+    # Admin Health tab — where the platform services are reached from (co-located, so
+    # localhost) and how long a single liveliness probe may take before it's called DOWN.
+    SERVICE_HEALTH_HOST: str = env_str("SERVICE_HEALTH_HOST", "localhost") or "localhost"
+    SERVICE_PROBE_TIMEOUT: float = env_float("SERVICE_PROBE_TIMEOUT", 3.0) or 3.0
+
     # System prompt injected into every conversation
     AGENT_SYSTEM_PROMPT: str = (
         env_str("AGENT_SYSTEM_PROMPT")

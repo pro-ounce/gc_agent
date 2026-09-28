@@ -93,5 +93,14 @@ class FeatureFlags:
         default_factory=lambda: env_bool("DEBUG_TOOLS_ENABLED", False)
     )
 
+    # Ops — service restart from the admin Health tab. The restart endpoint only runs the
+    # fixed, allow-listed commands in service_health._RESTART_UNITS (never anything from the
+    # request), and the whole /admin surface is already behind the actuator IP allow-list, so
+    # this is reachable only on the ops LAN. Default ON so the console's Restart controls work;
+    # set ALLOW_SERVICE_RESTART=0 to make the Health tab liveliness-only.
+    service_restart_enabled: bool = field(
+        default_factory=lambda: env_bool("ALLOW_SERVICE_RESTART", True)
+    )
+
 
 flags = FeatureFlags()

@@ -714,6 +714,38 @@ async def admin_set_schedule(request: Request):
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
 
+@router.get("/admin/services", summary="Platform services — liveliness + tiers")
+async def admin_services(request: Request):
+    """Live health of the whole GC platform for the console's Health tab: every service
+    (gateway → platform modules → tool bridge → agent + its deps) probed for reachability
+    and grouped by architecture tier. Reachability only — any HTTP response = up; a refused
+    connection = down. See service_health for why we don't read the guarded actuator body."""
+    _guard(request)
+    from ..services import service_health
+    return await service_health.snapshot()
+
+
+@router.post("/admin/services/restart", summary="Restart a platform service (allow-listed)")
+async def admin_service_restart(request: Request):
+    """Restart the service named in the body ({"service": "<key>"}). Only the fixed,
+    allow-listed units in service_health may be restarted, run as an argument list (never a
+    shell), behind the actuator IP guard, and only when ALLOW_SERVICE_RESTART is on. Note a
+    gc-mw module restart bounces the whole middleware — the UI confirms before calling."""
+    _guard(request)
+    from ..services import service_health
+    try:
+        body = await request.json()
+    except Exception:  # noqa: BLE001
+        body = {}
+    key = str((body or {}).get("service") or (body or {}).get("key") or "").strip()
+    if not key:
+        return JSONResponse({"detail": "field 'service' required"}, status_code=400)
+    try:
+        return service_health.restart(key)
+    except service_health.RestartError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+
 @router.post("/admin/backup/schedule/toggle", summary="Enable/disable the snapshot schedule")
 async def admin_toggle_schedule(request: Request):
     _guard(request)

@@ -58,6 +58,7 @@
     var groups = [];
     params.forEach(function(p){ if(groups.indexOf(p.group)<0) groups.push(p.group); });
     elTabs.innerHTML = groups.map(function(g,i){ return tabBtn(g,g,i===0); }).join("")
+      + tabBtn("Health","__health__",false)
       + tabBtn("Metrics","__metrics__",false)
       + tabBtn("Activity","__activity__",false)
       + tabBtn("Workflows","__workflows__",false)
@@ -70,7 +71,7 @@
       var cards = params.filter(function(p){return p.group===g;}).map(cardFor).join("");
       return '<section class="admin-section'+(i===0?" active":"")+'" data-tab="'+esc(g)+'" role="tabpanel"'
         +' id="panel-'+sid(g)+'" aria-labelledby="tab-'+sid(g)+'" tabindex="0"><div class="cards">'+cards+'</div></section>';
-    }).join("") + metricsSectionHTML() + activitySectionHTML() + workflowsSectionHTML() + apiSectionHTML() + docsSectionHTML() + auditSectionHTML() + backupsSectionHTML() + logsSectionHTML();
+    }).join("") + healthSectionHTML() + metricsSectionHTML() + activitySectionHTML() + workflowsSectionHTML() + apiSectionHTML() + docsSectionHTML() + auditSectionHTML() + backupsSectionHTML() + logsSectionHTML();
     // tab switching — WAI-ARIA tabs: roving tabindex, arrow/Home/End keys, aria-selected.
     var tabEls = Array.prototype.slice.call(elTabs.children);
     function selectTab(btn){
@@ -113,6 +114,7 @@
       if(inp.tagName==="SELECT") inp.addEventListener("change", handler);
     });
     initBackups();
+    initHealth();
     initMetrics();
     initActivity();
     initWorkflows();
@@ -996,6 +998,110 @@
   // ── Docs tab (live capability + architecture reference) ──
   // ── API tab (live, Swagger-like reference of the agent's tool surface, grouped by module) ──
   var _apiData=null, _apiQuery="", _apiRW="all", _apiInit=false;
+  // ── Health tab (platform liveliness + tiers, with allow-listed restart) ──────────
+  var _healthData=null, _healthInit=false, _healthTimer=null, _healthBusy="";
+  function healthSectionHTML(){
+    return '<section class="admin-section" data-tab="__health__" role="tabpanel" id="panel-__health__" aria-labelledby="tab-__health__" tabindex="0">'
+      +'<div class="card" style="margin-bottom:14px"><div class="top">'
+      +'<span class="lbl">Platform health <span id="hz-count" class="key"></span></span>'
+      +'<span class="btns"><span id="hz-gen" class="def" style="font-size:11px;opacity:.55"></span>'
+      +'<button id="hz-refresh" class="btn" style="padding:5px 11px">Refresh</button></span></div>'
+      +'<div class="def" style="margin-top:4px">Liveliness of every GC service, by architecture tier. A service is '
+      +'<span style="color:var(--good)">up</span> when its port answers (even an auth-guarded <span class="mono">401</span> counts); '
+      +'<span style="color:#ef4444">down</span> means the connection was refused. '
+      +'<span id="hz-restart-note"></span></div>'
+      +'<div id="hz-status" role="status" aria-live="polite" class="def" style="min-height:14px"></div></div>'
+      +'<div id="hz-body">loading…</div></section>';
+  }
+  function hzDot(st){
+    var c = st==="UP"?"dot-good":(st==="DEGRADED"?"dot-warn":"dot-bad");
+    return '<span class="dot '+c+'" aria-hidden="true"></span>';
+  }
+  function hzStatusLabel(st){
+    var m={UP:["Up","var(--good)"],DEGRADED:["Degraded","var(--amber)"],DOWN:["Down","#ef4444"]};
+    var v=m[st]||["Unknown","var(--ink-2)"];
+    return '<span style="color:'+v[1]+';font-weight:600;font-size:12px">'+esc(v[0])+'</span>';
+  }
+  function hzServiceRow(s){
+    var where = s.port ? esc((s.scheme||"http")+"://…:"+s.port) : esc(s.probe_url||"in-process");
+    var meta = [];
+    if(s.http!=null) meta.push('<span class="mono">HTTP '+esc(s.http)+'</span>');
+    if(s.latency_ms!=null) meta.push('<span class="mono">'+esc(s.latency_ms)+' ms</span>');
+    if(s.error) meta.push('<span style="color:#ef4444">'+esc(s.error)+'</span>');
+    var restartBtn = s.restartable
+      ? '<button class="btn hz-restart" data-svc="'+esc(s.key)+'" data-name="'+esc(s.name)+'"'
+        +(s.restart_note?' data-note="'+esc(s.restart_note)+'"':'')
+        +' style="padding:5px 11px;font-size:12px"'+(_healthBusy===s.key?' disabled':'')+'>'
+        +(_healthBusy===s.key?'Restarting…':'Restart')+'</button>'
+      : '';
+    return '<div class="hz-row">'
+      + '<div class="hz-main">'+hzDot(s.status)
+      + '<span class="hz-name">'+esc(s.name)+'</span>'
+      + '<span class="mono def" style="font-size:11px;opacity:.6">'+where+'</span></div>'
+      + '<div class="hz-meta">'+meta.join('<span class="hz-sep">·</span>')+'</div>'
+      + '<div class="hz-end">'+hzStatusLabel(s.status)+restartBtn+'</div>'
+      + '</div>';
+  }
+  function hzTierCard(t){
+    var up=t.services.filter(function(s){return s.status==="UP";}).length;
+    return '<details class="api-module" open><summary class="api-mhead">'
+      + '<span class="api-mname">'+esc(t.tier)+'</span>'
+      + '<span class="api-mmeta">'+up+'/'+t.services.length+' up</span></summary>'
+      + '<div class="api-mlist" style="padding:2px 0">'+ t.services.map(hzServiceRow).join("") +'</div></details>';
+  }
+  function renderHealth(){
+    var d=_healthData; if(!d) return;
+    var body=document.getElementById("hz-body"); if(!body) return;
+    var cnt=document.getElementById("hz-count");
+    if(cnt) cnt.textContent="("+d.up+" up"+(d.degraded?" · "+d.degraded+" degraded":"")+(d.down?" · "+d.down+" down":"")+" of "+d.total+")";
+    var gen=document.getElementById("hz-gen"); if(gen) gen.textContent=d.generated_at?("checked "+d.generated_at):"";
+    var rn=document.getElementById("hz-restart-note");
+    if(rn) rn.innerHTML = d.restart_enabled
+      ? 'Restart bounces the shared middleware (all modules together).'
+      : '<span style="color:var(--amber)">Restart is disabled</span> (liveliness only).';
+    body.innerHTML = (d.tiers||[]).map(hzTierCard).join("") || '<div class="card"><div class="def">No services.</div></div>';
+  }
+  function loadHealth(){
+    var body=document.getElementById("hz-body");
+    if(body && !_healthData) body.innerHTML='<div class="card"><div class="def">probing services…</div></div>';
+    return fetch(API+"/services",{cache:"no-store"}).then(function(r){return r.json();})
+      .then(function(d){ _healthData=d; renderHealth(); })
+      .catch(function(e){ if(body) body.innerHTML='<div class="card"><span style="color:#ef4444">Failed: '+esc(e.message)+'</span></div>'; });
+  }
+  function hzSetStatus(msg,color){ var el=document.getElementById("hz-status"); if(el){ el.textContent=msg||""; el.style.color=color||"var(--ink-2)"; } }
+  function hzRestart(key,name,note){
+    var msg="Restart "+name+"?";
+    if(note) msg+="\n\n"+note;
+    if(!window.confirm(msg)) return;
+    _healthBusy=key; renderHealth();
+    hzSetStatus("Restarting "+name+"…","var(--amber)");
+    fetch(API+"/services/restart",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({service:key})})
+      .then(function(r){ return r.json().then(function(j){ return {ok:r.ok,j:j}; }); })
+      .then(function(res){
+        _healthBusy="";
+        if(!res.ok){ hzSetStatus("Restart failed: "+esc((res.j&&res.j.detail)||"error"),"#ef4444"); renderHealth(); return; }
+        hzSetStatus((res.j.detail||name+" restarted")+" — re-probing in a few seconds…","var(--good)");
+        // Give the service time to come back, then re-probe (a couple of times for slow starts).
+        setTimeout(loadHealth, 6000);
+        setTimeout(loadHealth, 20000);
+      })
+      .catch(function(e){ _healthBusy=""; hzSetStatus("Restart failed: "+esc(e.message),"#ef4444"); renderHealth(); });
+  }
+  function healthActive(){ var s=document.getElementById("panel-__health__"); return s&&s.classList.contains("active"); }
+  function initHealth(){
+    if(!_healthInit){
+      document.addEventListener("click",function(e){
+        if(e.target&&e.target.id==="hz-refresh"){ hzSetStatus(""); loadHealth(); }
+        var b=e.target&&e.target.closest?e.target.closest(".hz-restart"):null;
+        if(b){ hzRestart(b.getAttribute("data-svc"), b.getAttribute("data-name"), b.getAttribute("data-note")); }
+      });
+      // Auto-refresh while the Health tab is the one on screen (cheap; localhost probes).
+      _healthTimer=setInterval(function(){ if(healthActive()&&!_healthBusy) loadHealth(); }, 20000);
+      _healthInit=true;
+    }
+    loadHealth();
+  }
+
   function apiSectionHTML(){
     return '<section class="admin-section" data-tab="__api__" role="tabpanel" id="panel-__api__" aria-labelledby="tab-__api__" tabindex="0">'
       +'<div class="card" style="margin-bottom:14px"><div class="top">'
