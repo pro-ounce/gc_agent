@@ -511,9 +511,12 @@ class ChatService:
 
         def _fr(fr):
             # A resumed flow may hand back ANOTHER confirm-gated step (e.g. create-menu →
-            # resume create-role): arm its pending so the caller can surface a fresh confirm.
+            # resume create-role): arm its pending so the caller can surface a fresh confirm,
+            # and stash its progress rail + acknowledgement for the chained response.
             if getattr(fr, "pending", None):
                 self._arm_flow_pending(session, fr)
+                session.metadata["_chain_progress"] = getattr(fr, "progress", None)
+                session.metadata["_chain_ack"] = getattr(fr, "ack", None)
             return f"{final_text}\n\n{fr.message}", [Suggestion(**s) for s in fr.suggestions]
 
         # Menu created as a prerequisite INSIDE a role flow → attach it + resume the role.
@@ -564,6 +567,7 @@ class ChatService:
             return ChatResponse(
                 session_id=sid, message_id=str(uuid.uuid4()),
                 assistant_message=fr.message, pending_action=pending,
+                progress=fr.progress, ack=fr.ack,
                 finish_reason="tool_confirmation_required",
             )
         session.add_assistant(fr.message)
@@ -573,6 +577,7 @@ class ChatService:
             assistant_message=fr.message,
             blocks=fr.blocks or [],
             suggestions=[Suggestion(**s) for s in fr.suggestions],
+            progress=fr.progress, ack=fr.ack,
             finish_reason="stop",
         )
 
@@ -584,6 +589,7 @@ class ChatService:
             session_service.save(session)
             return [StreamChunk(type="confirm_required", session_id=sid,
                                 content=fr.message, pending_action=pending,
+                                progress=fr.progress, ack=fr.ack,
                                 finish_reason="confirm_required")]
         session.add_assistant(fr.message)
         session_service.save(session)
@@ -592,6 +598,7 @@ class ChatService:
             StreamChunk(type="done", session_id=sid, content=fr.message,
                         blocks=fr.blocks or [],
                         suggestions=[Suggestion(**s) for s in fr.suggestions],
+                        progress=fr.progress, ack=fr.ack,
                         finish_reason="stop"),
         ]
 
@@ -784,7 +791,10 @@ class ChatService:
                 chained = PendingAction(**praw)
         if chained is not None:
             yield StreamChunk(type="confirm_required", session_id=session_id, content=lead,
-                              blocks=blocks, pending_action=chained, finish_reason="confirm_required")
+                              blocks=blocks, pending_action=chained,
+                              progress=session.metadata.pop("_chain_progress", None),
+                              ack=session.metadata.pop("_chain_ack", None),
+                              finish_reason="confirm_required")
             return
         yield StreamChunk(type="done", session_id=session_id, content=lead,
                           blocks=blocks, suggestions=suggestions, finish_reason="stop")
@@ -1305,6 +1315,8 @@ class ChatService:
             blocks=blocks,
             suggestions=suggestions,
             pending_action=chained,
+            progress=session.metadata.pop("_chain_progress", None) if chained else None,
+            ack=session.metadata.pop("_chain_ack", None) if chained else None,
             tool_calls_made=[pending.tool_name],
             finish_reason="confirm_required" if chained else "stop",
         )

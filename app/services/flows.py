@@ -132,6 +132,8 @@ class FlowResult:
     done: bool = False
     blocks: list[Any] = field(default_factory=list)  # structured UIBlocks (table/fields/list)
     reroute: str | None = None  # user broke out of the flow → answer THIS message as a fresh turn
+    progress: dict[str, Any] | None = None  # workflow rail: {title, current, total, steps:[{label,value,state}]}
+    ack: str | None = None      # a completed-prerequisite acknowledgement to surface as a check-row
 
 
 def _chip(label: str, send: str | None = None, icon: str | None = None) -> dict[str, Any]:
@@ -408,7 +410,8 @@ async def handle(session: Any, message: str, headers: dict[str, str] | None) -> 
         return await _baseline(session, flow, msg, headers)
 
     if name == "entity_create":
-        return await _entity_create(session, flow, msg, headers)
+        fr = await _entity_create(session, flow, msg, headers)
+        return _ep(fr, session.metadata.get("flow"))
 
     return None
 
@@ -1439,12 +1442,13 @@ def start_entity_create(session: Any, entity: str | None) -> FlowResult:
     if entity is None or entity == "AMBIGUOUS" or entity not in _ENTITY_CREATE:
         session.metadata["flow"] = {"name": "entity_create", "stage": "disambiguate", "data": {}}
         return _disambiguate_entity()
-    session.metadata["flow"] = {"name": "entity_create", "entity": entity, "stage": "collect",
-                                "idx": 0, "data": {}, "labels": {}}
+    flow = {"name": "entity_create", "entity": entity, "stage": "collect",
+            "idx": 0, "data": {}, "labels": {}}
+    session.metadata["flow"] = flow
     spec = _ENTITY_CREATE[entity]
-    return FlowResult(message=f"Let's set up a new **{spec['label']}**. I'll ask a few things, "
-                              f"then show everything for your confirmation before anything runs.\n\n"
-                              + _efield_prompt(spec["fields"][0]))
+    return _ep(FlowResult(message=f"Let's set up a new **{spec['label']}**. I'll ask a few things, "
+                                  f"then show everything for your confirmation before anything runs.\n\n"
+                                  + _efield_prompt(spec["fields"][0])), flow)
 
 
 def _efield_prompt(f: "EField", data: dict[str, Any] | None = None) -> str:
@@ -1640,6 +1644,52 @@ async def _entity_create(session: Any, flow: dict[str, Any], msg: str,
     return await _advance_entity(flow, headers)
 
 
+_FIELD_LABEL = {
+    "applicationId": "Application", "applicationName": "Name", "applicationCode": "Code",
+    "applicationShortCode": "Short code", "description": "Description", "applicationUrl": "URL",
+    "applicationIcon": "Icon", "appCategory": "Category",
+    "roleName": "Role name", "role": "Role code", "roleDescription": "Description",
+    "isAdmin": "Admin role", "menuId": "Attached menu",
+    "menuName": "Name", "menuCode": "Code", "menuType": "Type", "menuDesc": "Description",
+    "applicationRoleId": "Role", "readFlag": "Read", "writeFlag": "Write",
+    "updateFlag": "Update", "deleteFlag": "Delete",
+}
+
+
+def _entity_progress(flow: dict[str, Any]) -> dict[str, Any] | None:
+    """The workflow rail for an entity_create flow: each field as done/current/todo + a final
+    review step, so the widget can show where the user is and what's been captured."""
+    entity = flow.get("entity")
+    spec = _ENTITY_CREATE.get(entity or "")
+    if not spec or flow.get("stage") not in ("collect", "confirm"):
+        return None
+    labels = flow.get("labels", {}) or {}
+    idx = flow.get("idx", 0)
+    collecting = flow.get("stage") == "collect"
+    steps: list[dict[str, Any]] = []
+    for i, f in enumerate(spec["fields"]):
+        if f.key in labels:
+            state = "done"
+        elif collecting and i == idx:
+            state = "current"
+        else:
+            state = "todo"
+        steps.append({"label": _FIELD_LABEL.get(f.key, f.key),
+                      "value": str(labels.get(f.key, "")), "state": state})
+    steps.append({"label": "Review & confirm", "value": "",
+                  "state": "current" if flow.get("stage") == "confirm" else "todo"})
+    done_n = sum(1 for s in steps if s["state"] == "done")
+    return {"title": f"Create {spec.get('label', entity)}",
+            "current": min(done_n + 1, len(steps)), "total": len(steps), "steps": steps}
+
+
+def _ep(fr: "FlowResult | None", flow: dict[str, Any] | None) -> "FlowResult | None":
+    """Attach the entity progress rail to a flow result (no-op for non-entity flows)."""
+    if fr is not None and fr.progress is None and flow and flow.get("name") == "entity_create":
+        fr.progress = _entity_progress(flow)
+    return fr
+
+
 async def _start_menu_subflow(session: Any, role_flow: dict[str, Any],
                               headers: dict[str, str] | None) -> FlowResult:
     """Dependency chain: the role needs a menu that doesn't exist yet — suspend the role flow,
@@ -1682,8 +1732,12 @@ async def resume_role_after_menu(session: Any, tool_args: dict[str, Any],
                                   prefix=f"Menu **{menu_name}** created. Now attach it to the role — ")
     role_flow["data"]["menuId"] = new_id
     role_flow["labels"]["menuId"] = menu_name
-    return await _advance_entity(role_flow, headers,
-                                 prefix=f"Menu **{menu_name}** created and attached. ")
+    fr = await _advance_entity(role_flow, headers,
+                               prefix=f"Menu **{menu_name}** created and attached. ")
+    fr = _ep(fr, role_flow)
+    if fr is not None:
+        fr.ack = f"Prerequisite handled — menu **{menu_name}** created and attached to the role."
+    return fr
 
 
 # Tools whose confirmed mutation ends an entity_create flow (no continuation) — used by

@@ -78,6 +78,8 @@ class ChatResponse(BaseModel):
     blocks: list[UIBlock] = Field(default_factory=list)
     suggestions: list[Suggestion] = Field(default_factory=list)  # per-turn chips (guided flows)
     task: dict[str, Any] | None = None   # background task descriptor (id/status/title) to poll
+    progress: dict[str, Any] | None = None  # guided-flow rail {title,current,total,steps[]}
+    ack: str | None = None               # a completed-prerequisite acknowledgement (check-row)
     model: str = ""
     usage: dict[str, int] | None = None
     finish_reason: str = "stop"
@@ -91,6 +93,8 @@ class StreamChunk(BaseModel):
     suggestions: list[Suggestion] = Field(default_factory=list)  # per-turn chips (guided flows)
     task: dict[str, Any] | None = None   # background task descriptor (id/status/title) to poll
     pending_action: PendingAction | None = None
+    progress: dict[str, Any] | None = None  # guided-flow rail {title,current,total,steps[]}
+    ack: str | None = None               # a completed-prerequisite acknowledgement (check-row)
     finish_reason: str | None = None
     error: str | None = None
 
