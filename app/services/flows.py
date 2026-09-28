@@ -33,7 +33,13 @@ async def _wf_exec(tool: str, args: dict, headers: dict | None) -> dict:
     """ToolExec adapter for the node-graph engine — runs a tool via the registry (which applies
     the name→id resolvers on mutations) and hands back its {data,…} envelope. Carries the
     registry-level success flag as ``_ok`` so a Mutate node can tell a real write from a
-    rejected one (a business error comes back HTTP-200 with success:false)."""
+    rejected one (a business error comes back HTTP-200 with success:false). Access-governing
+    mutations are authority-gated here too, so a workflow (e.g. grant_access) can't write
+    without the caller holding an admin role in Administration."""
+    if is_access_mutation(tool):
+        allowed, why = await authorize_onboarding(headers)
+        if not allowed:
+            return {"data": None, "message": why, "_ok": False, "_denied": True}
     res = await tool_registry.execute(tool, args, headers)
     out = res.output if isinstance(res.output, dict) else {"data": res.output}
     return {**out, "_ok": bool(getattr(res, "success", True))}
@@ -1675,5 +1681,23 @@ async def authorize_onboarding(headers: dict[str, str] | None) -> tuple[bool, st
            and str(r.get("role", "")).upper() in admin_codes:
             return True, ""
     return False, ("Onboarding is an administrator action, and your access doesn't include an "
-                   "admin role in the **Administration** application — so I can't create that on "
+                   "admin role in the **Administration** application — so I can't do that on "
                    "your behalf. Please ask a system administrator, or use the Administration app.")
+
+
+# Access-governing mutations — creating users/apps/roles/menus/privileges AND assigning /
+# removing / editing a user's application access. Every one of these requires the caller to
+# hold an admin role in Administration (authorize_onboarding). Gated at execution (the confirm
+# executors + the workflow tool runner) so NO path — skill, flow, or workflow — can run one
+# without proven authority, and up front at skill resolution for a clean refusal.
+ACCESS_MUTATION_TOOLS = frozenset(ENTITY_CREATE_TOOLS) | {
+    "addUser_post",
+    "addUserApplicationAndRole_post", "addUserApplicationRole_post",
+    "addUsersWithRoleToApp_post", "assignApplicationRolesToUser_post",
+    "deleteUserApplicationRoleById_delete", "deleteUserApplicationRolesById_delete",
+    "deleteUserApplicationById_delete", "updateUserApplicationRoles_put",
+}
+
+
+def is_access_mutation(tool_name: str) -> bool:
+    return tool_name in ACCESS_MUTATION_TOOLS

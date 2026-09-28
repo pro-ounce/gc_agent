@@ -276,6 +276,12 @@ class ChatService:
         # Skill? Pin its backing action tool + ground the model on the required fields.
         if skill is None:                       # active-flow fall-through path: cheap keyword match
             skill = skills.match(user_message)
+        # Authority gate: refuse an assign/remove/edit/create skill up front if the caller isn't
+        # an Administration admin — before pinning the tool or collecting anything.
+        _deny = await self._access_skill_denied(skill, request_headers)
+        if _deny is not None:
+            return self._flow_response(session, flows.FlowResult(message=_deny, done=True),
+                                       source="flow", question=user_message, app=sel_app, role=sel_role)
         if skill:
             system = system + skills.grounding(skill)
         # Tool-RAG: pick only tools relevant to this query (falls back to all — see select_tools).
@@ -478,6 +484,17 @@ class ChatService:
         session.metadata.pop("flow", None)
         return flows.FlowResult(message=why, done=True)
 
+    async def _access_skill_denied(self, skill, headers: dict[str, str] | None) -> str | None:
+        """Refusal text if `skill` is an access-governing mutation (assign/remove/edit/create)
+        the caller isn't authorized for — so we refuse before pinning the tool. None otherwise."""
+        if not skill or not flows.is_access_mutation(getattr(skill, "tool", "")):
+            return None
+        allowed, why = await flows.authorize_onboarding(headers)
+        if not allowed:
+            log.bind(func="access_gate", event="access_denied", tool=getattr(skill, "tool", ""),
+                     skill=getattr(skill, "name", "")).warning("access skill refused up front")
+        return None if allowed else why
+
     async def _post_confirm_flow(
         self, session: Session, tool_name: str, tool_args: dict[str, Any], final_text: str,
         request_headers: dict[str, str] | None = None,
@@ -638,6 +655,16 @@ class ChatService:
         system = await self._ground_ecosystem(system, request_headers)
         if skill is None:                       # active-flow fall-through path: cheap keyword match
             skill = skills.match(user_message)
+        # Authority gate: refuse an assign/remove/edit/create skill up front for a non-admin.
+        _deny = await self._access_skill_denied(skill, request_headers)
+        if _deny is not None:
+            turn.answered_by = "flow"
+            _log_turn_source(session_id, "flow", question=user_message, answer=_deny[:240],
+                             request_id=turn.request_id, app=turn.app, role=turn.role)
+            turn.finish("stop")
+            for ch in self._flow_chunks(session, flows.FlowResult(message=_deny, done=True)):
+                yield ch
+            return
         turn.grounded = runtime_config.get_bool("AGENT_ECOSYSTEM_GROUNDING")
         turn.skill = skill.name if skill else ""
         if skill:
@@ -691,6 +718,19 @@ class ChatService:
             yield StreamChunk(type="done", session_id=session_id,
                               content="Action cancelled.", finish_reason="cancelled")
             return
+
+        # Authority gate — an access-governing mutation only runs for an Administration admin.
+        if flows.is_access_mutation(tool_name):
+            allowed, why = await flows.authorize_onboarding(request_headers)
+            if not allowed:
+                log.bind(func="access_gate", event="access_denied",
+                         tool=tool_name).warning("access mutation refused at confirm (stream)")
+                session_service.save(session)
+                if turn:
+                    turn.finish("stop")
+                yield StreamChunk(type="done", session_id=session_id, content=why,
+                                  finish_reason="stop")
+                return
 
         yield StreamChunk(type="tool_use", session_id=session_id, content=_friendly_status(tool_name))
         with turn.phase("tools"):
@@ -1189,6 +1229,16 @@ class ChatService:
                 assistant_message="Action cancelled by user.",
                 finish_reason="cancelled",
             )
+
+        # Authority gate — an access-governing mutation only runs for an Administration admin.
+        if flows.is_access_mutation(pending.tool_name):
+            allowed, why = await flows.authorize_onboarding(request_headers)
+            if not allowed:
+                log.bind(func="access_gate", event="access_denied",
+                         tool=pending.tool_name).warning("access mutation refused at confirm (sync)")
+                session_service.save(session)
+                return ChatResponse(session_id=session_id, message_id=str(uuid.uuid4()),
+                                    assistant_message=why, finish_reason="stop")
 
         # Execute the confirmed tool
         result = await tool_registry.execute(pending.tool_name, pending.tool_args, request_headers)
