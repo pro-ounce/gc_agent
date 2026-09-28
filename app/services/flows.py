@@ -231,6 +231,26 @@ async def _roles(headers: dict[str, str] | None, app_id: Any) -> list[dict[str, 
     return out
 
 
+async def _menus(headers: dict[str, str] | None, app_id: Any) -> list[dict[str, Any]]:
+    """Menus for an application as {id, name} — the attach-a-menu picker for role creation
+    (getAllMenus_post{applicationId}, the same source the admin app's role form uses)."""
+    out: list[dict[str, Any]] = []
+    try:
+        res = await tool_registry.execute("getAllMenus_post", {"applicationId": app_id}, headers)
+        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        seen: set[str] = set()
+        for m in (data or []):
+            if not isinstance(m, dict) or str(m.get("enabled", "Y")).upper() == "N":
+                continue
+            name = str(m.get("menuName") or m.get("menuCode") or "").strip()
+            if name and name.lower() not in seen and m.get("menuId") not in (None, ""):
+                seen.add(name.lower())
+                out.append({"id": m.get("menuId"), "name": name})
+    except Exception as exc:  # noqa: BLE001
+        log.bind(func="flow_menus").warning(f"menu list failed: {exc}")
+    return out
+
+
 def _match(msg: str, items: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Resolve a free-text line to one item by name/code — exact, then contains."""
     m = msg.strip().lower()
@@ -1323,6 +1343,10 @@ _ENTITY_CREATE: dict[str, dict[str, Any]] = {
             EField("role", "A short **role code**? _(e.g. BUDGET_VIEWER)_", suggest_from="roleName"),
             EField("roleDescription", "A one-line **description** of the role?"),
             EField("isAdmin", "Is this an **admin** role?", kind="yesno"),
+            # A role must carry an attached menu (ApplicationRole.menuId). Required — pick from
+            # the app's menus, or type a menu name.
+            EField("menuId", "Which **menu** should this role open? _(the role's attached menu)_",
+                   kind="menu_picker"),
         ),
         "defaults": {"enabled": "Y", "isChatbot": "N"},
     },
@@ -1332,7 +1356,7 @@ _ENTITY_CREATE: dict[str, dict[str, Any]] = {
             EField("applicationId", "Which **application** is this menu for?", kind="app_picker"),
             EField("menuName", "What's the **menu name**?"),
             EField("menuCode", "A short **menu code**?", suggest_from="menuName"),
-            EField("menuType", "What's the **menu type**? _(e.g. MODULE, SCREEN, REPORT)_"),
+            EField("menuType", "What's the **menu type**? _(e.g. STANDARD)_"),
             EField("menuDesc", "A short **description**?", optional=True),
         ),
         "defaults": {"enabled": "Y"},
@@ -1446,6 +1470,15 @@ async def _efield_step(flow: dict[str, Any], f: "EField", headers: dict[str, str
         flow.setdefault("_opts", {})["role"] = roles
         chips, note = _list_chips(roles, "role", [_chip("Cancel", "cancel", icon="skip")]) if roles else ([], "")
         return FlowResult(message=f"{prefix}{f.prompt}{note}", suggestions=chips or None)
+    if f.kind == "menu_picker":
+        app_id = (flow.get("data") or {}).get("applicationId")
+        menus = await _menus(headers, app_id)
+        flow.setdefault("_opts", {})["menu"] = menus
+        if not menus:
+            return FlowResult(message=f"{prefix}{f.prompt} _(type the menu name)_",
+                              suggestions=[_chip("Cancel", "cancel", icon="skip")])
+        chips, note = _list_chips(menus, "app", [_chip("Cancel", "cancel", icon="skip")])
+        return FlowResult(message=f"{prefix}{f.prompt}{note}", suggestions=chips)
     if f.kind == "yesno":
         return FlowResult(message=f"{prefix}{f.prompt}",
                           suggestions=[_chip("Yes", "yes", icon="check"), _chip("No", "no", icon="skip")])
@@ -1544,6 +1577,15 @@ async def _entity_create(session: Any, flow: dict[str, Any], msg: str,
         if not role:
             return await _efield_step(flow, f, headers, prefix="Pick a role. ")
         data[f.key] = role["id"]; labels[f.key] = f"{flow.get('_role_app_name','')} · {role['name']}"
+        return await _advance_entity(flow, headers)
+
+    if f.kind == "menu_picker":
+        app_id = data.get("applicationId")
+        menus = (flow.get("_opts", {}) or {}).get("menu") or await _menus(headers, app_id)
+        menu = _match(msg, menus)
+        if not menu:
+            return await _efield_step(flow, f, headers, prefix="Pick a menu from the list, or type its name. ")
+        data[f.key] = menu["id"]; labels[f.key] = menu["name"]
         return await _advance_entity(flow, headers)
 
     if f.kind == "yesno":
