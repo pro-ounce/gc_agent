@@ -442,6 +442,31 @@ def maybe_start(session: Any, message: str, skill: Any = None) -> FlowResult | N
     return None
 
 
+def _should_break_out(flow: dict[str, Any], msg: str) -> bool:
+    """Self-healing: True when `msg` is a clear NEW flow-intent that does NOT belong to the
+    active flow — so a stale/abandoned flow can't swallow it (as a field answer) or let it fall
+    through to the LLM. Only strong, command-like signals qualify (a create VERB + entity noun,
+    a delete-a-role, a skill/baseline intent), and never when it matches the current flow, so a
+    legitimate field value rarely trips it. `workflow` manages its own switch, so it's excluded."""
+    name = flow.get("name")
+    if name == "workflow":
+        return False
+    if _detect_remove_role(msg):
+        return name != "remove_role"
+    ent = _detect_entity(msg)                     # requires a create verb + a concrete entity noun
+    if ent not in (None, "AMBIGUOUS"):
+        if name == "entity_create":
+            return flow.get("entity") != ent
+        if name == "create_user":
+            return ent != "user"
+        return True
+    if _SKILL_INTENT_RE.search(msg):
+        return name != "create_skill"
+    if _BASELINE_INTENT_RE.search(msg):
+        return name != "formulation_baseline"
+    return False
+
+
 async def handle(session: Any, message: str, headers: dict[str, str] | None) -> FlowResult | None:
     """Advance the active flow for this turn. Returns None if no flow is active (fall
     through to normal routing) — including when the user pivots to another known task."""
@@ -454,6 +479,15 @@ async def handle(session: Any, message: str, headers: dict[str, str] | None) -> 
     # FAIL-SAFE: a cancel/abort/stop command exits ANY flow at ANY stage, cleanly.
     if _is_cancel(msg):
         return _cancel_flow(session, flow)
+
+    # SELF-HEALING: a clear new flow-intent that isn't this flow's continuation breaks out —
+    # abandon the stale flow and re-route the message fresh (maybe_start picks it up). This stops
+    # an abandoned flow in a long-lived session from eating "remove a role" / "create a role".
+    if name != "workflow" and _should_break_out(flow, msg):
+        log.bind(func="flow_breakout", flow=name, entity=flow.get("entity")).info(
+            "new intent broke out of a stale flow")
+        session.metadata.pop("flow", None)
+        return FlowResult(message="", reroute=msg, done=True)
 
     if name == "workflow":
         w = _wf.REGISTRY[flow["wf"]]
