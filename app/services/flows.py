@@ -259,6 +259,102 @@ async def _menus(headers: dict[str, str] | None, app_id: Any) -> list[dict[str, 
     return out
 
 
+# ── entity-create guardrails: code style + uniqueness ───────────────────────────
+
+def _codeify(text: Any, maxlen: int = 0) -> str:
+    """Normalize free text to a system code: UPPER_SNAKE, alnum only, trimmed to `maxlen`
+    on an underscore boundary (so a truncation never ends mid-token or with a stray '_')."""
+    s = re.sub(r"[^A-Za-z0-9]+", "_", str(text or "")).strip("_").upper()
+    if maxlen and len(s) > maxlen:
+        s = s[:maxlen].rstrip("_")
+    return s
+
+
+def _unique_code(source: Any, taken: set[str], maxlen: int = 30) -> str:
+    """A code derived from `source` that isn't already in `taken` (compared upper-cased).
+    On collision, append _2, _3, … keeping the whole thing within `maxlen`."""
+    base = _codeify(source, maxlen) or "CODE"
+    if base not in taken:
+        return base
+    i = 2
+    while i < 1000:
+        suffix = f"_{i}"
+        core = _codeify(source, max(1, maxlen - len(suffix))) if maxlen else _codeify(source)
+        cand = f"{core}{suffix}"
+        if cand not in taken:
+            return cand
+        i += 1
+    return base  # give up gracefully; the backend's own constraint is the final authority
+
+
+async def _role_index(headers: dict[str, str] | None, app_id: Any,
+                      flow: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Existing role names (lower) + codes (upper) for one application — the uniqueness set for
+    role creation. Cached on the flow for the turn so name + auto-code checks share one call.
+    Fail-open (empty sets) if the list can't be read; the backend still enforces its constraint."""
+    if flow is not None:
+        c = (flow.get("_opts", {}) or {}).get("_role_idx")
+        if isinstance(c, dict) and c.get("app") == app_id:
+            return c
+    names: set[str] = set()
+    codes: set[str] = set()
+    try:
+        res = await tool_registry.execute("getApplicationRolesByAppId_get", {"applicationId": app_id}, headers)
+        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        for r in (data or []):
+            if not isinstance(r, dict):
+                continue
+            n = str(r.get("roleName") or "").strip().lower()
+            c = str(r.get("role") or "").strip().upper()
+            if n:
+                names.add(n)
+            if c:
+                codes.add(c)
+    except Exception as exc:  # noqa: BLE001 — a guardrail must never crash the turn
+        log.bind(func="flow_role_index").warning(f"role index failed: {exc}")
+    idx = {"app": app_id, "names": names, "codes": codes}
+    if flow is not None:
+        flow.setdefault("_opts", {})["_role_idx"] = idx
+    return idx
+
+
+async def _menu_index(headers: dict[str, str] | None, app_id: Any) -> dict[str, set[str]]:
+    """Existing menu names (lower) + codes (upper) for one application."""
+    names: set[str] = set()
+    codes: set[str] = set()
+    try:
+        res = await tool_registry.execute("getAllMenus_post", {"applicationId": app_id}, headers)
+        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        for m in (data or []):
+            if not isinstance(m, dict):
+                continue
+            n = str(m.get("menuName") or "").strip().lower()
+            c = str(m.get("menuCode") or "").strip().upper()
+            if n:
+                names.add(n)
+            if c:
+                codes.add(c)
+    except Exception as exc:  # noqa: BLE001
+        log.bind(func="flow_menu_index").warning(f"menu index failed: {exc}")
+    return {"names": names, "codes": codes}
+
+
+async def _taken_values(tag: str, data: dict[str, Any], headers: dict[str, str] | None,
+                        flow: dict[str, Any] | None = None) -> set[str]:
+    """The set of values already taken for a uniqueness `tag`, scoped to the target application
+    where relevant. Names come back lower-cased, codes upper-cased (compare accordingly)."""
+    app_id = (data or {}).get("applicationId")
+    if tag == "app_code":
+        return {str(a.get("code", "")).upper() for a in await _apps(headers) if a.get("code")}
+    if tag in ("role_name", "role_code"):
+        idx = await _role_index(headers, app_id, flow)
+        return idx["names"] if tag == "role_name" else idx["codes"]
+    if tag in ("menu_name", "menu_code"):
+        idx = await _menu_index(headers, app_id)
+        return idx["names"] if tag == "menu_name" else idx["codes"]
+    return set()
+
+
 def _match(msg: str, items: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Resolve a free-text line to one item by name/code — exact, then contains."""
     m = msg.strip().lower()
@@ -1319,7 +1415,14 @@ class EField:
     kind: str = "text"                 # text | app_picker | role_picker | yesno
     optional: bool = False
     suggest_from: str = ""             # code field: propose UPPER(other field) as a default
-    unique_among: str = ""             # verify the value isn't already taken: "app_code"
+    unique_among: str = ""             # legacy alias for `unique` (kept for back-compat)
+    # ── guardrails ──────────────────────────────────────────────────────────────
+    auto_from: str = ""                # AUTO-generate a code from this other field (UPPER_SNAKE),
+                                       #   never prompted — computed + de-duped as we advance.
+    maxlen: int = 0                    # reject free text longer than this (DB column width)
+    is_code: bool = False              # normalize entered value to UPPER_SNAKE before storing
+    unique: str = ""                   # uniqueness rule: app_code | role_name | role_code |
+                                       #   menu_name | menu_code (scoped to the app where relevant)
 
 
 # Field lists + defaults VERIFIED against the administration entity contracts (NOT-NULL /
@@ -1331,11 +1434,11 @@ _ENTITY_CREATE: dict[str, dict[str, Any]] = {
     "application": {
         "label": "application", "tool": "addApplication_post",
         "fields": (
-            EField("applicationName", "What's the **application name**?"),
+            EField("applicationName", "What's the **application name**?", maxlen=80),
             EField("applicationCode", "A unique **application code**? _(e.g. BUDGET_ANALYTICS)_",
-                   suggest_from="applicationName", unique_among="app_code"),
-            EField("applicationShortCode", "A brief **short code / abbreviation**? _(e.g. BA)_"),
-            EField("description", "A one-line **description**?"),
+                   suggest_from="applicationName", is_code=True, maxlen=30, unique="app_code"),
+            EField("applicationShortCode", "A brief **short code / abbreviation**? _(e.g. BA)_", maxlen=30),
+            EField("description", "A one-line **description**?", maxlen=4000),
             EField("applicationUrl", "The app **URL path**? _(e.g. /budget-analytics)_"),
             EField("applicationIcon", "The **icon path**? _(e.g. /assets/images/appsIcons/ba.svg)_"),
             EField("appCategory", "A **category**? _(e.g. Planner, Analytics)_", optional=True),
@@ -1348,9 +1451,12 @@ _ENTITY_CREATE: dict[str, dict[str, Any]] = {
         "label": "application role", "tool": "addApplicationRole_post",
         "fields": (
             EField("applicationId", "Which **application** is this role for?", kind="app_picker"),
-            EField("roleName", "What's the role's **display name**? _(e.g. Budget Viewer)_"),
-            EField("role", "A short **role code**? _(e.g. BUDGET_VIEWER)_", suggest_from="roleName"),
-            EField("roleDescription", "A one-line **description** of the role?"),
+            EField("roleName", "What's the role's **display name**? _(e.g. Budget Viewer)_",
+                   maxlen=80, unique="role_name"),
+            # Role code is AUTO-generated from the role name (UPPER_SNAKE, ≤30, de-duped within the
+            # app) — never asked. Kept in the spec so it shows on the rail + confirmation.
+            EField("role", "", auto_from="roleName", is_code=True, maxlen=30, unique="role_code"),
+            EField("roleDescription", "A one-line **description** of the role?", maxlen=1000),
             EField("isAdmin", "Is this an **admin** role?", kind="yesno"),
             # A role must carry an attached menu (ApplicationRole.menuId). Required — pick from
             # the app's menus, or type a menu name.
@@ -1363,10 +1469,11 @@ _ENTITY_CREATE: dict[str, dict[str, Any]] = {
         "label": "menu", "tool": "addMenu_post",
         "fields": (
             EField("applicationId", "Which **application** is this menu for?", kind="app_picker"),
-            EField("menuName", "What's the **menu name**?"),
-            EField("menuCode", "A short **menu code**?", suggest_from="menuName"),
-            EField("menuType", "What's the **menu type**? _(e.g. STANDARD)_"),
-            EField("menuDesc", "A short **description**?", optional=True),
+            EField("menuName", "What's the **menu name**?", maxlen=120, unique="menu_name"),
+            EField("menuCode", "A short **menu code**?", suggest_from="menuName",
+                   is_code=True, maxlen=120, unique="menu_code"),
+            EField("menuType", "What's the **menu type**? _(e.g. STANDARD)_", maxlen=50),
+            EField("menuDesc", "A short **description**?", optional=True, maxlen=255),
         ),
         "defaults": {"enabled": "Y"},
     },
@@ -1548,7 +1655,19 @@ async def _advance_entity(flow: dict[str, Any], headers: dict[str, str] | None,
     if flow["idx"] >= len(spec["fields"]):
         flow["stage"] = "confirm"
         return await _entity_finalize(flow, headers)
-    return await _efield_step(flow, spec["fields"][flow["idx"]], headers, prefix=prefix)
+    f: EField = spec["fields"][flow["idx"]]
+    # Auto-generated code fields (e.g. role code) are never prompted — compute + de-dupe them
+    # from their source field and move straight to the next field.
+    if f.auto_from:
+        data = flow.setdefault("data", {})
+        labels = flow.setdefault("labels", {})
+        source = data.get(f.auto_from) or labels.get(f.auto_from) or ""
+        taken = await _taken_values(f.unique, data, headers, flow) if f.unique else set()
+        value = _unique_code(source, taken, f.maxlen or 30)
+        data[f.key] = value
+        labels[f.key] = f"{value} · auto"
+        return await _advance_entity(flow, headers, prefix=prefix)
+    return await _efield_step(flow, f, headers, prefix=prefix)
 
 
 async def _entity_create(session: Any, flow: dict[str, Any], msg: str,
@@ -1631,15 +1750,28 @@ async def _entity_create(session: Any, flow: dict[str, Any], msg: str,
         if f.optional:
             return await _advance_entity(flow, headers)
         return FlowResult(message=_efield_prompt(f, data))
+    label = _FIELD_LABEL.get(f.key, f.key)
     if f.suggest_from and text.lower() in ("suggest", "suggested", "use suggested", "ok", "yes"):
-        text = re.sub(r"[^A-Za-z0-9]+", "_", str(data.get(f.suggest_from, ""))).strip("_").upper() or text
-    if f.unique_among == "app_code":                 # APPLICATION_CODE is unique — pre-check
-        code = re.sub(r"\s+", "_", text).upper()
-        apps = await _apps(headers)
-        if any(str(a.get("code", "")).upper() == code for a in apps):
-            return FlowResult(message=f"**{code}** is already taken by another application. "
-                                      "Please pick a different code.")
-        text = code
+        text = _codeify(data.get(f.suggest_from, ""), f.maxlen) or text
+    # Code fields: normalize to UPPER_SNAKE (and cap width) before anything else.
+    if f.is_code:
+        text = _codeify(text, f.maxlen)
+        if not text:
+            return FlowResult(message=f"That **{label}** has no letters or digits to build a code "
+                                      "from. Please enter a value with some letters or numbers.")
+    # Length guard (non-code free text): reject over the column width rather than silently truncate.
+    elif f.maxlen and len(text) > f.maxlen:
+        return FlowResult(message=f"That **{label}** is {len(text)} characters — please keep it "
+                                  f"to **{f.maxlen}** or fewer, then send it again.")
+    # Uniqueness guard: name compared lower-cased, code upper-cased, scoped to the app.
+    unique_tag = f.unique or f.unique_among
+    if unique_tag:
+        taken = await _taken_values(unique_tag, data, headers, flow)
+        probe = text.upper() if "code" in unique_tag else text.lower()
+        if probe in taken:
+            where = "" if unique_tag == "app_code" else " in this application"
+            return FlowResult(message=f"**{text}** is already taken as a **{label.lower()}**{where}. "
+                                      f"Please choose a different {label.lower()}.")
     data[f.key] = text; labels[f.key] = text
     return await _advance_entity(flow, headers)
 
