@@ -3,9 +3,12 @@ routers/chat.py
 ───────────────
 Chat endpoints:
   POST /api/chat              — non-streaming chat turn
-  POST /api/chat/stream       — SSE streaming chat
   POST /api/chat/confirm      — confirm / reject a pending tool action
   POST /api/chat/prompt       — render a server-side prompt and chat
+
+Streaming lives on the platform surface the widget/gateway use, NOT here:
+  POST /ai-service/{agent}/reply/stream  → chat_service.reply_stream
+The former POST /api/chat/stream (bare, un-routed) is archived — see the note below.
 """
 from __future__ import annotations
 
@@ -13,11 +16,9 @@ import json
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sse_starlette.sse import EventSourceResponse
 
 from ..commons import metrics as M
 from ..commons.config import cfg
-from ..commons.flags import flags
 from ..commons.logger import get_logger
 from ..models.chat import (
     ChatRequest,
@@ -88,44 +89,12 @@ async def chat(
 
 
 # ── Streaming ─────────────────────────────────────────────────────────────────
-
-@router.post("/stream", summary="Stream a chat response via Server-Sent Events")
-async def chat_stream(
-    body: ChatRequest,
-    request: Request,
-    user: User = Depends(require_permission(Permissions.CHAT_STREAM)),
-):
-    if not flags.streaming_enabled:
-        raise HTTPException(status_code=400, detail="Streaming is disabled")
-
-    log.bind(func="chat_stream", session_id=body.session_id, user_id=user.id).info(
-        "Stream request"
-    )
-
-    async def event_generator():
-        try:
-            async for chunk in chat_service.chat_stream(
-                session_id=body.session_id,
-                user_message=body.message,
-                user_id=user.id,
-                system_prompt=body.system_prompt,
-            ):
-                yield {"data": chunk.model_dump_json()}
-                if chunk.type == "done":
-                    break
-        except Exception as exc:
-            log.exception(f"Stream error: {exc}")
-            from ..models.chat import StreamChunk
-
-            yield {
-                "data": StreamChunk(
-                    type="error",
-                    session_id=body.session_id,
-                    error=str(exc),
-                ).model_dump_json()
-            }
-
-    return EventSourceResponse(event_generator())
+# ARCHIVED: the old `POST /api/chat/stream` route (backed by chat_service.chat_stream,
+# a bare LLM passthrough with NO guided-flow / skill / confirmation routing) has been
+# removed — nothing consumed it, and it silently produced un-routed LLM answers.
+# The real streaming surface is the platform endpoint the widget/gateway uses:
+#   POST /ai-service/{agent}/reply/stream  → chat_service.reply_stream (full routing)
+# Do NOT re-add a streaming route here that bypasses reply_stream's flow routing.
 
 
 # ── Confirm / reject pending action ───────────────────────────────────────────

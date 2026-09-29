@@ -57,9 +57,10 @@ See `.env.example` for the full list.
 |---|---|---|
 | `GET` | `/health` | Health probe (includes MCP backend status) |
 | `POST` | `/api/chat` | Send message, get complete response |
-| `POST` | `/api/chat/stream` | SSE streaming chat |
 | `POST` | `/api/chat/confirm` | Confirm / reject a pending tool action |
 | `POST` | `/api/chat/prompt` | Render a server-side MCP prompt and chat |
+| `POST` | `/ai-service/{agent}/reply` | Widget/gateway chat turn (fully routed) |
+| `POST` | `/ai-service/{agent}/reply/stream` | Widget/gateway SSE streaming (fully routed) |
 | `GET` | `/api/tools` | List all MCP tools |
 | `GET` | `/api/tools/{name}` | Tool details |
 | `GET` | `/api/prompts` | List all MCP prompts |

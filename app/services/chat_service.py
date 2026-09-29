@@ -420,35 +420,12 @@ class ChatService:
 
     # ── Streaming chat ────────────────────────────────────────────────────────
 
-    async def chat_stream(
-        self,
-        session_id: str,
-        user_message: str,
-        user_id: str | None = None,
-        system_prompt: str | None = None,
-    ) -> AsyncIterator[StreamChunk]:
-        session = session_service.get_or_create(session_id, user_id)
-        session.add_user(user_message)
-        session_service.save(session)
-
-        system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT)
-        tools = await tool_registry.as_tools()
-        messages = session.to_llm_messages()
-
-        full_text = ""
-        async for chunk in llm().stream(messages, tools, system):
-            full_text += chunk
-            yield StreamChunk(type="delta", session_id=session_id, content=chunk)
-
-        session.add_assistant(full_text)
-        session_service.save(session)
-
-        yield StreamChunk(
-            type="done",
-            session_id=session_id,
-            content=full_text,
-            finish_reason="stop",
-        )
+    # ARCHIVED: `chat_stream` (a bare llm().stream passthrough with NO guided-flow / skill /
+    # confirmation routing) was removed. It backed the unused POST /api/chat/stream route and
+    # silently produced un-routed LLM answers (e.g. treating "remove a role" as an un-assign).
+    # The real streaming entrypoint is `reply_stream` (below), used by the platform endpoint
+    # POST /ai-service/{agent}/reply/stream that the widget/gateway call. Do not reintroduce a
+    # streaming method that bypasses reply_stream's routing.
 
     # ── Guided-flow helpers ───────────────────────────────────────────────────
 
