@@ -141,7 +141,7 @@ def _chip(label: str, send: str | None = None, icon: str | None = None) -> dict[
 
 
 _FLOWS = ("onboard", "create_user", "create_skill", "data_call", "formulation_baseline",
-          "workflow", "entity_create")
+          "workflow", "entity_create", "remove_role")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _SKILL_INTENT_RE = re.compile(
     r"\b(create|add|make|build|teach|define|register)\b.{0,20}\b(skill|capabilit(y|ies)|"
@@ -413,6 +413,10 @@ def maybe_start(session: Any, message: str, skill: Any = None) -> FlowResult | N
     # Formulation baseline generation → open the guided flow (mutation stays flow-gated).
     if _BASELINE_INTENT_RE.search(message or ""):
         return start_formulation_baseline(session)
+    # Remove a role definition → guided, dependency-previewed, confirm-gated delete. Detected
+    # before the create front door; un-assigning a role from a user is NOT caught here.
+    if _detect_remove_role(message or ""):
+        return start_remove_role(session)
     # Entity onboarding front door: disambiguate onboard/create BEFORE a skill can pin a
     # wrong-entity mutation ("create a role" must not become assign_access; a bare "onboard"
     # must ask, not create a user). A fully-detailed create-user message (has an email) still
@@ -508,6 +512,9 @@ async def handle(session: Any, message: str, headers: dict[str, str] | None) -> 
     if name == "entity_create":
         fr = await _entity_create(session, flow, msg, headers)
         return _ep(fr, session.metadata.get("flow"))
+
+    if name == "remove_role":
+        return await _remove_role(session, flow, msg, headers)
 
     return None
 
@@ -1822,6 +1829,200 @@ def _ep(fr: "FlowResult | None", flow: dict[str, Any] | None) -> "FlowResult | N
     return fr
 
 
+# ── Remove an application role (guided, dependency-previewed, confirm-gated) ─────
+# Deleting a role definition is a HARD delete that cascades its user→role assignments, so the
+# flow first SURFACES the dependents (assigned users, privileges, the attached menu) and blocks
+# seeded roles — nothing is removed until the user confirms against that dependency list.
+
+_RM_VERB = re.compile(r"\b(remove|delete|drop|deprovision|retire|decommission)\b", re.I)
+_RM_ROLE_OBJ = re.compile(r"\brole\b", re.I)
+# NOT a role-definition delete: un-assigning a role FROM a user, or removing access/privilege —
+# those are handled by the access skills, not by deleting the role itself.
+_RM_UNASSIGN = re.compile(r"\bfrom\b|\bfor\b\s+\w|@|\b(access|assignment|privilege|permission|"
+                          r"membership|grant)\b|\buser\b|\busers\b", re.I)
+
+
+def _detect_remove_role(msg: str) -> bool:
+    """True only for 'delete/remove a ROLE definition' — never for un-assigning a role from a
+    user or removing access (which the access skills own). Precision over recall: bail if unsure."""
+    m = msg or ""
+    if not _RM_VERB.search(m) or not _RM_ROLE_OBJ.search(m):
+        return False
+    if _RM_UNASSIGN.search(m):
+        return False
+    return True
+
+
+async def _roles_full(headers: dict[str, str] | None, app_id: Any) -> list[dict[str, Any]]:
+    """Enabled roles for an app with the fields the remove flow needs (id, name, code, seeded,
+    attached menu, admin/description)."""
+    out: list[dict[str, Any]] = []
+    try:
+        res = await tool_registry.execute("getApplicationRolesByAppId_get", {"applicationId": app_id}, headers)
+        data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        for r in (data or []):
+            if not isinstance(r, dict) or str(r.get("enabled", "Y")).upper() == "N":
+                continue
+            name = str(r.get("roleName") or r.get("role") or "").strip()
+            rid = r.get("applicationRoleId")
+            if name and rid not in (None, ""):
+                out.append({
+                    "id": rid, "name": name, "code": str(r.get("role") or "").strip(),
+                    "seeded": str(r.get("isSeeded") or "").strip().lower() in ("y", "yes", "true", "1"),
+                    "menuName": str(r.get("menuName") or "").strip(),
+                    "menuCode": str(r.get("menuCode") or "").strip(),
+                    "isAdmin": str(r.get("isAdmin") or "").strip(),
+                    "description": str(r.get("roleDescription") or "").strip(),
+                })
+    except Exception as exc:  # noqa: BLE001
+        log.bind(func="flow_roles_full").warning(f"roles_full failed: {exc}")
+    return out
+
+
+async def _role_dependencies(headers: dict[str, str] | None, role_id: Any) -> dict[str, Any]:
+    """What depends on a role: the user→role assignments that a delete would cascade, plus any
+    role privileges. Fail-open (empty) if a source can't be read — the preview says so."""
+    users: list[dict[str, Any]] = []
+    users_ok = True
+    try:
+        res = await tool_registry.execute("getAllUserApplicationRoles_post", {"userName": "*"}, headers)
+        rows = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        if rows is None:
+            users_ok = False
+        rid = str(role_id)
+        for r in (rows or []):
+            if not isinstance(r, dict) or str(r.get("applicationRoleId", "")) != rid:
+                continue
+            nm = (f"{str(r.get('firstName','')).strip()} {str(r.get('lastName','')).strip()}").strip()
+            users.append({"userName": str(r.get("userName") or "").strip(),
+                          "name": nm or str(r.get("userName") or "").strip(),
+                          "enabled": str(r.get("enabled") or "").strip()})
+    except Exception as exc:  # noqa: BLE001
+        users_ok = False
+        log.bind(func="flow_role_deps").warning(f"user assignments read failed: {exc}")
+    privileges = 0
+    try:
+        pr = await tool_registry.execute("getAllAppRolePrivileges_post", {"applicationRoleId": str(role_id)}, headers)
+        pd = pr.output.get("data") if getattr(pr, "success", False) and isinstance(pr.output, dict) else None
+        privileges = len(pd or [])
+    except Exception:  # noqa: BLE001
+        privileges = 0
+    return {"users": users, "users_ok": users_ok, "privileges": privileges}
+
+
+def _remove_progress(flow: dict[str, Any]) -> dict[str, Any]:
+    """The workflow rail for the remove-role flow (Application → Role → Dependencies → Confirm)."""
+    stage = flow.get("stage")
+    data = flow.get("data", {}) or {}
+    order = ["pick_app", "pick_role", "confirm"]
+    labels = {"pick_app": ("Application", data.get("appName", "")),
+              "pick_role": ("Role", data.get("roleLabel", "")),
+              "confirm": ("Review dependencies & confirm", "")}
+    cur_i = order.index(stage) if stage in order else 0
+    steps = []
+    for i, k in enumerate(order):
+        lbl, val = labels[k]
+        state = "done" if i < cur_i else "current" if i == cur_i else "todo"
+        steps.append({"label": lbl, "value": str(val), "state": state})
+    return {"title": "Remove application role", "current": cur_i + 1, "total": len(order), "steps": steps}
+
+
+def terminal_progress(flow: dict[str, Any] | None) -> dict[str, Any] | None:
+    """A completed rail for a just-finished flow: every step done + complete=True, so the widget
+    can lock the workflow window as DONE and prompt for the next request instead of it vanishing."""
+    if not flow:
+        return None
+    name = flow.get("name")
+    if name == "entity_create":
+        rail = _entity_progress({**flow, "stage": "confirm"})
+    elif name == "remove_role":
+        rail = _remove_progress({**flow, "stage": "confirm"})
+    else:
+        return None
+    if not rail:
+        return None
+    for s in rail["steps"]:
+        s["state"] = "done"
+    rail["current"] = rail["total"]
+    rail["complete"] = True
+    return rail
+
+
+def start_remove_role(session: Any) -> FlowResult:
+    """Front door for deleting a role definition — arm the flow, ask which application first.
+    (Authority is enforced by the onboarding gate before this is shown.)"""
+    session.metadata["flow"] = {"name": "remove_role", "stage": "pick_app", "data": {}}
+    fr = FlowResult(message=("Let's remove an **application role**. I'll show everything attached "
+                             "to it — assigned users, privileges — before anything is deleted.\n\n"
+                             "Which **application** is the role in? _(type its name)_"))
+    fr.progress = _remove_progress(session.metadata["flow"])
+    return fr
+
+
+async def _remove_role(session: Any, flow: dict[str, Any], msg: str,
+                       headers: dict[str, str] | None) -> FlowResult:
+    stage = flow.get("stage")
+    data = flow.setdefault("data", {})
+
+    if stage == "pick_app":
+        apps = await _apps(headers)
+        app = _match(msg, apps)
+        if not app:
+            chips, note = _list_chips(apps, "app", [_chip("Cancel", "cancel", icon="skip")]) if apps else ([], "")
+            return FlowResult(message=f"Pick the **application** the role is in.{note}", suggestions=chips or None)
+        data["appId"] = app["id"]; data["appName"] = app["name"]
+        flow["stage"] = "pick_role"
+        roles = await _roles_full(headers, app["id"])
+        flow["_roles"] = roles
+        if not roles:
+            session.metadata.pop("flow", None)
+            return FlowResult(message=f"**{app['name']}** has no removable roles.", done=True)
+        chips, note = _list_chips(roles, "role", [_chip("Cancel", "cancel", icon="skip")])
+        fr = FlowResult(message=f"Which **role** in **{app['name']}** should I remove?{note}", suggestions=chips)
+        fr.progress = _remove_progress(flow)
+        return fr
+
+    if stage == "pick_role":
+        roles = flow.get("_roles") or await _roles_full(headers, data.get("appId"))
+        role = _match(msg, roles)
+        if not role:
+            chips, note = _list_chips(roles, "role", [_chip("Cancel", "cancel", icon="skip")]) if roles else ([], "")
+            return FlowResult(message=f"Pick a **role** to remove.{note}", suggestions=chips or None)
+        if role.get("seeded"):
+            session.metadata.pop("flow", None)
+            return FlowResult(message=(f"**{role['name']}** is a **seeded** role and can't be deleted "
+                                       "(the platform protects seeded data). Nothing was changed."), done=True)
+        data["roleId"] = role["id"]; data["roleName"] = role["name"]; data["roleCode"] = role.get("code", "")
+        data["roleLabel"] = f"{data['appName']} · {role['name']}"
+        flow["stage"] = "confirm"
+        deps = await _role_dependencies(headers, role["id"])
+        users = deps["users"]; privs = deps["privileges"]
+        # Dependency block for the confirmation.
+        lines = [f"Ready to remove **{role['name']}** _(`{role.get('code','')}`)_ from "
+                 f"**{data['appName']}**. Here's what's attached:"]
+        if not deps["users_ok"]:
+            lines.append("- ⚠️ **Assigned users:** couldn't be read just now — please double-check in Administration.")
+        elif users:
+            names = ", ".join(u["name"] for u in users[:8]) + ("…" if len(users) > 8 else "")
+            lines.append(f"- 👥 **{len(users)} user(s)** currently hold this role and **will lose it**: {names}")
+        else:
+            lines.append("- 👥 **No users** are assigned this role.")
+        if privs:
+            lines.append(f"- 🔑 **{privs} privilege row(s)** on this role will be removed.")
+        if role.get("menuName"):
+            lines.append(f"- 📄 Attached menu **{role['menuName']}** stays — only the role is deleted.")
+        lines.append("\n**This hard delete can't be undone.** Shall I go ahead?")
+        summary = "\n".join(lines)
+        fr = FlowResult(message=summary,
+                        pending={"tool_name": "deleteApplicationRoleById_delete",
+                                 "tool_args": {"applicationRoleId": str(role["id"])},
+                                 "summary": summary})
+        fr.progress = _remove_progress(flow)
+        return fr
+
+    return FlowResult(message="Please use **Confirm** or **Cancel** above to finish removing the role.")
+
+
 async def _start_menu_subflow(session: Any, role_flow: dict[str, Any],
                               headers: dict[str, str] | None) -> FlowResult:
     """Dependency chain: the role needs a menu that doesn't exist yet — suspend the role flow,
@@ -1885,7 +2086,7 @@ ENTITY_CREATE_TOOLS = frozenset(spec["tool"] for spec in _ENTITY_CREATE.values()
 _ADMIN_APP_CODE = "ADMINISTRATION"
 _ADMIN_ROLE_FALLBACK = frozenset({"SUPER_ADMIN", "SYSTEM_ADMIN", "GC_ADMIN", "BUDGET_ADMIN"})
 _ADMIN_ROLES_CACHE: dict[str, Any] = {"codes": None, "ts": 0.0}
-_ONBOARDING_FLOWS = frozenset({"create_user", "entity_create", "onboard"})
+_ONBOARDING_FLOWS = frozenset({"create_user", "entity_create", "onboard", "remove_role"})
 
 
 def is_onboarding_flow(session: Any) -> bool:
@@ -1948,6 +2149,7 @@ ACCESS_MUTATION_TOOLS = frozenset(ENTITY_CREATE_TOOLS) | {
     "addUsersWithRoleToApp_post", "assignApplicationRolesToUser_post",
     "deleteUserApplicationRoleById_delete", "deleteUserApplicationRolesById_delete",
     "deleteUserApplicationById_delete", "updateUserApplicationRoles_put",
+    "deleteApplicationRoleById_delete",   # remove a role definition (guided remove_role flow)
 }
 
 

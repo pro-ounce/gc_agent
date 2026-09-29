@@ -549,9 +549,24 @@ class ChatService:
             fr = flows.baseline_after_generate(session)
             if fr is not None:
                 return _fr(fr)
+        # ── Remove a role definition: single confirmed delete → end the flow ──
+        if flows.is_active(session) and tool_name == "deleteApplicationRoleById_delete":
+            session.metadata["_flow_complete"] = flows.terminal_progress(session.metadata.get("flow"))
+            session.metadata.pop("flow", None)
+            nxt = [Suggestion(label="Remove another role", send="remove a role", icon="role"),
+                   Suggestion(label="Create a role", send="create a role", icon="plus"),
+                   Suggestion(label="Done", send="done", icon="check")]
+            return f"{final_text}\n\nThe role has been removed. What next?", nxt
         # ── Entity onboarding (user/app/role/menu/privilege): single create → end the flow ──
         if flows.is_active(session) and tool_name in flows.ENTITY_CREATE_TOOLS:
+            session.metadata["_flow_complete"] = flows.terminal_progress(session.metadata.get("flow"))
             session.metadata.pop("flow", None)
+            fu = skills.follow_up_for(tool_name, args)
+            done_line = fu or "All set — that's created."
+            nxt = [Suggestion(label="Create another", send="create a role", icon="plus"),
+                   Suggestion(label="Assign it to a user", send="assign a role to a user", icon="role"),
+                   Suggestion(label="Done", send="done", icon="check")]
+            return f"{final_text}\n\n{done_line} What next?", nxt
         fu = skills.follow_up_for(tool_name, args)
         return (f"{final_text}\n\n{fu}" if fu else final_text), []
 
@@ -797,7 +812,9 @@ class ChatService:
                               finish_reason="confirm_required")
             return
         yield StreamChunk(type="done", session_id=session_id, content=lead,
-                          blocks=blocks, suggestions=suggestions, finish_reason="stop")
+                          blocks=blocks, suggestions=suggestions,
+                          progress=session.metadata.pop("_flow_complete", None),
+                          finish_reason="stop")
 
     async def _stream_loop(
         self,
@@ -1315,7 +1332,8 @@ class ChatService:
             blocks=blocks,
             suggestions=suggestions,
             pending_action=chained,
-            progress=session.metadata.pop("_chain_progress", None) if chained else None,
+            progress=(session.metadata.pop("_chain_progress", None) if chained
+                      else session.metadata.pop("_flow_complete", None)),
             ack=session.metadata.pop("_chain_ack", None) if chained else None,
             tool_calls_made=[pending.tool_name],
             finish_reason="confirm_required" if chained else "stop",
