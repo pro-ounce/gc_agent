@@ -96,6 +96,15 @@ async def run() -> list[tuple[str, bool, str]]:
     fr = await _send(s, flow, "Budget Viewer")            # duplicate role name
     check("role name duplicate rejected", "already taken" in (fr.message or "").lower(), fr.message)
     check("role name dup keeps field (idx==1)", flow["idx"] == 1, f"idx={flow['idx']}")
+    # Regression: the flow (with the role-index cache) is JSON-serialized into the session each
+    # turn — a set in there raises "Object of type set is not JSON serializable" (a live 500).
+    import json as _json
+    try:
+        _json.dumps(s.metadata)
+        _ser_ok = True
+    except TypeError as _e:
+        _ser_ok = False
+    check("flow metadata stays JSON-serializable", _ser_ok, "session metadata has a non-JSON value")
 
     fr = await _send(s, flow, "Budget Reviewer")          # unique name → auto code, advance
     check("role code auto-generated", flow["data"].get("role") == "BUDGET_REVIEWER", flow["data"].get("role"))

@@ -291,11 +291,13 @@ async def _role_index(headers: dict[str, str] | None, app_id: Any,
                       flow: dict[str, Any] | None = None) -> dict[str, Any]:
     """Existing role names (lower) + codes (upper) for one application — the uniqueness set for
     role creation. Cached on the flow for the turn so name + auto-code checks share one call.
-    Fail-open (empty sets) if the list can't be read; the backend still enforces its constraint."""
+    Fail-open (empty sets) if the list can't be read; the backend still enforces its constraint.
+    NB: the cache is stored as LISTS (the flow is JSON-serialized into the session — a set would
+    raise "Object of type set is not JSON serializable"); sets are rebuilt on read."""
     if flow is not None:
         c = (flow.get("_opts", {}) or {}).get("_role_idx")
         if isinstance(c, dict) and c.get("app") == app_id:
-            return c
+            return {"app": app_id, "names": set(c.get("names") or []), "codes": set(c.get("codes") or [])}
     names: set[str] = set()
     codes: set[str] = set()
     try:
@@ -313,8 +315,8 @@ async def _role_index(headers: dict[str, str] | None, app_id: Any,
     except Exception as exc:  # noqa: BLE001 — a guardrail must never crash the turn
         log.bind(func="flow_role_index").warning(f"role index failed: {exc}")
     idx = {"app": app_id, "names": names, "codes": codes}
-    if flow is not None:
-        flow.setdefault("_opts", {})["_role_idx"] = idx
+    if flow is not None:                                  # store JSON-safe lists, not sets
+        flow.setdefault("_opts", {})["_role_idx"] = {"app": app_id, "names": sorted(names), "codes": sorted(codes)}
     return idx
 
 
