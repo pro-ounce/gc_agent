@@ -1664,6 +1664,11 @@ def _efield_prompt(f: "EField", data: dict[str, Any] | None = None) -> str:
         sug = re.sub(r"[^A-Za-z0-9]+", "_", str(data[f.suggest_from])).strip("_").upper()
         if sug:
             p += f" (suggested: {sug})"
+    # A role description: show a generic example built from the role name already given, so the
+    # user has a concrete pattern to follow instead of a blank prompt.
+    if f.key == "roleDescription" and data and str(data.get("roleName", "")).strip():
+        rn = str(data["roleName"]).strip()
+        p += f' (e.g. "{rn} — reviews and approves requests")'
     return p
 
 
