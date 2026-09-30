@@ -148,6 +148,19 @@ def _chip(label: str, send: str | None = None, icon: str | None = None,
 _FLOWS = ("onboard", "create_user", "create_skill", "data_call", "formulation_baseline",
           "workflow", "entity_create", "remove_role")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# Strong, command-like READ / navigation intents (the widget's quick-actions). None of these is a
+# plausible free-text field value, so when one arrives mid-flow it's a pivot to a different task —
+# the active flow must step aside rather than swallow it as an answer. Anchored to the whole message
+# (allowing a leading polite/question lead-in) to avoid tripping on an incidental word in a value.
+_READ_INTENT_RE = re.compile(
+    r"^\s*(?:(?:please|can\s+(?:you|i)|could\s+you|i'?d?\s+(?:like|want)\s+to|"
+    r"show(?:\s+me)?|list|view|see|go\s+to|open|what(?:'?s| is| are))\s+){0,3}"
+    r"(?:my\s+(?:access|roles?|applications?|apps?|permissions?|licen[sc]es?)\b"
+    r"|roles?\s+in\b"
+    r"|(?:look\s?up|lookup|find|search(?:\s+for)?)\b[^.?]{0,20}\blicen[sc]e"
+    r"|licen[sc]e\s+(?:by|id|number|#|key)"
+    r"|about\s+smart\s?hub\b)",
+    re.I)
 _SKILL_INTENT_RE = re.compile(
     r"\b(create|add|make|build|teach|define|register)\b.{0,20}\b(skill|capabilit(y|ies)|"
     r"new (action|command|ability))\b", re.I)
@@ -485,6 +498,10 @@ def _should_break_out(flow: dict[str, Any], msg: str) -> bool:
         return name != "create_skill"
     if _BASELINE_INTENT_RE.search(msg):
         return name != "formulation_baseline"
+    # A clear read/navigation command (e.g. "my access", "roles in Smart HuB", "look up a license")
+    # never belongs to a create/remove flow, so it breaks out rather than being eaten as a value.
+    if _READ_INTENT_RE.search(msg):
+        return True
     return False
 
 
