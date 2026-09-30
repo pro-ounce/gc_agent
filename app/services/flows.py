@@ -139,8 +139,10 @@ class FlowResult:
     # hint popover shows this un-capped list under "All …". Empty for non-picker / free-text steps.
 
 
-def _chip(label: str, send: str | None = None, icon: str | None = None) -> dict[str, Any]:
-    return {"label": label, "send": send if send is not None else label, "icon": icon}
+def _chip(label: str, send: str | None = None, icon: str | None = None,
+          selectable: bool = True) -> dict[str, Any]:
+    return {"label": label, "send": send if send is not None else label, "icon": icon,
+            "selectable": selectable}
 
 
 _FLOWS = ("onboard", "create_user", "create_skill", "data_call", "formulation_baseline",
@@ -376,17 +378,18 @@ def _match(msg: str, items: list[dict[str, Any]]) -> dict[str, Any] | None:
 
 
 def _list_chips(items: list[dict[str, Any]], icon: str, tail: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str]:
+    # The offered chips are capped at MAX_CHIPS; the FULL list is surfaced by the widget's hint
+    # popover (field_options), so no "showing N of M" note is needed here anymore.
     chips = [_chip(it["name"], it["name"], icon=icon) for it in items[:MAX_CHIPS]]
-    note = ""
-    if len(items) > MAX_CHIPS:
-        note = f"\n\n_Showing {MAX_CHIPS} of {len(items)} — or just type a name._"
-    return chips + tail, note
+    return chips + tail, ""
 
 
-def _all_options(items: list[dict[str, Any]], icon: str) -> list[dict[str, Any]]:
-    """The UN-capped option list for a picker step — the widget's hint popover renders this under
-    "All …" (the offered `suggestions` are capped at MAX_CHIPS). Same chip shape as `_list_chips`,
-    de-duplicated by name, no control tail."""
+def _all_options(items: list[dict[str, Any]], icon: str,
+                 selectable: bool = True) -> list[dict[str, Any]]:
+    """The UN-capped list of existing rows for a step — the widget's hint popover renders it.
+    ``selectable=True`` → the user can pick one (apps, menus). ``selectable=False`` → shown for
+    reference only, greyed + "in use" (existing role names/codes that can't be duplicated).
+    De-duplicated by name; no control tail."""
     seen: set[str] = set()
     out: list[dict[str, Any]] = []
     for it in items:
@@ -394,7 +397,7 @@ def _all_options(items: list[dict[str, Any]], icon: str) -> list[dict[str, Any]]
         if not name or name.lower() in seen:
             continue
         seen.add(name.lower())
-        out.append(_chip(name, name, icon=icon))
+        out.append(_chip(name, name, icon=icon, selectable=selectable))
     return out
 
 
@@ -727,7 +730,7 @@ async def _create(session: Any, flow: dict[str, Any], msg: str, headers: dict[st
         flow["stage"] = "username"
         suggested = (data.get("firstName", "")[:1] + msg).upper().replace(" ", "")
         return FlowResult(
-            message=f"What **username** should they sign in with? _(e.g. {suggested})_")
+            message=f"What **username** should they sign in with? (e.g. {suggested})")
 
     if stage == "username":
         uname = msg.strip().upper().replace(" ", "")
@@ -819,7 +822,7 @@ def start_create_skill(session: Any, message: str = "") -> FlowResult:
                                    "should **trigger** it? List a few, comma-separated."))
     return FlowResult(message=(
         "Let's teach me a new skill. In one sentence, what should it **do**? "
-        "_(e.g. “deactivate a user account”, “add a license to an organization”)_"))
+        "(e.g. “deactivate a user account”, “add a license to an organization”)"))
 
 
 def _skill_confirm(data: dict[str, Any]) -> FlowResult:
@@ -856,7 +859,7 @@ async def _create_skill(session: Any, flow: dict[str, Any], msg: str, headers: d
         flow["stage"] = "keywords"
         return FlowResult(message=(f"Got it — “{data['summary']}”. What words or phrases should "
                                    "**trigger** it? List a few, comma-separated. "
-                                   "_(e.g. deactivate user, disable account)_"))
+                                   "(e.g. deactivate user, disable account)"))
 
     if stage == "keywords":
         kws = [k.strip().lower() for k in re.split(r"[,;]", msg) if k.strip()]
@@ -915,7 +918,7 @@ async def _create_skill(session: Any, flow: dict[str, Any], msg: str, headers: d
         low = msg.lower()
         if any(w in low for w in ("change", "adjust", "edit", "different")):
             flow["stage"] = "edit_fields"
-            return FlowResult(message="Type the fields it should ask the user for, comma-separated _(or say “none”)_.")
+            return FlowResult(message="Type the fields it should ask the user for, comma-separated (or say “none”).")
         flow["stage"] = "confirm"
         return _skill_confirm(data)
 
@@ -1150,7 +1153,7 @@ BASELINE_STEPS: tuple[PickerStep, ...] = (
     PickerStep("acquisitionVehicles", "Choose acquisition vehicle(s) — or select all",
                "getActiveAcquisitionVehicleMappingsIds_post",
                "acquisitionVehicleName", "acquisitionVehicleId", multi=True, optional=True),
-    PickerStep("quarter", "Choose a quarter _(optional)_",
+    PickerStep("quarter", "Choose a quarter (optional)",
                static_options=("Q1", "Q2", "Q3", "Q4"), optional=True),
     PickerStep("isTargetApplicable", "Is **target** applicable?", static_options=("Y", "N")),
     PickerStep("isRecommended", "Include **recommended** requests?", static_options=("Y", "N")),
@@ -1270,7 +1273,7 @@ async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
     options = options if options is not None else await _fetch_options(step, headers)
     flow.setdefault("opts", {})[step.field] = options          # cache for matching/summary
     if not options:
-        return FlowResult(message=f"{prefix}{step.prompt} _(type a value)_",
+        return FlowResult(message=f"{prefix}{step.prompt} (type a value)",
                           suggestions=_baseline_control_chips(step, bool(flow.get("buf"))))
     icon = "role" if step.multi else "app"
     chips = [_chip(str(o["label"]), str(o["label"]), icon=icon) for o in options[:MAX_CHIPS]]
@@ -1285,9 +1288,9 @@ def _baseline_summary(flow: dict[str, Any]) -> str:
     for f in BASELINE_CONFIRM_FIELDS:
         val = labels.get(f)
         if val in (None, "", [], {}):
-            val = "_(all)_" if f in ("orgIds", "requestTypes", "acquisitionVehicles") else "—"
+            val = "(all)" if f in ("orgIds", "requestTypes", "acquisitionVehicles") else "—"
         elif isinstance(val, list):
-            val = ", ".join(str(x) for x in val) or "_(all)_"
+            val = ", ".join(str(x) for x in val) or "(all)"
         lines.append(f"- **{BASELINE_LABELS.get(f, f)}:** {val}")
     body = "\n".join(lines)
     return ("Ready to generate this **FORMULATION baseline**:\n"
@@ -1496,13 +1499,13 @@ _ENTITY_CREATE: dict[str, dict[str, Any]] = {
         "label": "application", "tool": "addApplication_post",
         "fields": (
             EField("applicationName", "What's the **application name**?", maxlen=80),
-            EField("applicationCode", "A unique **application code**? _(e.g. BUDGET_ANALYTICS)_",
+            EField("applicationCode", "A unique **application code**? (e.g. BUDGET_ANALYTICS)",
                    suggest_from="applicationName", is_code=True, maxlen=30, unique="app_code"),
-            EField("applicationShortCode", "A brief **short code / abbreviation**? _(e.g. BA)_", maxlen=30),
+            EField("applicationShortCode", "A brief **short code / abbreviation**? (e.g. BA)", maxlen=30),
             EField("description", "A one-line **description**?", maxlen=4000),
-            EField("applicationUrl", "The app **URL path**? _(e.g. /budget-analytics)_"),
-            EField("applicationIcon", "The **icon path**? _(e.g. /assets/images/appsIcons/ba.svg)_"),
-            EField("appCategory", "A **category**? _(e.g. Planner, Analytics)_", optional=True),
+            EField("applicationUrl", "The app **URL path**? (e.g. /budget-analytics)"),
+            EField("applicationIcon", "The **icon path**? (e.g. /assets/images/appsIcons/ba.svg)"),
+            EField("appCategory", "A **category**? (e.g. Planner, Analytics)", optional=True),
         ),
         "defaults": {"enabled": "Y", "isDefault": "N", "appState": "", "appType": "",
                      "applicationVersion": "1"},
@@ -1512,7 +1515,7 @@ _ENTITY_CREATE: dict[str, dict[str, Any]] = {
         "label": "application role", "tool": "addApplicationRole_post",
         "fields": (
             EField("applicationId", "Which **application** is this role for?", kind="app_picker"),
-            EField("roleName", "What's the role's **display name**? _(e.g. Budget Viewer)_",
+            EField("roleName", "What's the role's **display name**? (e.g. Budget Viewer)",
                    maxlen=80, unique="role_name"),
             # Role code is AUTO-generated from the role name (UPPER_SNAKE, ≤30, de-duped within the
             # app) — never asked. Kept in the spec so it shows on the rail + confirmation.
@@ -1521,7 +1524,7 @@ _ENTITY_CREATE: dict[str, dict[str, Any]] = {
             EField("isAdmin", "Is this an **admin** role?", kind="yesno"),
             # A role must carry an attached menu (ApplicationRole.menuId). Required — pick from
             # the app's menus, or type a menu name.
-            EField("menuId", "Which **menu** should this role open? _(the role's attached menu)_",
+            EField("menuId", "Which **menu** should this role open? (the role's attached menu)",
                    kind="menu_picker"),
         ),
         "defaults": {"enabled": "Y", "isChatbot": "N"},
@@ -1533,7 +1536,7 @@ _ENTITY_CREATE: dict[str, dict[str, Any]] = {
             EField("menuName", "What's the **menu name**?", maxlen=120, unique="menu_name"),
             EField("menuCode", "A short **menu code**?", suggest_from="menuName",
                    is_code=True, maxlen=120, unique="menu_code"),
-            EField("menuType", "What's the **menu type**? _(e.g. STANDARD)_", maxlen=50),
+            EField("menuType", "What's the **menu type**? (e.g. STANDARD)", maxlen=50),
             EField("menuDesc", "A short **description**?", optional=True, maxlen=255),
         ),
         "defaults": {"enabled": "Y"},
@@ -1624,7 +1627,7 @@ def _efield_prompt(f: "EField", data: dict[str, Any] | None = None) -> str:
     if f.suggest_from and data and data.get(f.suggest_from):
         sug = re.sub(r"[^A-Za-z0-9]+", "_", str(data[f.suggest_from])).strip("_").upper()
         if sug:
-            p += f" _(suggested: {sug})_"
+            p += f" (suggested: {sug})"
     return p
 
 
@@ -1667,13 +1670,22 @@ async def _efield_step(flow: dict[str, Any], f: "EField", headers: dict[str, str
         tail = [_chip("Create a new menu instead", "create a new menu first", icon="plus"),
                 _chip("Cancel", "cancel", icon="skip")]
         if not menus:
-            return FlowResult(message=f"{prefix}{f.prompt} _(type the menu name)_", suggestions=tail)
+            return FlowResult(message=f"{prefix}{f.prompt} (type the menu name)", suggestions=tail)
         chips, note = _list_chips(menus, "app", tail)
         return FlowResult(message=f"{prefix}{f.prompt}{note}", suggestions=chips,
                           field_options=_all_options(menus, "menu-2"))
     if f.kind == "yesno":
         return FlowResult(message=f"{prefix}{f.prompt}",
                           suggestions=[_chip("Yes", "yes", icon="check"), _chip("No", "no", icon="skip")])
+    # Free-text field with a role-name uniqueness rule: surface the EXISTING role names in the
+    # chosen app as "taken" (not selectable), so the user picks a NEW name rather than a duplicate.
+    if getattr(f, "unique", "") == "role_name":
+        app_id = (flow.get("data") or {}).get("applicationId")
+        if app_id not in (None, ""):
+            roles = await _roles(headers, app_id)
+            if roles:
+                return FlowResult(message=f"{prefix}{_efield_prompt(f, flow.get('data'))}",
+                                  field_options=_all_options(roles, "role", selectable=False))
     return FlowResult(message=f"{prefix}{_efield_prompt(f, flow.get('data'))}")
 
 
@@ -1704,7 +1716,7 @@ async def _entity_finalize(flow: dict[str, Any], headers: dict[str, str] | None)
             val = "—"
         lines.append(f"- **{f.key}:** {val}")
     if spec.get("auto_order"):
-        lines.append(f"- **applicationOrder:** {args['applicationOrder']} _(auto)_")
+        lines.append(f"- **applicationOrder:** {args['applicationOrder']} (auto)")
     summary = (f"Ready to create this **{spec['label']}**:\n" + "\n".join(lines)
                + "\n\nShall I go ahead?")
     return FlowResult(message=summary,
@@ -2011,7 +2023,7 @@ def start_remove_role(session: Any) -> FlowResult:
     session.metadata["flow"] = {"name": "remove_role", "stage": "pick_app", "data": {}}
     fr = FlowResult(message=("Let's remove an **application role**. I'll show everything attached "
                              "to it — assigned users, privileges — before anything is deleted.\n\n"
-                             "Which **application** is the role in? _(type its name)_"))
+                             "Which **application** is the role in? (type its name)"))
     fr.progress = _remove_progress(session.metadata["flow"])
     return fr
 
@@ -2055,7 +2067,7 @@ async def _remove_role(session: Any, flow: dict[str, Any], msg: str,
         deps = await _role_dependencies(headers, role["id"])
         users = deps["users"]; privs = deps["privileges"]
         # Dependency block for the confirmation.
-        lines = [f"Ready to remove **{role['name']}** _(`{role.get('code','')}`)_ from "
+        lines = [f"Ready to remove **{role['name']}** (`{role.get('code','')}`) from "
                  f"**{data['appName']}**. Here's what's attached:"]
         if not deps["users_ok"]:
             lines.append("- ⚠️ **Assigned users:** couldn't be read just now — please double-check in Administration.")

@@ -67,6 +67,8 @@ class Suggestion(BaseModel):
     label: str
     send: str = ""            # message to prefill on click; falls back to label when blank
     icon: str | None = None   # optional icon key the widget maps (app, role, check, list, …)
+    selectable: bool = True   # false = shown for reference but NOT pickable (e.g. a role name
+    # already in use — can't duplicate); the widget greys it and tags it "in use"
 
 
 class ChatResponse(BaseModel):
