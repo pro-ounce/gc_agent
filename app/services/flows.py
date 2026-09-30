@@ -431,7 +431,8 @@ def start_onboarding(session: Any, first_name: str | None, user_name: str, user_
     )
 
 
-def maybe_start(session: Any, message: str, skill: Any = None) -> FlowResult | None:
+async def maybe_start(session: Any, message: str, headers: dict[str, str] | None = None,
+                      skill: Any = None) -> FlowResult | None:
     """Start a guided flow from a fresh intent (when none is active). A create-user request
     WITHOUT enough detail (no email present) opens the guided intake; a fully-detailed
     'create user … email …' message is left to the normal skill path. `skill` is the
@@ -463,12 +464,12 @@ def maybe_start(session: Any, message: str, skill: Any = None) -> FlowResult | N
             if not re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", message or ""):
                 return start_create(session)
         elif ent in _ENTITY_CREATE:
-            return start_entity_create(session, ent)
+            return await start_entity_create(session, ent, headers)
         elif ent == "AMBIGUOUS":
             from ..services import skills as _sk
             other = _sk.match(message or "")
             if other is None or other.name in ("create_user",):
-                return start_entity_create(session, None)   # ask which entity
+                return await start_entity_create(session, None, headers)   # ask which entity
     from ..services import skills
     sk = skill if skill is not None else skills.match(message or "")
     if sk and sk.name == "create_user" and not re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", message or ""):
@@ -1623,7 +1624,8 @@ def _disambiguate_entity() -> FlowResult:
         suggestions=chips)
 
 
-def start_entity_create(session: Any, entity: str | None) -> FlowResult:
+async def start_entity_create(session: Any, entity: str | None,
+                              headers: dict[str, str] | None = None) -> FlowResult:
     """Front door for entity onboarding. `entity` known → its create flow; None → ask which."""
     if entity == "user":
         return start_create(session)
@@ -1634,9 +1636,13 @@ def start_entity_create(session: Any, entity: str | None) -> FlowResult:
             "idx": 0, "data": {}, "labels": {}}
     session.metadata["flow"] = flow
     spec = _ENTITY_CREATE[entity]
-    return _ep(FlowResult(message=f"Let's set up a new **{spec['label']}**. I'll ask a few things, "
-                                  f"then show everything for your confirmation before anything runs.\n\n"
-                                  + _efield_prompt(spec["fields"][0])), flow)
+    intro = (f"Let's set up a new **{spec['label']}**. I'll ask a few things, "
+             f"then show everything for your confirmation before anything runs.\n\n")
+    # Render the FIRST field through the picker path so its options (chips + the hint popover's
+    # field_options) appear immediately, instead of a bare prompt with nothing to pick.
+    first = await _efield_step(flow, spec["fields"][0], headers)
+    first.message = intro + first.message
+    return _ep(first, flow)
 
 
 def _efield_prompt(f: "EField", data: dict[str, Any] | None = None) -> str:
@@ -1779,7 +1785,7 @@ async def _entity_create(session: Any, flow: dict[str, Any], msg: str,
             if ent in (None, "AMBIGUOUS"):
                 return _disambiguate_entity()
         session.metadata.pop("flow", None)
-        return start_entity_create(session, ent)
+        return await start_entity_create(session, ent, headers)
 
     if stage != "collect":
         return FlowResult(message="Please use **Confirm** or **Cancel** above to finish.")

@@ -270,7 +270,7 @@ class ChatService:
             # Resolve the skill once (keyword, then semantic fallback for paraphrases) and
             # thread it into flow-start so 'onboard a new person' opens the guided intake too.
             skill = skills.match(user_message) or await skills.match_semantic(user_message)
-            started = flows.maybe_start(session, user_message, skill=skill)
+            started = await flows.maybe_start(session, user_message, request_headers, skill=skill)
             started = await self._gate_onboarding(session, started, request_headers)
             if started is not None:
                 return self._flow_response(session, started, source="flow", question=user_message,
@@ -655,7 +655,8 @@ class ChatService:
                 src = "ecosystem"
             if mr is None:      # resolve skill (keyword → semantic) for flow-start + the model
                 skill = skills.match(user_message) or await skills.match_semantic(user_message)
-            started = mr or flows.maybe_start(session, user_message, skill=skill)
+            started = mr if mr is not None else await flows.maybe_start(
+                session, user_message, request_headers, skill=skill)
             if mr is None:      # only a fresh flow needs the onboarding authority gate
                 started = await self._gate_onboarding(session, started, request_headers)
             if started is not None:
