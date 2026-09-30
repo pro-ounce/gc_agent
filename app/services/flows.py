@@ -1555,7 +1555,7 @@ _ENTITY_CREATE: dict[str, dict[str, Any]] = {
             EField("isAdmin", "Is this an **admin** role?", kind="yesno"),
             # A role must carry an attached menu (ApplicationRole.menuId). Required — pick from
             # the app's menus, or type a menu name.
-            EField("menuId", "Which **menu** should this role open?", kind="menu_picker"),
+            EField("menuId", "Which **menu** should be mapped to this role?\n*Menus are the UX screens this role will open.*", kind="menu_picker"),
         ),
         "defaults": {"enabled": "Y", "isChatbot": "N"},
     },
@@ -1662,12 +1662,12 @@ def _efield_prompt(f: "EField", data: dict[str, Any] | None = None) -> str:
     if f.suggest_from and data and data.get(f.suggest_from):
         sug = re.sub(r"[^A-Za-z0-9]+", "_", str(data[f.suggest_from])).strip("_").upper()
         if sug:
-            p += f" (suggested: {sug})"
+            p += f"\n*Suggested: {sug}*"
     # A role description: show a generic example built from the role name already given, so the
     # user has a concrete pattern to follow instead of a blank prompt.
     if f.key == "roleDescription" and data and str(data.get("roleName", "")).strip():
         rn = str(data["roleName"]).strip()
-        p += f' (e.g. "{rn} — reviews and approves requests")'
+        p += f'\n*e.g. "{rn} — reviews and approves requests"*'
     return p
 
 
@@ -1699,8 +1699,8 @@ async def _efield_step(flow: dict[str, Any], f: "EField", headers: dict[str, str
         if flow.get("_menu_stage") != "pick":
             flow["_menu_stage"] = "choice"
             return FlowResult(
-                message=(f"{prefix}A role opens an attached **menu**. Are you ready with the "
-                         "menu, or should I set one up first?"),
+                message=(f"{prefix}A role needs a **menu** mapped to it — the UX screens it opens. "
+                         "Are you ready with the menu, or should I set one up first?"),
                 suggestions=[_chip("Pick an existing menu", "pick an existing menu", icon="menu-2"),
                              _chip("Create a new menu first", "create a new menu first", icon="plus"),
                              _chip("Cancel", "cancel", icon="skip")])
