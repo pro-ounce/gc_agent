@@ -161,6 +161,16 @@ _READ_INTENT_RE = re.compile(
     r"|licen[sc]e\s+(?:by|id|number|#|key)"
     r"|about\s+smart\s?hub\b)",
     re.I)
+# A STANDALONE re-create command — the whole message is essentially "create a new role" /
+# "add another application" etc. (ends right after the entity noun). Used to let a re-issued create
+# restart an active same-entity flow, WITHOUT tripping on a field value that merely contains the
+# words (e.g. a role named "New Role Coordinator" — 'Coordinator' after the noun fails the anchor).
+_STANDALONE_CREATE_RE = re.compile(
+    r"^\s*(?:please\s+|i\s+want\s+to\s+|i'?d\s+like\s+to\s+|let'?s\s+|can\s+(?:you|we)\s+)?"
+    r"(?:create|add|make|new|start|set\s?up|register|provision|build)\s+"
+    r"(?:a\s+|an\s+|another\s+|the\s+)?(?:new\s+)?(?:application\s+)?"
+    r"(users?|applications?|apps?|modules?|roles?|menus?|privileges?|permissions?)\s*$",
+    re.I)
 _SKILL_INTENT_RE = re.compile(
     r"\b(create|add|make|build|teach|define|register)\b.{0,20}\b(skill|capabilit(y|ies)|"
     r"new (action|command|ability))\b", re.I)
@@ -491,9 +501,12 @@ def _should_break_out(flow: dict[str, Any], msg: str) -> bool:
     ent = _detect_entity(msg)                     # requires a create verb + a concrete entity noun
     if ent not in (None, "AMBIGUOUS"):
         if name == "entity_create":
-            return flow.get("entity") != ent
+            # A DIFFERENT entity always breaks out; the SAME entity only when the whole message is a
+            # standalone re-create command ("create a new role"), not a field value that merely
+            # contains those words (e.g. a role named "New Role Coordinator").
+            return flow.get("entity") != ent or bool(_STANDALONE_CREATE_RE.search(msg))
         if name == "create_user":
-            return ent != "user"
+            return ent != "user" or bool(_STANDALONE_CREATE_RE.search(msg))
         return True
     if _SKILL_INTENT_RE.search(msg):
         return name != "create_skill"
