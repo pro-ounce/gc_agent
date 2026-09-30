@@ -1754,15 +1754,22 @@ async def _entity_finalize(flow: dict[str, Any], headers: dict[str, str] | None)
         val = labels.get(f.key, flow["data"].get(f.key))
         if val in (None, ""):
             val = "—"
-        lines.append(f"- **{f.key}:** {val}")
+        lines.append(f"- **{_FIELD_LABEL.get(f.key, f.key)}:** {val}")
     if spec.get("auto_order"):
-        lines.append(f"- **applicationOrder:** {args['applicationOrder']} (auto)")
-    summary = (f"Ready to create this **{spec['label']}**:\n" + "\n".join(lines)
-               + "\n\nShall I go ahead?")
+        lines.append(f"- **Order:** {args['applicationOrder']} (auto)")
+    detailed = (f"Ready to create this **{spec['label']}**:\n" + "\n".join(lines)
+                + "\n\nShall I go ahead?")
+    # The flow window's rail already lists every captured field, so the confirm CARD shows only a
+    # short highlight (no repeated, clipped field dump). The full detail stays on the pending action.
+    primary = (labels.get("roleName") or labels.get("applicationName") or labels.get("menuName")
+               or labels.get("userName") or labels.get("username") or "")
+    name_part = f" **{primary}**" if primary else ""
+    highlight = (f"Ready to create the **{spec['label']}**{name_part} — every detail is captured in "
+                 f"the steps above.\n\nConfirm to go ahead, or cancel.")
     # Carry the rail (with "Review & confirm" current) so the confirm stays INSIDE the flow window
     # instead of dissolving it into a bare chat banner.
-    return FlowResult(message=summary, progress=_entity_progress(flow),
-                      pending={"tool_name": spec["tool"], "tool_args": args, "summary": summary})
+    return FlowResult(message=highlight, progress=_entity_progress(flow),
+                      pending={"tool_name": spec["tool"], "tool_args": args, "summary": detailed})
 
 
 async def _advance_entity(flow: dict[str, Any], headers: dict[str, str] | None,
