@@ -1765,7 +1765,7 @@ async def _entity_finalize(flow: dict[str, Any], headers: dict[str, str] | None)
                or labels.get("userName") or labels.get("username") or "")
     name_part = f" **{primary}**" if primary else ""
     highlight = (f"Ready to create the **{spec['label']}**{name_part} — every detail is captured in "
-                 f"the steps above.\n\nConfirm to go ahead, or cancel.")
+                 f"the steps below.\n\nConfirm to go ahead, or cancel.")
     # Carry the rail (with "Review & confirm" current) so the confirm stays INSIDE the flow window
     # instead of dissolving it into a bare chat banner.
     return FlowResult(message=highlight, progress=_entity_progress(flow),
