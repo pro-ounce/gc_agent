@@ -1555,8 +1555,7 @@ _ENTITY_CREATE: dict[str, dict[str, Any]] = {
             EField("isAdmin", "Is this an **admin** role?", kind="yesno"),
             # A role must carry an attached menu (ApplicationRole.menuId). Required — pick from
             # the app's menus, or type a menu name.
-            EField("menuId", "Which **menu** should this role open? (the role's attached menu)",
-                   kind="menu_picker"),
+            EField("menuId", "Which **menu** should this role open?", kind="menu_picker"),
         ),
         "defaults": {"enabled": "Y", "isChatbot": "N"},
     },
@@ -1900,7 +1899,7 @@ _FIELD_LABEL = {
     "applicationShortCode": "Short code", "description": "Description", "applicationUrl": "URL",
     "applicationIcon": "Icon", "appCategory": "Category",
     "roleName": "Role name", "role": "Role code", "roleDescription": "Description",
-    "isAdmin": "Admin role", "menuId": "Attached menu",
+    "isAdmin": "Admin role", "menuId": "Menu",
     "menuName": "Name", "menuCode": "Code", "menuType": "Type", "menuDesc": "Description",
     "applicationRoleId": "Role", "readFlag": "Read", "writeFlag": "Write",
     "updateFlag": "Update", "deleteFlag": "Delete",
