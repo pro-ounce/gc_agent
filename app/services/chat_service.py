@@ -570,6 +570,7 @@ class ChatService:
             blocks=fr.blocks or [],
             suggestions=[Suggestion(**s) for s in fr.suggestions],
             progress=fr.progress, ack=fr.ack,
+            field_options=[Suggestion(**s) for s in getattr(fr, "field_options", [])],
             finish_reason="stop",
         )
 
@@ -591,6 +592,7 @@ class ChatService:
                         blocks=fr.blocks or [],
                         suggestions=[Suggestion(**s) for s in fr.suggestions],
                         progress=fr.progress, ack=fr.ack,
+                        field_options=[Suggestion(**s) for s in getattr(fr, "field_options", [])],
                         finish_reason="stop"),
         ]
 

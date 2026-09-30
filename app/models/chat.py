@@ -80,6 +80,8 @@ class ChatResponse(BaseModel):
     task: dict[str, Any] | None = None   # background task descriptor (id/status/title) to poll
     progress: dict[str, Any] | None = None  # guided-flow rail {title,current,total,steps[]}
     ack: str | None = None               # a completed-prerequisite acknowledgement (check-row)
+    field_options: list[Suggestion] = Field(default_factory=list)  # FULL per-field option list for
+    # a picker step (suggestions are capped); widget's hint popover shows it under "All …"
     model: str = ""
     usage: dict[str, int] | None = None
     finish_reason: str = "stop"
@@ -95,6 +97,8 @@ class StreamChunk(BaseModel):
     pending_action: PendingAction | None = None
     progress: dict[str, Any] | None = None  # guided-flow rail {title,current,total,steps[]}
     ack: str | None = None               # a completed-prerequisite acknowledgement (check-row)
+    field_options: list[Suggestion] = Field(default_factory=list)  # FULL per-field option list for
+    # a picker step (suggestions are capped); widget's hint popover shows it under "All …"
     finish_reason: str | None = None
     error: str | None = None
 

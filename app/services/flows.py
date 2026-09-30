@@ -134,6 +134,9 @@ class FlowResult:
     reroute: str | None = None  # user broke out of the flow → answer THIS message as a fresh turn
     progress: dict[str, Any] | None = None  # workflow rail: {title, current, total, steps:[{label,value,state}]}
     ack: str | None = None      # a completed-prerequisite acknowledgement to surface as a check-row
+    field_options: list[dict[str, Any]] = field(default_factory=list)  # FULL per-field option list
+    # for the current picker step (the offered `suggestions` are capped at MAX_CHIPS); the widget's
+    # hint popover shows this un-capped list under "All …". Empty for non-picker / free-text steps.
 
 
 def _chip(label: str, send: str | None = None, icon: str | None = None) -> dict[str, Any]:
@@ -378,6 +381,21 @@ def _list_chips(items: list[dict[str, Any]], icon: str, tail: list[dict[str, Any
     if len(items) > MAX_CHIPS:
         note = f"\n\n_Showing {MAX_CHIPS} of {len(items)} — or just type a name._"
     return chips + tail, note
+
+
+def _all_options(items: list[dict[str, Any]], icon: str) -> list[dict[str, Any]]:
+    """The UN-capped option list for a picker step — the widget's hint popover renders this under
+    "All …" (the offered `suggestions` are capped at MAX_CHIPS). Same chip shape as `_list_chips`,
+    de-duplicated by name, no control tail."""
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+    for it in items:
+        name = str(it.get("name", "")).strip()
+        if not name or name.lower() in seen:
+            continue
+        seen.add(name.lower())
+        out.append(_chip(name, name, icon=icon))
+    return out
 
 
 # ── flow entry points ─────────────────────────────────────────────────────────
@@ -1617,7 +1635,8 @@ async def _efield_step(flow: dict[str, Any], f: "EField", headers: dict[str, str
         apps = await _apps(headers)
         flow.setdefault("_opts", {})["app"] = apps
         chips, note = _list_chips(apps, "app", [_chip("Cancel", "cancel", icon="skip")]) if apps else ([], "")
-        return FlowResult(message=f"{prefix}{f.prompt}{note}", suggestions=chips or None)
+        return FlowResult(message=f"{prefix}{f.prompt}{note}", suggestions=chips or None,
+                          field_options=_all_options(apps, "app"))
     if f.kind == "role_picker":
         # sub-picker: application first, then its roles
         if not flow.get("_role_app"):
@@ -1625,11 +1644,12 @@ async def _efield_step(flow: dict[str, Any], f: "EField", headers: dict[str, str
             flow.setdefault("_opts", {})["app"] = apps
             chips, note = _list_chips(apps, "app", [_chip("Cancel", "cancel", icon="skip")]) if apps else ([], "")
             return FlowResult(message=f"{prefix}First, which **application** is the role in?{note}",
-                              suggestions=chips or None)
+                              suggestions=chips or None, field_options=_all_options(apps, "app"))
         roles = await _roles(headers, flow["_role_app"])
         flow.setdefault("_opts", {})["role"] = roles
         chips, note = _list_chips(roles, "role", [_chip("Cancel", "cancel", icon="skip")]) if roles else ([], "")
-        return FlowResult(message=f"{prefix}{f.prompt}{note}", suggestions=chips or None)
+        return FlowResult(message=f"{prefix}{f.prompt}{note}", suggestions=chips or None,
+                          field_options=_all_options(roles, "role"))
     if f.kind == "menu_picker":
         # Prerequisite gate: a role needs an attached menu. Ask whether one already exists or
         # should be created first, before showing the picker.
@@ -1649,7 +1669,8 @@ async def _efield_step(flow: dict[str, Any], f: "EField", headers: dict[str, str
         if not menus:
             return FlowResult(message=f"{prefix}{f.prompt} _(type the menu name)_", suggestions=tail)
         chips, note = _list_chips(menus, "app", tail)
-        return FlowResult(message=f"{prefix}{f.prompt}{note}", suggestions=chips)
+        return FlowResult(message=f"{prefix}{f.prompt}{note}", suggestions=chips,
+                          field_options=_all_options(menus, "menu-2"))
     if f.kind == "yesno":
         return FlowResult(message=f"{prefix}{f.prompt}",
                           suggestions=[_chip("Yes", "yes", icon="check"), _chip("No", "no", icon="skip")])
