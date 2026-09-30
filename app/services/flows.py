@@ -1755,7 +1755,9 @@ async def _entity_finalize(flow: dict[str, Any], headers: dict[str, str] | None)
         lines.append(f"- **applicationOrder:** {args['applicationOrder']} (auto)")
     summary = (f"Ready to create this **{spec['label']}**:\n" + "\n".join(lines)
                + "\n\nShall I go ahead?")
-    return FlowResult(message=summary,
+    # Carry the rail (with "Review & confirm" current) so the confirm stays INSIDE the flow window
+    # instead of dissolving it into a bare chat banner.
+    return FlowResult(message=summary, progress=_entity_progress(flow),
                       pending={"tool_name": spec["tool"], "tool_args": args, "summary": summary})
 
 
