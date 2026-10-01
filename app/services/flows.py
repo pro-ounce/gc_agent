@@ -161,6 +161,15 @@ _READ_INTENT_RE = re.compile(
     r"|licen[sc]e\s+(?:by|id|number|#|key)"
     r"|about\s+smart\s?hub\b)",
     re.I)
+# A clear standalone QUESTION (general / conceptual) belongs to normal Q&A, never to a create
+# flow's field — guards a stray/stale flow from swallowing a question the user typed (e.g.
+# "what is govconnect 360" being eaten as a role name). Matches only a question WORD at the very
+# start, so an ordinary field value ("Reviews and approves…", "Budget Viewer") doesn't trip it.
+_QUESTION_RE = re.compile(
+    r"^\s*(?:what|what'?s|whats|why|how|when|where|who|whom|whose|which|explain|describe|"
+    r"define|tell\s+me|can\s+you|could\s+you|would\s+you|do\s+you|does|is\s+there|are\s+there|"
+    r"help\s+me\s+understand)\b",
+    re.I)
 # A STANDALONE re-create command — the whole message is essentially "create a new role" /
 # "add another application" etc. (ends right after the entity noun). Used to let a re-issued create
 # restart an active same-entity flow, WITHOUT tripping on a field value that merely contains the
@@ -515,6 +524,10 @@ def _should_break_out(flow: dict[str, Any], msg: str) -> bool:
     # A clear read/navigation command (e.g. "my access", "roles in Smart HuB", "look up a license")
     # never belongs to a create/remove flow, so it breaks out rather than being eaten as a value.
     if _READ_INTENT_RE.search(msg):
+        return True
+    # A clear question (general Q&A) is never a create-flow field value — break out so a stray/
+    # stale flow can't swallow it. Conservative: a question WORD at the start, or a trailing '?'.
+    if _QUESTION_RE.search(msg) or msg.rstrip().endswith("?"):
         return True
     return False
 
