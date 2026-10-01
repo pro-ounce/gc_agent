@@ -1546,7 +1546,8 @@ _ENTITY_CREATE: dict[str, dict[str, Any]] = {
         "label": "application role", "tool": "addApplicationRole_post",
         "fields": (
             EField("applicationId", "Which **application** is this role for?", kind="app_picker"),
-            EField("roleName", "What's the role's **display name**? (e.g. Budget Viewer)",
+            EField("roleName", "What's the role's **display name**? (e.g. Budget Viewer)\n"
+                   "*Pick a distinct name — it can't match an existing role in this application.*",
                    maxlen=80, unique="role_name"),
             # Role code is AUTO-generated from the role name (UPPER_SNAKE, ≤30, de-duped within the
             # app) — never asked. Kept in the spec so it shows on the rail + confirmation.
@@ -1765,7 +1766,7 @@ async def _entity_finalize(flow: dict[str, Any], headers: dict[str, str] | None)
                or labels.get("userName") or labels.get("username") or "")
     name_part = f" **{primary}**" if primary else ""
     highlight = (f"Ready to create the **{spec['label']}**{name_part} — every detail is captured in "
-                 f"the steps below.\n\nConfirm to go ahead, or cancel.")
+                 f"the steps above.\n\nConfirm to go ahead, or cancel.")
     # Carry the rail (with "Review & confirm" current) so the confirm stays INSIDE the flow window
     # instead of dissolving it into a bare chat banner.
     return FlowResult(message=highlight, progress=_entity_progress(flow),
