@@ -276,7 +276,8 @@ class ChatService:
                 return self._flow_response(session, started, source="flow", question=user_message,
                                            app=sel_app, role=sel_role)
 
-        system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT)
+        system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT) \
+            + self._detail_hint(session.metadata.get("detail"))
         system = await self._ground_ecosystem(system, request_headers)
         # Skill? Pin its backing action tool + ground the model on the required fields.
         if skill is None:                       # active-flow fall-through path: cheap keyword match
@@ -670,7 +671,8 @@ class ChatService:
                     yield ch
                 return
 
-        system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT)
+        system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT) \
+            + self._detail_hint(session.metadata.get("detail"))
         system = await self._ground_ecosystem(system, request_headers)
         if skill is None:                       # active-flow fall-through path: cheap keyword match
             skill = skills.match(user_message)
@@ -1040,6 +1042,20 @@ class ChatService:
         except Exception as exc:  # noqa: BLE001
             log.exception(f"background task {task_id} failed: {exc}")
             task_service.update(task_id, status="failed", error=str(exc))
+
+    @staticmethod
+    def _detail_hint(level: str | None) -> str:
+        """A verbosity instruction appended to the agent system prompt so FREE-FORM (no-tool)
+        answers honor the user's Answer-detail setting. (Tool-data answers + cards are shaped
+        separately in _synthesize_answer / _apply_detail.) Guided-flow prompts are untouched."""
+        lvl = (level or "standard").lower()
+        if lvl == "concise":
+            return (" ANSWER STYLE — CONCISE: reply in 1-2 short sentences; lead with the answer, "
+                    "no preamble, no filler.")
+        if lvl == "detailed":
+            return (" ANSWER STYLE — DETAILED: give a fuller, well-structured reply — the direct "
+                    "answer plus the key supporting context, in a few short sentences or a tight list.")
+        return ""  # standard → the model's default length
 
     async def _apply_detail(
         self, session: Session, blocks: list, tool_outputs: list[tuple[str, Any, bool]],
