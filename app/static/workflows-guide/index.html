@@ -115,6 +115,18 @@
   .state p{margin:0 0 11px;font-size:12.5px;color:var(--muted)}
   .sw{width:12px;height:12px;border-radius:3px;flex:0 0 auto}
 
+  /* Composition strip: a workflow running through steps, branching into a skill */
+  .compose{display:flex;flex-wrap:wrap;align-items:center;gap:8px;padding:15px 16px;background:var(--surface);
+    border:1px solid var(--line);border-radius:14px}
+  .compose .c-wf{font-family:var(--font-mono);font-size:13px;font-weight:600;color:#fff;background:linear-gradient(135deg,var(--green),#15803d);
+    border-radius:9px;padding:7px 12px}
+  .compose .c-wf em,.compose .c-sub em{font-style:normal;opacity:.8;font-weight:500;font-size:11px}
+  .compose .c-arr{font-family:var(--font-mono);font-size:12px;color:var(--muted)}
+  .compose .c-sk{font-size:12.5px;color:var(--violet-ink);background:var(--violet-soft);border:1px solid color-mix(in srgb,var(--violet) 32%,var(--line-strong));border-radius:8px;padding:6px 10px}
+  .compose .c-branch{display:inline-flex;flex-direction:column;gap:3px;border-style:dashed}
+  .compose .c-sub{font-size:11px;color:var(--amber);background:var(--amber-soft);border:1px dashed color-mix(in srgb,var(--amber) 40%,transparent);border-radius:6px;padding:2px 7px;margin-top:2px}
+  .compose .c-ok{font-size:12.5px;font-weight:600;color:#fff;background:linear-gradient(135deg,#34d399,#10b981);border-radius:8px;padding:6px 11px}
+
   table.mods{width:100%;border-collapse:collapse;font-size:13.5px}
   table.mods th,table.mods td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
   table.mods th{font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
@@ -225,15 +237,17 @@
 <header class="hero">
   <div class="hero-inner">
     <span class="pill mono">◆ GC Agent · Admin · services/flows.py</span>
-    <h1>Guided Workflow Template</h1>
-    <p>Every guided workflow in the agent is one declarative entry — a label, the backend tool it
-      calls, and an ordered list of fields. The engine renders that into the stepped, picker-driven,
-      confirm-before-run flow in the widget. This is the pattern — and the design system — to copy.</p>
+    <h1>Skills &amp; Workflows</h1>
+    <p>The agent's guided capabilities come in two shapes — a <b>Skill</b> does one reusable thing;
+      a <b>Workflow</b> strings skills into an end-to-end process and can invoke a skill mid-flow.
+      Both are authored from one declarative pattern. This guide covers the model, the template, the
+      design system, and a live builder.</p>
   </div>
 </header>
 
 <nav class="toc" aria-label="Sections">
   <div class="wrap" id="toc">
+    <a href="#concepts">Skills &amp; Workflows</a>
     <a href="#anatomy">Anatomy</a>
     <a href="#fields">Field types</a>
     <a href="#states">Option states</a>
@@ -250,6 +264,45 @@
 </nav>
 
 <main class="wrap">
+
+  <section id="concepts">
+    <h2><span class="n">00</span> Skills &amp; Workflows</h2>
+    <p class="lede">Two building blocks, one authoring pattern. A <b>skill</b> does one thing; a
+      <b>workflow</b> composes skills into an end-to-end process and can branch into another skill
+      mid-flow. Both are declared the same way (the template in the sections below).</p>
+    <div class="states">
+      <div class="state sel">
+        <h4><span class="sw" style="background:var(--violet)"></span>Skill — one operation</h4>
+        <p>A single, reusable thing the agent performs end-to-end and self-contained — collect a few
+          fields, confirm, run one tool. Reused across workflows.</p>
+        <div><span class="chip sel">Create application</span><span class="chip sel">Create menu</span><span class="chip sel">Create privilege</span><span class="chip sel">Grant access</span></div>
+      </div>
+      <div class="state bool">
+        <h4><span class="sw" style="background:var(--green)"></span>Workflow — end-to-end</h4>
+        <p>A process made of several skills. A step can invoke a skill inline, then return and
+          continue — so one run does the whole job.</p>
+        <div><span class="chip" style="background:var(--green-soft);color:var(--green-ink);border-color:color-mix(in srgb,var(--green) 35%,var(--line-strong))">Create role</span><span class="chip" style="background:var(--green-soft);color:var(--green-ink);border-color:color-mix(in srgb,var(--green) 35%,var(--line-strong))">Onboard user</span></div>
+      </div>
+    </div>
+
+    <div class="eyebrow" style="margin:20px 0 9px">Composition — "Create role" invokes the "Create menu" skill</div>
+    <div class="compose">
+      <span class="c-wf">Create role <em>workflow</em></span>
+      <span class="c-arr">runs</span>
+      <span class="c-sk">application</span>
+      <span class="c-sk">name</span>
+      <span class="c-sk">admin?</span>
+      <span class="c-sk c-branch">menu
+        <span class="c-sub">needs one? → <b>Create menu</b> <em>skill</em> → back</span>
+      </span>
+      <span class="c-arr">→</span>
+      <span class="c-ok">confirm &amp; run</span>
+    </div>
+    <p class="lede" style="margin-top:14px">In the widget, the role's <b>menu</b> step offers
+      <span class="mono">Pick an existing menu</span> or <span class="mono">Create a new menu first</span> —
+      the latter runs the <b>Create menu</b> skill inline, then returns to finish the role. That
+      inline branch is what makes "Create role" a workflow rather than a plain skill.</p>
+  </section>
 
   <section id="anatomy">
     <h2><span class="n">01</span> Anatomy</h2>

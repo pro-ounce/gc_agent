@@ -62,7 +62,7 @@
       + tabBtn("Metrics","__metrics__",false)
       + tabBtn("Activity","__activity__",false)
       + tabBtn("Skills","__workflows__",false)
-      + tabBtn("Workflows","__guide__",false)
+      + tabBtn("Guide","__guide__",false)
       + tabBtn("API","__api__",false)
       + tabBtn("Docs","__docs__",false)
       + tabBtn("Audit","__audit__",false)
@@ -592,7 +592,7 @@
       +'<span class="btns"><button id="wfe-new" class="btn" style="padding:5px 11px">+ New</button>'
       +'<button id="wfe-refresh" class="btn" style="padding:5px 11px">Refresh</button></span></div>'
       +'<div id="wfe-list" style="margin-top:10px">loading…</div>'
-      +'<div class="def" style="margin-top:12px;line-height:1.6"><b>Skills</b> are multi-step node graphs (fetch &rarr; mutate) the agent runs end-to-end &mdash; distinct from <b>Workflows</b> (the stepped create-flows in the widget; see that tab). Authored as <b>data, not code</b>: the same JSON the agent loads from <span class="mono">services/workflows/*.json</span>. Save here and it validates, persists (survives deploys), and the engine picks it up on the next turn.</div>'
+      +'<div class="def" style="margin-top:12px;line-height:1.6"><b>Skills</b> are multi-step node graphs (fetch &rarr; mutate) the agent runs end-to-end &mdash; distinct from <b>Workflows</b> (the guided create-flows &mdash; application/role/menu &mdash; defined in <span class="mono">flows.py</span>; see the <b>Guide</b> tab). Authored as <b>data, not code</b>: the same JSON the agent loads from <span class="mono">services/workflows/*.json</span>. Save here and it validates, persists (survives deploys), and the engine picks it up on the next turn.</div>'
       +'</div>'
       // ── right: editor ──
       +'<div class="card wfe-edit-card"><div class="top">'
