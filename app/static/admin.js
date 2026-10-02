@@ -8,6 +8,14 @@
   var elTabs = $("#tabs"), elSections = $("#sections"), elStatus = $("#status");
   var btnSave = $("#btn-save"), btnReset = $("#btn-reset");
   var esc = function(s){return String(s==null?"":s).replace(/[&<>"]/g,function(c){return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c];});};
+  // Inline markdown for captured prompts/answers (they are authored in markdown): escape first,
+  // then render **bold**, *italic*, `code` so the Activity feed doesn't show raw ** and ` markers.
+  var mdI = function(s){
+    return esc(s)
+      .replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>')
+      .replace(/(^|[\s(])\*([^*\s][^*]*?)\*(?=[\s).,;:!?]|$)/g,'$1<i>$2</i>')
+      .replace(/`([^`]+)`/g,'<code class="mdc">$1</code>');
+  };
   // Safe DOM id from an arbitrary config key/group (used to wire aria-labelledby / tabs).
   var sid = function(s){return String(s==null?"":s).replace(/[^\w-]/g,"_");};
   var params = [];       // from server
@@ -485,11 +493,12 @@
       t.llm_ms!=null?"llm "+ms(t.llm_ms):'', t.tools_ms!=null?"tools "+ms(t.tools_ms):'',
       toks, t.outcome?'outcome <span class="mono">'+esc(t.outcome)+'</span>':''].filter(Boolean).join('<span style="opacity:.4">·</span>');
     return '<div class="turn'+(err.length?' err':'')+'" data-rid="'+esc(t.request_id||"")+'" style="cursor:pointer" title="Click to visualize this request’s trace">'
-      +'<div class="q">'+srcBadge(t)+(t.question?esc(t.question):'<span class="def">(no prompt captured)</span>')
-      +'<span class="pill" style="float:right;opacity:.6">⧉ workflow</span></div>'
-      +(t.answer?'<div class="a">↳ '+esc(t.answer)+(t.blocks?' <span class="pill">'+t.blocks+' card'+(t.blocks>1?'s':'')+'</span>':'')+'</div>':'')
+      +'<div class="q">'+srcBadge(t)+(t.question?mdI(t.question):'<span class="def">(no prompt captured)</span>')
+      +'<span class="pill trace-pill">⧉ trace</span></div>'
+      +(t.answer?'<div class="a">↳ '+mdI(t.answer)+(t.blocks?' <span class="pill">'+t.blocks+' card'+(t.blocks>1?'s':'')+'</span>':'')+'</div>':'')
       +err.map(function(e){return '<div class="errline">⚠ '+esc(e)+'</div>';}).join('')
-      +'<div class="meta">'+tools+meta+'</div></div>';
+      +(tools!=='<span class="def">no tools</span>'?'<div class="meta tools-row">'+tools+'</div>':'')
+      +'<div class="meta">'+meta+'</div></div>';
   }
   function loadTurns(){
     var el=document.getElementById("ac-list"); if(!el) return;
@@ -643,6 +652,8 @@
       renderWfList(); renderWfRef();
       if(_wfSelId){ var still=_wfListCache.filter(function(w){return w.id===_wfSelId;})[0];
         if(still) selectWf(still); }
+      // Auto-select the first skill on open so the editor shows a live diagram, not an empty canvas.
+      else if(_wfListCache.length){ selectWf(_wfListCache[0]); }
     }).catch(function(e){ el.innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; });
   }
   function renderWfRef(){
