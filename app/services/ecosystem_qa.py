@@ -679,7 +679,9 @@ async def _about_app(app: dict[str, Any], headers: dict[str, str] | None,
         if wf.get("stages"):
             parts.append("**Stages**: " + " → ".join(wf["stages"]))
     if roles:
-        shown = ", ".join(r["name"] for r in roles[:12])
+        # Admin roles carry the same 🛡️ marker used in the "roles in <app>" table, so the
+        # admin cue is consistent whether roles show as a summary, a table, or a list.
+        shown = ", ".join((("🛡️ " if r.get("admin") else "") + r["name"]) for r in roles[:12])
         more = f" *(+{len(roles) - 12} more)*" if len(roles) > 12 else ""
         parts.append(f"**Roles ({len(roles)})**: {shown}{more}")
     msg = "\n\n".join(parts)
@@ -1056,6 +1058,14 @@ async def _my_access_in_app(app: dict[str, Any], headers: dict[str, str] | None,
         return FlowResult(message=base,
                           suggestions=[_chip("My access", "my access"),
                                        _chip(f"Roles in {name}", f"roles in {name}")])
+    # 🛡️ marker for the caller's admin roles — cross-reference the app's role metadata so the
+    # admin cue is consistent with the "roles in <app>" table and the About summary.
+    try:
+        _meta = await eco.roles_for(app, headers)
+        _admin = {_norm(r.get("name")) for r in _meta if r.get("admin")}
+    except Exception:  # noqa: BLE001 — marking is cosmetic; never block the listing on it
+        _admin = set()
+    marked = [("🛡️ " if _norm(n) in _admin else "") + n for n in sorted(roles)]
     # Direct yes/no when a specific role was named — grounded in the caller's real roles.
     if asked:
         an = _norm(asked)
@@ -1067,11 +1077,11 @@ async def _my_access_in_app(app: dict[str, Any], headers: dict[str, str] | None,
         else:
             lead = _say(f"No — you don't have **{asked}** in **{name}**. "
                         f"Your **{len(roles)}** role(s) there:")
-        return FlowResult(message=lead, blocks=[_list_block(f"Your roles in {name}", sorted(roles))])
+        return FlowResult(message=lead, blocks=[_list_block(f"Your roles in {name}", marked)])
     plural = "role" if len(roles) == 1 else "roles"
     lead = _say(f"In **{name}**, you have **{len(roles)} {plural}**:",
                 f"Your **{name}** access — **{len(roles)} {plural}**:")
-    return FlowResult(message=lead, blocks=[_list_block(f"Your roles in {name}", sorted(roles))])
+    return FlowResult(message=lead, blocks=[_list_block(f"Your roles in {name}", marked)])
 
 
 async def _my_access(headers: dict[str, str] | None) -> FlowResult:
