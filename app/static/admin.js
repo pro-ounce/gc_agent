@@ -1215,6 +1215,10 @@
 
   function docsSectionHTML(){
     return '<section class="admin-section" data-tab="__docs__" role="tabpanel" id="panel-__docs__" aria-labelledby="tab-__docs__" tabindex="0">'
+      +'<div class="card" style="margin-bottom:14px;border-color:#c7b8f0;background:var(--accent-wash,#f3effc)"><div class="top">'
+      +'<span class="lbl">Workflow authoring guide</span>'
+      +'<span class="btns"><a href="'+API+'/guide" target="_blank" rel="noopener" class="btn primary" style="padding:5px 12px">Open the guide ↗</a></span></div>'
+      +'<div class="def" style="margin-top:8px">Interactive reference for building guided workflows — anatomy, option-state colors (selectable / reference / boolean), lifecycle, real screens, an animated walkthrough, the icon set, design tokens, and a live <code>_ENTITY_CREATE</code> builder.</div></div>'
       +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Architecture</span>'
       +'<span class="btns"><a id="dc-diagram" href="#" target="_blank" rel="noopener" class="btn" style="padding:5px 11px">Open full diagram ↗</a></span></div>'
       +'<div id="dc-arch" class="def" style="margin-top:10px">loading…</div></div>'
