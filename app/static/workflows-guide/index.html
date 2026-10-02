@@ -98,7 +98,10 @@
   .yn{display:inline-flex;gap:7px}
   .yn span{font-size:12.5px;font-weight:600;border-radius:9px;padding:4px 14px;border:1px solid var(--line-strong);display:inline-flex;gap:5px;align-items:center}
   .yn .y{color:var(--green);border-color:color-mix(in srgb,var(--green) 40%,var(--line-strong));background:var(--green-soft)}
-  .yn .n{color:var(--rose);border-color:color-mix(in srgb,var(--rose) 40%,var(--line-strong));background:var(--rose-soft)}
+  /* "No" is VIOLET in the agent (a neutral choice) — rose is reserved for destructive Cancel. */
+  .yn .n{color:var(--violet-ink);border-color:color-mix(in srgb,var(--violet) 32%,var(--line-strong));background:var(--violet-soft)}
+  .yn .create{color:#fff;border:0;background:linear-gradient(135deg,#34d399,#10b981)}
+  .yn .cancel{color:var(--rose);border-color:color-mix(in srgb,var(--rose) 45%,var(--line-strong));background:transparent}
   .inp{font-family:var(--font-mono);font-size:12px;color:var(--muted);border:1px solid var(--line-strong);border-radius:8px;padding:5px 9px;background:var(--surface-2);display:inline-block}
 
   /* state cards (option semantics) */
@@ -156,6 +159,10 @@
   .walk .prompt{margin:12px 0;padding:12px 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:12px}
   .walk .prompt .now{font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;color:var(--muted)}
   .walk .prompt .q{font-size:14.5px;margin-top:4px}
+  /* Review & confirm is amber-themed in the agent (a review/caution gate before the single write). */
+  .walk .prompt.confirm{border-color:color-mix(in srgb,var(--amber) 45%,var(--line));background:var(--amber-soft)}
+  .walk .prompt.confirm .now{color:var(--amber)}
+  .walk .prompt.confirm .q{color:var(--amber-ink)}
   .walk .control{min-height:38px;display:flex;align-items:center;flex-wrap:wrap;gap:7px}
   .walk .bar{display:flex;gap:7px;margin-top:14px;justify-content:center}
   .btn{font-family:var(--font-mono);font-size:12.5px;font-weight:600;border-radius:9px;padding:7px 13px;cursor:pointer;border:1px solid transparent}
@@ -300,8 +307,9 @@
         <div style="margin-top:9px"><span class="chip hint amber">🛡 Roles 16 ▾</span></div>
       </div>
       <div class="state bool">
-        <h4><span class="sw" style="background:var(--green)"></span>Boolean · green / rose</h4>
-        <p>A <code>yesno</code> field — two decision buttons, not a picker. No hint chip.</p>
+        <h4><span class="sw" style="background:var(--green)"></span>Boolean · Yes green / No violet</h4>
+        <p>A <code>yesno</code> field — two buttons, not a picker. <b>No</b> is violet (a neutral choice);
+          rose is reserved for a destructive <b>Cancel</b>.</p>
         <span class="yn"><span class="y">✓ Yes</span><span class="n">✕ No</span></span>
       </div>
     </div>

@@ -46,7 +46,7 @@ const el = (h) => { const t=document.createElement('template'); t.innerHTML=h.tr
     {label:'Description', q:'A one-line <b>description</b> of the role?', ctl:'<span class="inp">Type the description\u2026</span>', val:'Approves budget requests'},
     {label:'Admin role', q:'Is this an <b>admin</b> role?', ctl:'<span class="yn"><span class="y">\u2713 Yes</span><span class="n">\u2715 No</span></span>', val:'No'},
     {label:'Menu', q:'Which <b>menu</b> should be mapped to this role?', ctl:'<span class="chip sel">Budget menu <span class="go">\u203a</span></span><span class="chip sel">Create a new menu first</span>', val:'Budget menu'},
-    {label:'Review & confirm', q:'Everything captured \u2014 create the role?', ctl:'<span class="yn"><span class="y">\u2713 Create</span><span class="n" style="color:var(--rose)">Cancel</span></span>', val:''},
+    {label:'Review & confirm', q:'Everything captured \u2014 create the role?', ctl:'<span class="yn"><span class="create">\u2713 Create</span><span class="cancel">Cancel</span></span>', val:'', confirm:true},
   ];
   let wi=0, timer=null;
   const wrail=document.getElementById('w-rail'), wq=document.getElementById('w-q'),
@@ -62,7 +62,8 @@ const el = (h) => { const t=document.createElement('template'); t.innerHTML=h.tr
     });
     const s=WF_STEPS[wi];
     wq.innerHTML=s.q; wctl.innerHTML=s.ctl; wcnt.textContent=`${wi+1} / ${WF_STEPS.length}`;
-    wnow.textContent = s.auto ? 'AUTO' : 'NOW';
+    document.querySelector('#walk .prompt').classList.toggle('confirm', !!s.confirm);
+    wnow.textContent = s.confirm ? 'CONFIRM' : (s.auto ? 'AUTO' : 'NOW');
     document.getElementById('w-prev').disabled = wi===0;
     document.getElementById('w-next').disabled = wi===WF_STEPS.length-1;
   }
