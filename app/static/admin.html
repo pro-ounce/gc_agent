@@ -11,7 +11,7 @@
        relies on (--accent(-wash), --amber(-wash), --good(-wash), --bg, --panel,
        --fg, --ink, --ink-2, --line). */
     :root{
-      --bg:#f6f7f9; --panel:#ffffff; --panel-2:#fbfbfd; --sidebar:#141827;
+      --bg:#f6f3fc; --panel:#ffffff; --panel-2:#fbfbfd; --sidebar:#141827;
       --ink:#111827; --fg:#111827; --ink-2:#6b7280; --ink-3:#9aa1ad;
       --line:#e7e9ee; --line-2:#eef0f4;
       --accent:#6d28d9; --accent-2:#7c3aed; --accent-wash:#f2edfc; --accent-line:#d9ccf6;
@@ -25,7 +25,7 @@
     }
     *{box-sizing:border-box}
     html,body{height:100%}
-    body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);line-height:1.5;
+    body{margin:0;background:linear-gradient(135deg,#f3eefc 0%,#ffffff 52%,#fdf1fb 100%);background-attachment:fixed;color:var(--ink);font-family:var(--font);line-height:1.5;
       font-size:14px;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
     .mono,code,kbd{font-family:var(--mono)}
     h1,h2,h3{margin:0;font-weight:650;letter-spacing:-.01em}
@@ -36,34 +36,34 @@
     .app{display:grid;grid-template-columns:var(--sidebar-w) 1fr;height:100%}
 
     /* Sidebar */
-    .sidebar{background:var(--sidebar);color:#cdd2e0;display:flex;flex-direction:column;min-height:0;
-      border-right:1px solid rgba(255,255,255,.06)}
+    .sidebar{background:linear-gradient(185deg,#7c3aed 0%,#5b21b6 48%,#3f1479 100%);color:#e7defa;display:flex;flex-direction:column;min-height:0;
+      border-right:1px solid rgba(255,255,255,.08)}
     .brand{display:flex;align-items:center;gap:11px;padding:18px 18px 16px}
     .brand-mark{width:34px;height:34px;border-radius:9px;flex:0 0 auto;display:flex;align-items:center;justify-content:center;
       background:linear-gradient(135deg,#7c3aed,#4f46e5);color:#fff;font-size:15px;box-shadow:0 2px 8px rgba(79,70,229,.4)}
     .brand-text{display:flex;flex-direction:column;line-height:1.25}
     .brand-text strong{color:#fff;font-size:14.5px;font-weight:650;letter-spacing:-.01em}
-    .brand-text span{font-size:11.5px;color:#8b92a6}
+    .brand-text span{font-size:11.5px;color:#c9b8f3}
     .side-label{font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#6f7691;padding:6px 20px 5px;margin-top:4px}
     /* In-list section dividers (Settings / Monitor / Build / Operations) */
-    .side-group{font-size:10px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:#656c86;padding:15px 12px 6px}
+    .side-group{font-size:10px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:#bda9ee;padding:15px 12px 6px}
     .side-group:first-child{padding-top:6px}
     .admin-tabs{display:flex;flex-direction:column;gap:1px;padding:4px 10px 12px;overflow-y:auto;flex:1;min-height:0;scrollbar-width:thin}
-    .admin-tab{appearance:none;border:0;background:transparent;color:#c2c8d6;text-align:left;cursor:pointer;
+    .admin-tab{appearance:none;border:0;background:transparent;color:#ddd1f7;text-align:left;cursor:pointer;
       font-size:13.5px;font-weight:500;padding:8px 12px;border-radius:8px;display:flex;align-items:center;gap:9px;
       width:100%;transition:background .12s,color .12s;position:relative;letter-spacing:-.005em}
     .admin-tab::before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.32;flex:0 0 auto}
-    .admin-tab:hover{background:rgba(255,255,255,.06);color:#fff}
-    .admin-tab.active{background:rgba(124,58,237,.22);color:#fff;font-weight:600}
-    .admin-tab.active::before{opacity:1;background:#a78bfa;box-shadow:0 0 0 3px rgba(167,139,250,.22)}
+    .admin-tab:hover{background:rgba(255,255,255,.12);color:#fff}
+    .admin-tab.active{background:rgba(255,255,255,.17);color:#fff;font-weight:600;box-shadow:inset 0 0 0 1px rgba(255,255,255,.12)}
+    .admin-tab.active::before{opacity:1;background:#f0e6ff;box-shadow:0 0 0 3px rgba(255,255,255,.2)}
     .admin-tab:focus-visible{outline:2px solid #a78bfa;outline-offset:1px}
-    .sidebar-foot{padding:12px 18px 16px;font-size:11px;color:#7a8099;border-top:1px solid rgba(255,255,255,.06);line-height:1.45}
+    .sidebar-foot{padding:12px 18px 16px;font-size:11px;color:#b6a5e2;border-top:1px solid rgba(255,255,255,.12);line-height:1.45}
 
     /* Main */
     .main{display:flex;flex-direction:column;min-width:0;min-height:0}
     .topbar{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap;
       padding:14px 26px;background:color-mix(in srgb,var(--panel) 90%,transparent);backdrop-filter:blur(8px);
-      border-bottom:1px solid var(--line);position:sticky;top:0;z-index:5}
+      border-bottom:1px solid var(--accent-line);position:sticky;top:0;z-index:5}
     .topbar-title h1{font-size:18px}
     .topbar-title p{margin:1px 0 0;font-size:12.5px;color:var(--ink-2)}
     .topbar-actions{display:flex;align-items:center;gap:10px}
@@ -128,7 +128,7 @@
     /* Scrollbars */
     .content::-webkit-scrollbar,.admin-tabs::-webkit-scrollbar{width:10px}
     .content::-webkit-scrollbar-thumb{background:#d6d9e0;border-radius:8px;border:3px solid var(--bg)}
-    .admin-tabs::-webkit-scrollbar-thumb{background:rgba(255,255,255,.14);border-radius:8px}
+    .admin-tabs::-webkit-scrollbar-thumb{background:rgba(255,255,255,.22);border-radius:8px}
 
     /* Responsive: sidebar collapses to a top nav */
     @media (max-width:880px){
