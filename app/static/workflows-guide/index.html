@@ -1,0 +1,454 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Guided Workflow Template</title>
+<style>
+  /* Layout: a developer reference with a sticky, scroll-spied section rail; a live builder + an
+     animated walkthrough are the interactive centerpieces. Subject = GC Agent guided workflows →
+     monospace-forward identity (JetBrains Mono headings/code, IBM Plex Sans prose). The real widget
+     state palette is used verbatim: violet=selectable, amber=reference/taken, green=done, rose=cancelled. */
+  :root{
+    --bg:#f6f5fb; --surface:#ffffff; --surface-2:#f0eef9; --ink:#1c1530; --muted:#5f5878;
+    --line:#e3dff2; --line-strong:#ccc5e6;
+    --violet:#7c3aed; --violet-ink:#5b21b6; --violet-soft:rgba(124,58,237,.1);
+    --green:#16a34a; --green-ink:#166534; --green-soft:rgba(22,163,74,.1);
+    --rose:#dc2626; --rose-ink:#b91c1c; --rose-soft:rgba(220,38,38,.07);
+    --amber:#b45309; --amber-ink:#92400e; --amber-soft:rgba(180,83,9,.1);
+    --code-bg:#f4f2fc; --code-ink:#4c2d8a;
+    --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,"Helvetica Neue",Arial,sans-serif;
+    --font-mono:ui-monospace,SFMono-Regular,Menlo,Consolas,"Roboto Mono",monospace;
+  }
+  @media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+    --bg:#140e26; --surface:#1d1636; --surface-2:#251c42; --ink:#ece8f8; --muted:#a89ec9;
+    --line:#312748; --line-strong:#423459;
+    --violet:#a78bfa; --violet-ink:#c4b5fd; --violet-soft:rgba(167,139,250,.14);
+    --green:#4ade80; --green-ink:#bbf7d0; --green-soft:rgba(34,197,94,.14);
+    --rose:#f87171; --rose-ink:#fca5a5; --rose-soft:rgba(248,113,113,.11);
+    --amber:#fbbf24; --amber-ink:#fcd34d; --amber-soft:rgba(217,164,74,.13);
+    --code-bg:#211839; --code-ink:#d6c6ff;
+    color-scheme:dark;
+  }}
+  :root[data-theme="dark"]{
+    --bg:#140e26; --surface:#1d1636; --surface-2:#251c42; --ink:#ece8f8; --muted:#a89ec9;
+    --line:#312748; --line-strong:#423459;
+    --violet:#a78bfa; --violet-ink:#c4b5fd; --violet-soft:rgba(167,139,250,.14);
+    --green:#4ade80; --green-ink:#bbf7d0; --green-soft:rgba(34,197,94,.14);
+    --rose:#f87171; --rose-ink:#fca5a5; --rose-soft:rgba(248,113,113,.11);
+    --amber:#fbbf24; --amber-ink:#fcd34d; --amber-soft:rgba(217,164,74,.13);
+    --code-bg:#211839; --code-ink:#d6c6ff;
+    color-scheme:dark;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--bg);color:var(--ink);font-family:var(--font-ui);line-height:1.55;margin:0}
+  .wrap{max-width:1040px;margin:0 auto;padding-inline:18px}
+  a{color:var(--violet-ink)}
+  h1,h2,h3{font-family:var(--font-mono);font-weight:600;line-height:1.2;text-wrap:balance}
+  code,pre,.mono{font-family:var(--font-mono)}
+  .eyebrow{font-family:var(--font-mono);font-size:11px;font-weight:600;letter-spacing:.16em;text-transform:uppercase;color:var(--violet-ink)}
+
+  header.hero{border-bottom:1px solid var(--line);background:radial-gradient(120% 140% at 85% -10%,var(--violet-soft) 0%,transparent 55%)}
+  .hero-inner{max-width:1040px;margin:0 auto;padding:30px 18px 26px}
+  .hero h1{font-size:clamp(24px,5vw,38px);margin:10px 0 8px;letter-spacing:-.01em}
+  .hero p{color:var(--muted);max-width:62ch;margin:0;font-size:15.5px}
+  .hero .pill{display:inline-flex;gap:7px;align-items:center;font-family:var(--font-mono);font-size:12px;
+    background:var(--surface);border:1px solid var(--line-strong);border-radius:999px;padding:4px 11px;color:var(--muted)}
+
+  nav.toc{position:sticky;top:env(safe-area-inset-top,0px);z-index:5;background:color-mix(in srgb,var(--bg) 90%,transparent);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
+  nav.toc .wrap{display:flex;gap:3px;overflow-x:auto;padding-block:9px;scrollbar-width:none}
+  nav.toc .wrap::-webkit-scrollbar{display:none}
+  nav.toc a{font-family:var(--font-mono);font-size:12.5px;font-weight:500;color:var(--muted);text-decoration:none;
+    padding:6px 11px;border-radius:8px;white-space:nowrap;transition:background .15s,color .15s;border:1px solid transparent}
+  nav.toc a:hover{background:var(--surface-2);color:var(--ink)}
+  nav.toc a.active{background:var(--violet-soft);color:var(--violet-ink);border-color:color-mix(in srgb,var(--violet) 35%,transparent);font-weight:600}
+
+  section{padding-block:36px;border-bottom:1px solid var(--line);scroll-margin-top:60px}
+  section h2{font-size:21px;margin:0 0 4px;display:flex;align-items:baseline;gap:10px}
+  section h2 .n{font-size:13px;color:var(--violet);opacity:.7}
+  section .lede{color:var(--muted);margin:0 0 20px;max-width:68ch}
+
+  .code{background:var(--code-bg);border:1px solid var(--line);border-radius:12px;overflow:hidden}
+  .code pre{margin:0;padding:15px 16px;overflow-x:auto;font-size:13px;line-height:1.6;color:var(--ink)}
+  .code .cap{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:7px 12px;border-bottom:1px solid var(--line);
+    font-family:var(--font-mono);font-size:11px;color:var(--muted);background:color-mix(in srgb,var(--code-bg) 60%,var(--surface))}
+  .tok-k{color:var(--violet-ink);font-weight:600}.tok-s{color:var(--green)}.tok-c{color:var(--muted);font-style:italic}.tok-f{color:var(--amber)}
+  .copy{font-family:var(--font-mono);font-size:11px;border:1px solid var(--line-strong);background:var(--surface);
+    color:var(--muted);border-radius:7px;padding:3px 9px;cursor:pointer;flex:0 0 auto}
+  .copy:hover{color:var(--ink);border-color:var(--violet)}.copy.ok{color:var(--green);border-color:var(--green)}
+
+  .grid-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:13px;padding:14px 15px;min-width:0}
+  .card .k{font-family:var(--font-mono);font-size:13px;font-weight:600;color:var(--violet-ink)}
+  .card .r{font-size:12.5px;color:var(--muted);margin:3px 0 10px}
+  .card .demo{border-top:1px dashed var(--line-strong);padding-top:10px}
+
+  /* Real widget chip states — used verbatim */
+  .chip{display:inline-flex;align-items:center;gap:5px;font-size:12px;border-radius:999px;padding:3px 10px;margin:2px 3px 0 0;
+    border:1px solid var(--line-strong);background:var(--violet-soft);color:var(--violet-ink)}
+  .chip.sel{background:var(--violet-soft);color:var(--violet-ink);border-color:color-mix(in srgb,var(--violet) 35%,var(--line-strong))}
+  .chip.sel .go{color:var(--violet);font-weight:700;margin-left:2px}
+  .chip.ref{background:var(--amber-soft);color:var(--amber);border-color:color-mix(in srgb,var(--amber) 40%,var(--line-strong))}
+  .chip.ref .nm{text-decoration:line-through;text-decoration-color:color-mix(in srgb,var(--amber) 45%,transparent)}
+  .chip.ref .tag{font-size:9.5px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;background:color-mix(in srgb,var(--amber) 18%,transparent);
+    border:1px solid color-mix(in srgb,var(--amber) 35%,transparent);border-radius:20px;padding:0 6px;margin-left:3px}
+  .chip.hint{font-family:var(--font-mono);font-weight:600;background:linear-gradient(135deg,#8b5cf6,#7c3aed);color:#fff;border:0}
+  .chip.hint.amber{background:linear-gradient(135deg,#d97706,#b45309)}
+  .yn{display:inline-flex;gap:7px}
+  .yn span{font-size:12.5px;font-weight:600;border-radius:9px;padding:4px 14px;border:1px solid var(--line-strong);display:inline-flex;gap:5px;align-items:center}
+  .yn .y{color:var(--green);border-color:color-mix(in srgb,var(--green) 40%,var(--line-strong));background:var(--green-soft)}
+  .yn .n{color:var(--rose);border-color:color-mix(in srgb,var(--rose) 40%,var(--line-strong));background:var(--rose-soft)}
+  .inp{font-family:var(--font-mono);font-size:12px;color:var(--muted);border:1px solid var(--line-strong);border-radius:8px;padding:5px 9px;background:var(--surface-2);display:inline-block}
+
+  /* state cards (option semantics) */
+  .states{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:13px}
+  .state{border-radius:14px;padding:15px 16px;border:1px solid var(--line)}
+  .state.sel{border-color:color-mix(in srgb,var(--violet) 40%,var(--line));background:var(--violet-soft)}
+  .state.ref{border-color:color-mix(in srgb,var(--amber) 40%,var(--line));background:var(--amber-soft)}
+  .state.bool{border-color:color-mix(in srgb,var(--green) 35%,var(--line));background:color-mix(in srgb,var(--green-soft) 60%,var(--surface))}
+  .state h4{margin:0 0 3px;font-family:var(--font-mono);font-size:14px;display:flex;align-items:center;gap:7px}
+  .state.sel h4{color:var(--violet-ink)}.state.ref h4{color:var(--amber)}.state.bool h4{color:var(--green-ink)}
+  .state p{margin:0 0 11px;font-size:12.5px;color:var(--muted)}
+  .sw{width:12px;height:12px;border-radius:3px;flex:0 0 auto}
+
+  table.mods{width:100%;border-collapse:collapse;font-size:13.5px}
+  table.mods th,table.mods td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  table.mods th{font-family:var(--font-mono);font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted)}
+  table.mods td code,table.mods td .c{font-size:12.5px;color:var(--code-ink);background:var(--code-bg);padding:1px 5px;border-radius:5px}
+  .scroller{overflow-x:auto;min-width:0}
+
+  .life{display:flex;flex-wrap:wrap;gap:8px}
+  .life .step{flex:1 1 150px;min-width:0;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:12px 13px}
+  .life .step .s{font-family:var(--font-mono);font-size:11px;color:var(--violet);font-weight:600}
+  .life .step h4{margin:4px 0;font-size:14px;font-family:var(--font-ui);font-weight:600}
+  .life .step p{margin:0;font-size:12.5px;color:var(--muted)}
+  .life .step.done{border-color:color-mix(in srgb,var(--green) 45%,var(--line));background:var(--green-soft)}
+  .life .step.cancel{border-color:color-mix(in srgb,var(--rose) 45%,var(--line));background:var(--rose-soft)}
+  .life .step.done .s{color:var(--green)}.life .step.cancel .s{color:var(--rose)}
+
+  .callout{display:flex;gap:11px;background:var(--amber-soft);border:1px solid color-mix(in srgb,var(--amber) 35%,var(--line));border-radius:12px;padding:13px 15px;font-size:13.5px}
+  .callout b{color:var(--amber)}.callout .ic{flex:0 0 auto;font-family:var(--font-mono);color:var(--amber);font-weight:700}
+
+  /* Screens */
+  .shots{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:16px}
+  figure.shot{margin:0;background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+  figure.shot img{display:block;width:100%;height:auto;border-bottom:1px solid var(--line)}
+  figure.shot figcaption{padding:11px 13px;font-size:12.5px;color:var(--muted)}
+  figure.shot figcaption b{color:var(--ink);font-family:var(--font-mono);font-size:12px}
+  .badge{display:inline-block;font-family:var(--font-mono);font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;padding:1px 7px;border-radius:999px;margin-right:6px}
+  .badge.v{color:var(--violet-ink);background:var(--violet-soft)}
+  .badge.a{color:var(--amber);background:var(--amber-soft)}
+  .badge.m{color:var(--code-ink);background:var(--code-bg)}
+
+  /* Walkthrough */
+  .walk{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:16px;max-width:560px;margin-inline:auto}
+  .walk .hd{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px}
+  .walk .hd .t{font-family:var(--font-mono);font-weight:600;font-size:14px;color:var(--violet-ink)}
+  .walk .hd .cnt{font-family:var(--font-mono);font-size:11px;color:var(--muted);background:var(--surface-2);border:1px solid var(--line);border-radius:999px;padding:2px 9px}
+  .rail{border:1px solid var(--line);border-radius:12px;padding:10px 13px;background:var(--surface-2)}
+  .rail .row{display:flex;align-items:center;gap:10px;padding:4px 0;font-size:13px;color:var(--muted)}
+  .rail .row .b{width:16px;height:16px;border-radius:50%;flex:0 0 auto;display:flex;align-items:center;justify-content:center;font-size:9px;color:#fff;background:var(--line-strong)}
+  .rail .row.done{color:var(--ink)}.rail .row.done .b{background:var(--green)}
+  .rail .row.cur{color:var(--ink);font-weight:600}.rail .row.cur .b{background:var(--violet);box-shadow:0 0 0 3px var(--violet-soft)}
+  .rail .row .v{margin-left:auto;font-family:var(--font-ui);font-size:12.5px;color:var(--ink);font-weight:600;text-align:right;max-width:52%;overflow-wrap:anywhere}
+  .rail .row .v.mono{font-family:var(--font-mono);letter-spacing:-.01em}
+  .walk .prompt{margin:12px 0;padding:12px 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:12px}
+  .walk .prompt .now{font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;color:var(--muted)}
+  .walk .prompt .q{font-size:14.5px;margin-top:4px}
+  .walk .control{min-height:38px;display:flex;align-items:center;flex-wrap:wrap;gap:7px}
+  .walk .bar{display:flex;gap:7px;margin-top:14px;justify-content:center}
+  .btn{font-family:var(--font-mono);font-size:12.5px;font-weight:600;border-radius:9px;padding:7px 13px;cursor:pointer;border:1px solid transparent}
+  .btn.primary{background:var(--violet);color:#fff}
+  .btn.ghost{background:transparent;border-color:var(--line-strong);color:var(--ink)}
+  .btn.sm{padding:5px 11px;font-size:11.5px}
+  .btn:disabled{opacity:.45;cursor:default}
+
+  /* Icons */
+  .icons{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:11px}
+  .ico{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:13px;text-align:center}
+  .ico .glyph{width:38px;height:38px;border-radius:10px;display:inline-flex;align-items:center;justify-content:center;margin-bottom:7px}
+  .ico .glyph svg{width:20px;height:20px}
+  .ico .nm{font-family:var(--font-mono);font-size:11.5px;font-weight:600}
+  .ico .d{font-size:11px;color:var(--muted);margin-top:1px}
+  .g-v{background:var(--violet-soft);color:var(--violet-ink)}.g-g{background:var(--green-soft);color:var(--green)}
+  .g-r{background:var(--rose-soft);color:var(--rose)}.g-a{background:var(--amber-soft);color:var(--amber)}
+
+  /* Design tokens */
+  .toks{display:grid;grid-template-columns:1fr;gap:18px}
+  @media(min-width:760px){.toks{grid-template-columns:1fr 1fr}}
+  .toks .panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px}
+  .toks h3{font-size:12px;margin:0 0 13px;font-family:var(--font-mono);color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.08em}
+  .swrow{display:flex;align-items:center;gap:11px;padding:7px 0;border-bottom:1px solid var(--line)}
+  .swrow:last-child{border-bottom:0}
+  .swrow .chipc{width:26px;height:26px;border-radius:7px;flex:0 0 auto;border:1px solid rgba(0,0,0,.08)}
+  .swrow .lab{font-size:13px;font-weight:600}
+  .swrow .use{font-size:11.5px;color:var(--muted)}
+  .swrow .hex{margin-left:auto;font-family:var(--font-mono);font-size:11.5px;color:var(--muted);text-align:right}
+  .typ{padding:9px 0;border-bottom:1px solid var(--line)}.typ:last-child{border-bottom:0}
+  .typ .spec{font-family:var(--font-mono);font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  .fonts .f{padding:10px 0;border-bottom:1px solid var(--line)}.fonts .f:last-child{border-bottom:0}
+  .fonts .f .role{font-family:var(--font-mono);font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  .fonts .f .name{font-size:18px;margin:2px 0}
+  .fonts .f .wts{font-size:12px;color:var(--muted)}
+
+  /* Builder */
+  .builder{display:grid;grid-template-columns:1fr;gap:16px}
+  @media(min-width:860px){.builder{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:16px;min-width:0}
+  .panel h3.h{font-size:12px;margin:0 0 12px;font-family:var(--font-mono);color:var(--muted);font-weight:600;text-transform:uppercase;letter-spacing:.08em}
+  .field-row{border:1px solid var(--line);border-radius:11px;padding:11px;margin-bottom:9px;background:var(--surface-2)}
+  label.lbl{font-size:11px;color:var(--muted);font-family:var(--font-mono);display:block;margin-bottom:2px}
+  input[type=text],select{font-family:var(--font-ui);font-size:13px;width:100%;padding:6px 8px;border:1px solid var(--line-strong);border-radius:8px;background:var(--bg);color:var(--ink);min-width:0}
+  input[type=text].mono{font-family:var(--font-mono);font-size:12.5px}
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:7px}
+  .toggles{display:flex;flex-wrap:wrap;gap:6px}
+  .tg{font-size:11.5px;font-family:var(--font-mono);border:1px solid var(--line-strong);border-radius:7px;padding:3px 8px;cursor:pointer;color:var(--muted);user-select:none}
+  .tg[aria-pressed="true"]{background:var(--violet-soft);border-color:var(--violet);color:var(--violet-ink)}
+  .btn.danger{color:var(--rose);border-color:color-mix(in srgb,var(--rose) 40%,var(--line-strong));background:transparent}
+  .row-actions{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:4px}
+  .foot{color:var(--muted);font-size:12.5px;padding:26px 18px 48px;max-width:1040px;margin:0 auto;text-align:center}
+  .foot code{background:var(--code-bg);color:var(--code-ink);padding:1px 5px;border-radius:5px;font-size:12px}
+  ol.checklist{color:var(--ink);font-size:14.5px;line-height:1.7;padding-left:20px;max-width:72ch}
+  ol.checklist code{background:var(--code-bg);color:var(--code-ink);padding:1px 5px;border-radius:5px;font-size:12.5px}
+  @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<header class="hero">
+  <div class="hero-inner">
+    <span class="pill mono">◆ GC Agent · Admin · services/flows.py</span>
+    <h1>Guided Workflow Template</h1>
+    <p>Every guided workflow in the agent is one declarative entry — a label, the backend tool it
+      calls, and an ordered list of fields. The engine renders that into the stepped, picker-driven,
+      confirm-before-run flow in the widget. This is the pattern — and the design system — to copy.</p>
+  </div>
+</header>
+
+<nav class="toc" aria-label="Sections">
+  <div class="wrap" id="toc">
+    <a href="#anatomy">Anatomy</a>
+    <a href="#fields">Field types</a>
+    <a href="#states">Option states</a>
+    <a href="#modifiers">Modifiers</a>
+    <a href="#lifecycle">Lifecycle</a>
+    <a href="#screens">Screens</a>
+    <a href="#walkthrough">Walkthrough</a>
+    <a href="#icons">Icons</a>
+    <a href="#tokens">Design tokens</a>
+    <a href="#example">Example</a>
+    <a href="#builder">Builder</a>
+    <a href="#checklist">Add a workflow</a>
+  </div>
+</nav>
+
+<main class="wrap">
+
+  <section id="anatomy">
+    <h2><span class="n">01</span> Anatomy</h2>
+    <p class="lede">A workflow is one entry in the <code>_ENTITY_CREATE</code> registry, keyed by entity
+      name. Four parts: a human <b>label</b>, the <b>tool</b> run on confirm, the ordered <b>fields</b>,
+      and the fixed <b>defaults</b> set without asking.</p>
+    <div class="code">
+      <div class="cap"><span>_ENTITY_CREATE["role"]</span><button class="copy" data-copy="anatomy">Copy</button></div>
+      <pre id="anatomy"><span class="tok-s">"role"</span>: {
+  <span class="tok-k">"label"</span>: <span class="tok-s">"application role"</span>,        <span class="tok-c"># shown in prompts, rail title, cards</span>
+  <span class="tok-k">"tool"</span>:  <span class="tok-s">"addApplicationRole_post"</span>, <span class="tok-c"># MCP tool called at confirm</span>
+  <span class="tok-k">"fields"</span>: (
+    EField(<span class="tok-s">"applicationId"</span>, <span class="tok-s">"Which **application** is this role for?"</span>, kind=<span class="tok-s">"app_picker"</span>),
+    EField(<span class="tok-s">"roleName"</span>, <span class="tok-s">"What's the role's **display name**?"</span>, maxlen=<span class="tok-f">80</span>, unique=<span class="tok-s">"role_name"</span>),
+    EField(<span class="tok-s">"role"</span>, <span class="tok-s">""</span>, auto_from=<span class="tok-s">"roleName"</span>, is_code=<span class="tok-k">True</span>, maxlen=<span class="tok-f">30</span>, unique=<span class="tok-s">"role_code"</span>),
+    EField(<span class="tok-s">"roleDescription"</span>, <span class="tok-s">"A one-line **description**?"</span>, maxlen=<span class="tok-f">1000</span>),
+    EField(<span class="tok-s">"isAdmin"</span>, <span class="tok-s">"Is this an **admin** role?"</span>, kind=<span class="tok-s">"yesno"</span>),
+    EField(<span class="tok-s">"menuId"</span>, <span class="tok-s">"Which **menu** should be mapped to this role?"</span>, kind=<span class="tok-s">"menu_picker"</span>),
+  ),
+  <span class="tok-k">"defaults"</span>: {<span class="tok-s">"enabled"</span>: <span class="tok-s">"Y"</span>, <span class="tok-s">"isChatbot"</span>: <span class="tok-s">"N"</span>}, <span class="tok-c"># set at finalize, never prompted</span>
+}</pre>
+    </div>
+    <p class="lede" style="margin-top:16px">That is the whole definition —
+      <code>start_entity_create → _entity_create → _efield_step → _entity_finalize</code> read the spec
+      and drive prompting, pickers, validation, uniqueness, the rail, break-out, confirm, the tool call,
+      and the collapsed card.</p>
+  </section>
+
+  <section id="fields">
+    <h2><span class="n">02</span> Field types <span class="n mono" style="font-size:12px">kind=</span></h2>
+    <p class="lede">A field's <code>kind</code> decides what the widget renders. The picker kinds are
+      <b>selectable</b> (violet) — see the next section for how that differs from reference and boolean.</p>
+    <div class="grid-cards" id="kinds"></div>
+  </section>
+
+  <section id="states">
+    <h2><span class="n">03</span> Option states — selectable vs reference vs boolean</h2>
+    <p class="lede">The single thing to get right. Options are color-coded by <i>role</i>, not by field.
+      A role <b>picker</b> is selectable (violet); the existing role <b>names</b> shown for a
+      <code>unique</code> field are reference-only (amber) — you don't pick them, you avoid them; a
+      yes/no is neither.</p>
+    <div class="states">
+      <div class="state sel">
+        <h4><span class="sw" style="background:var(--violet)"></span>Selectable · violet</h4>
+        <p>App / menu / role pickers. Click a chip to choose one; a violet “go” arrow marks it live.</p>
+        <span class="chip sel">Formulation Planner</span><span class="chip sel">Smart Hub <span class="go">›</span></span>
+        <div style="margin-top:9px"><span class="chip hint">⚙ Applications 28 ▾</span></div>
+      </div>
+      <div class="state ref">
+        <h4><span class="sw" style="background:var(--amber)"></span>Reference / taken · amber</h4>
+        <p>Existing values for a <code>unique</code> field — shown so you pick a <b>different</b> one.
+          Struck-through, tagged “taken”, not clickable.</p>
+        <span class="chip ref"><span class="nm">Super Admin</span><span class="tag">taken</span></span>
+        <span class="chip ref"><span class="nm">Hub Viewer</span><span class="tag">taken</span></span>
+        <div style="margin-top:9px"><span class="chip hint amber">🛡 Roles 16 ▾</span></div>
+      </div>
+      <div class="state bool">
+        <h4><span class="sw" style="background:var(--green)"></span>Boolean · green / rose</h4>
+        <p>A <code>yesno</code> field — two decision buttons, not a picker. No hint chip.</p>
+        <span class="yn"><span class="y">✓ Yes</span><span class="n">✕ No</span></span>
+      </div>
+    </div>
+    <div class="callout" style="margin-top:16px">
+      <span class="ic">!</span>
+      <div>Which state a picker shows is automatic: when every offered option is
+        <code>selectable === false</code> (all taken), the hint chip and popover switch to the amber
+        reference treatment. You don't set it — a <code>unique</code> rule drives it.</div>
+    </div>
+  </section>
+
+  <section id="modifiers">
+    <h2><span class="n">04</span> Field modifiers</h2>
+    <p class="lede">On top of <code>kind</code>, each <code>EField</code> takes modifiers that encode the
+      column's real constraints — length, code normalization, uniqueness, and values the engine fills in.</p>
+    <div class="scroller">
+      <table class="mods"><thead><tr><th>Modifier</th><th>Type</th><th>What it does</th></tr></thead><tbody id="mods"></tbody></table>
+    </div>
+    <div class="callout" style="margin-top:16px">
+      <span class="ic">!</span>
+      <div>Field lists and lengths are <b>verified against the backend entity contracts</b> — the
+        NOT-NULL and unique columns — before shipping. Get them from the tool's schema, not by guessing.</div>
+    </div>
+  </section>
+
+  <section id="lifecycle">
+    <h2><span class="n">05</span> Lifecycle</h2>
+    <p class="lede">One intent starts the run; each field is one turn; a confirm gates the single
+      side-effect. Nothing is written until the user confirms.</p>
+    <div class="life" id="life"></div>
+    <div class="callout" style="margin-top:16px;background:var(--violet-soft);border-color:color-mix(in srgb,var(--violet) 35%,var(--line))">
+      <span class="ic" style="color:var(--violet-ink)">↔</span>
+      <div><b style="color:var(--violet-ink)">Break-out guard.</b> A real question mid-flow
+        (<span class="mono">"what is a menu?"</span>) is answered as free-form by
+        <code>_should_break_out</code> <b>without derailing</b> the flow — it resumes, it is not cancelled.</div>
+    </div>
+  </section>
+
+  <section id="screens">
+    <h2><span class="n">06</span> Screens</h2>
+    <p class="lede">Real captures from the live widget — the same three option states, field by field.</p>
+    <div class="shots">
+      <figure class="shot">
+        <img src="app.jpg" alt="Flow window at the Application step with violet selectable application chips" loading="lazy">
+        <figcaption><span class="badge v">selectable</span><b>app_picker</b> — violet chips you pick from; the rail starts at step 1/7.</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="rolename.jpg" alt="Role name step with an amber Roles reference chip" loading="lazy">
+        <figcaption><span class="badge a">reference</span><b>roleName · unique</b> — the amber “Roles 16” chip: existing names shown so you pick a distinct one.</figcaption>
+      </figure>
+      <figure class="shot">
+        <img src="desc.jpg" alt="Rail showing captured values including the auto-generated role code in monospace" loading="lazy">
+        <figcaption><span class="badge m">auto · mono</span>Captured values on the rail — the role <b>code</b> auto-generated from the name, de-duped, in the mono face.</figcaption>
+      </figure>
+    </div>
+  </section>
+
+  <section id="walkthrough">
+    <h2><span class="n">07</span> Walkthrough</h2>
+    <p class="lede">Step through the <code>role</code> workflow — watch the rail fill, the prompt change,
+      and each option state appear in context.</p>
+    <div class="walk" id="walk">
+      <div class="hd"><span class="t" id="w-title">Create application role</span><span class="cnt" id="w-cnt">1 / 7</span></div>
+      <div class="rail" id="w-rail"></div>
+      <div class="prompt"><div class="now" id="w-now">NOW</div><div class="q" id="w-q"></div></div>
+      <div class="control" id="w-control"></div>
+      <div class="bar">
+        <button class="btn ghost sm" id="w-prev">‹ Back</button>
+        <button class="btn primary sm" id="w-play">▶ Play</button>
+        <button class="btn ghost sm" id="w-next">Next ›</button>
+      </div>
+    </div>
+  </section>
+
+  <section id="icons">
+    <h2><span class="n">08</span> Icons</h2>
+    <p class="lede">The entity glyphs on pickers and cards, and the state markers on the rail and
+      collapsed cards.</p>
+    <div class="eyebrow" style="margin-bottom:8px">Entity</div>
+    <div class="icons" id="ico-entity"></div>
+    <div class="eyebrow" style="margin:18px 0 8px">State &amp; semantic</div>
+    <div class="icons" id="ico-state"></div>
+  </section>
+
+  <section id="tokens">
+    <h2><span class="n">09</span> Design tokens</h2>
+    <p class="lede">The widget's type and color system — one place for which font, which weight, which
+      color, and what each means. All three faces are self-hosted by the host app (air-gap safe).</p>
+    <div class="toks">
+      <div class="panel">
+        <h3>Color — state palette</h3>
+        <div id="tok-colors"></div>
+      </div>
+      <div class="panel">
+        <h3>Fonts</h3>
+        <div class="fonts" id="tok-fonts"></div>
+        <h3 style="margin-top:16px">Type scale</h3>
+        <div id="tok-type"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="example">
+    <h2><span class="n">10</span> Worked example — each field → its step</h2>
+    <p class="lede">The <code>role</code> workflow, field by field, as the user experiences it.</p>
+    <div class="scroller">
+      <table class="mods"><thead><tr><th>EField</th><th>kind</th><th>state</th><th>renders</th></tr></thead><tbody id="ex-rows"></tbody></table>
+    </div>
+  </section>
+
+  <section id="builder">
+    <h2><span class="n">11</span> Builder</h2>
+    <p class="lede">Define a new workflow — it writes the <code>_ENTITY_CREATE</code> entry live. Edit,
+      add fields, then copy the spec into <code>flows.py</code>.</p>
+    <div class="builder">
+      <div class="panel">
+        <h3 class="h">Definition</h3>
+        <div class="grid2" style="margin-bottom:10px">
+          <div><label class="lbl">entity key</label><input type="text" id="b-key" class="mono" value="team"></div>
+          <div><label class="lbl">label</label><input type="text" id="b-label" value="team"></div>
+        </div>
+        <div style="margin-bottom:14px"><label class="lbl">tool (MCP)</label><input type="text" id="b-tool" class="mono" value="addTeam_post"></div>
+        <div class="row-actions"><h3 class="h" style="margin:0">Fields</h3><button class="btn ghost sm" id="b-add">+ Add field</button></div>
+        <div id="b-fields" style="margin-top:10px"></div>
+        <div style="margin-top:6px"><label class="lbl">defaults (key=value, comma-separated)</label><input type="text" id="b-defaults" class="mono" value="enabled=Y"></div>
+      </div>
+      <div class="panel">
+        <h3 class="h">Generated spec</h3>
+        <div class="code">
+          <div class="cap"><span id="b-cap">_ENTITY_CREATE["team"]</span><button class="copy" id="b-copy">Copy</button></div>
+          <pre id="b-out"></pre>
+        </div>
+        <p style="font-size:12px;color:var(--muted);margin:11px 2px 0">Paste into <code class="mono">_ENTITY_CREATE</code>,
+          add the entity noun to <code class="mono">_EC_ENTITY</code>, and confirm the tool's NOT-NULL / unique columns are covered.</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="checklist" style="border-bottom:0">
+    <h2><span class="n">12</span> Adding a workflow — checklist</h2>
+    <ol class="checklist" id="checklist-list"></ol>
+  </section>
+</main>
+
+<footer class="foot">
+  Reference for <code>gc_agent/app/services/flows.py</code> · the engine renders every workflow from its spec — author the spec, not the steps.
+</footer>
+<script src="guide.js"></script>
+</body>
+</html>

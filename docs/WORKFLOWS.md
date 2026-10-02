@@ -3,9 +3,10 @@
 **Goal:** add a new multi-step guided workflow (the stepped, picker-driven, confirm-before-run
 flows in the agent widget) by writing **one declarative spec** — not step handlers or rendering code.
 
-**Interactive reference:** [Guided Workflow Template](https://claude.ai/artifact/J32WYQ2LWr1rTrpX3kQKPU)
-— explorable anatomy, a card per field type, the lifecycle, a worked example, and a **live builder
-that generates the `_ENTITY_CREATE` spec**. (Private link — share from the page's Share menu.)
+**Interactive guide:** open **“Workflow authoring guide”** from the agent admin header (`/admin`) —
+served at `/static/workflows-guide/`. Explorable anatomy, the option-state colors
+(selectable / reference / boolean), lifecycle, real screens, an animated walkthrough, the icon set,
+design tokens, and a **live builder that generates the `_ENTITY_CREATE` spec**.
 
 **Source of truth:** [`app/services/flows.py`](../app/services/flows.py).
 
