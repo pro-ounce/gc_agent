@@ -161,6 +161,22 @@ def _tidy_name(name: str) -> str:
     return " ".join(w(x) for x in (name or "").split())
 
 
+# Words that, left alone after stripping an app-type suffix, read as the platform/admin in
+# general rather than one application ("Systems Planner" → "Systems"); for those keep the full name.
+_GENERIC_SHORT = {"systems", "system", "platform", "admin", "administration", "general"}
+
+
+def short_app_name(name: str) -> str:
+    """A concise-but-complete label for an application, for chip copy like "Roles in …".
+    Drops only a trailing "Planner"/"Manager" app-type suffix ("Formulation Planner" →
+    "Formulation") while keeping genuinely two-word names whole ("Smart Hub", "Cost Model") —
+    a plain first-word clip turned "Smart Hub" into "Smart". Keeps the full name when the strip
+    would leave a bare, ambiguous word. Single source of truth for suggestions + ecosystem_qa."""
+    full = (name or "").strip()
+    base = re.sub(r"\s+(planner|manager)$", "", full, flags=re.I).strip()
+    return base if (base and base.lower() not in _GENERIC_SHORT) else full
+
+
 async def applications(headers: dict[str, str] | None) -> list[dict[str, Any]]:
     """The application catalogue in canonical (switcher) order, each with its own metadata
     and a license-availability flag. Fields come straight from getAllApplications_get."""

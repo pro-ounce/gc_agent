@@ -16,7 +16,6 @@ Falls back to a sensible general set for an unknown / no-current-application con
 """
 from __future__ import annotations
 
-import re as _re
 from typing import Any
 
 from . import ecosystem as eco
@@ -37,9 +36,6 @@ _MODULE_BALLOONS: dict[str, list[tuple[str, str]]] = {
     ],
 }
 # fe module / hub aliases → application code
-# Words that, left bare after dropping a "Planner"/"Manager" suffix, no longer name THIS
-# application unambiguously — keep the full display name instead ("Systems Planner", not "Systems").
-_GENERIC_SHORT = {"systems", "system", "platform", "admin", "administration", "general"}
 
 _ALIASES = {
     "smarthub": "SMART_HUB", "smart-hub": "SMART_HUB",
@@ -109,14 +105,9 @@ async def _build(module: str, headers: dict[str, str] | None, limit: int) -> lis
         ][:limit]
 
     out: list[dict[str, Any]] = []
-    # Concise-but-complete app label: drop only a trailing "Planner"/"Manager" app-type suffix
-    # ("Formulation Planner" → "Formulation"), but keep genuinely two-word names whole
-    # ("Smart Hub", "Cost Model") — the old first-word-only clip turned "Smart Hub" into "Smart".
-    # AND keep the full name when the strip would leave a bare, ambiguous word: "Systems Planner"
-    # → "Systems" reads as the admin/platform in general, not this specific application.
-    _full = str(app["name"]).strip()
-    _base = _re.sub(r"\s+(planner|manager)$", "", _full, flags=_re.I).strip()
-    short = _base if (_base and _base.lower() not in _GENERIC_SHORT) else _full
+    # Concise-but-complete app label (shared helper; keeps "Smart Hub" whole, drops only a
+    # trailing Planner/Manager suffix, guards bare ambiguous words like "Systems").
+    short = eco.short_app_name(str(app["name"]))
 
     # 1) admin-pinned balloons from the store (top priority), else the built-in headline set.
     pinned = balloon_store.get_overrides(app["code"]) or [

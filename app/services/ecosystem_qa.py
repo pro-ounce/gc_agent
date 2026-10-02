@@ -678,7 +678,7 @@ async def _about_app(app: dict[str, Any], headers: dict[str, str] | None,
         more = f" *(+{len(roles) - 12} more)*" if len(roles) > 12 else ""
         parts.append(f"**Roles ({len(roles)})**: {shown}{more}")
     msg = "\n\n".join(parts)
-    chips = [_chip(f"Roles in {app['name'].split()[0]}", f"roles in {app['code']}", icon="role")]
+    chips = [_chip(f"Roles in {eco.short_app_name(app['name'])}", f"roles in {app['code']}", icon="role")]
     for label, send in (wf or {}).get("entry", []):
         chips.append(_chip(label, send, icon="check"))
     return FlowResult(message=msg, suggestions=chips)
@@ -693,7 +693,7 @@ async def _app_roles(app: dict[str, Any], headers: dict[str, str] | None,
     lead = _here(app, from_current) + _say(f"**{app['name']}** has **{len(roles)} roles** — here they are:",
                                            f"there are **{len(roles)} roles** in **{app['name']}**:")
     msg = lead[0].upper() + lead[1:] + "\n\n" + _tbl(["Role", "Description"], rows)
-    return FlowResult(message=msg, suggestions=[_chip(f"About {app['name'].split()[0]}", f"about {app['code']}")])
+    return FlowResult(message=msg, suggestions=[_chip(f"About {eco.short_app_name(app['name'])}", f"about {app['code']}")])
 
 
 def _extract_user(msg: str) -> str | None:
@@ -821,7 +821,7 @@ async def _named_access(user: str, headers: dict[str, str] | None,
         if bound_app:
             return FlowResult(
                 message=f"**{full}** ({user}) has no access in **{bound_app['name']}** that I can see.",
-                suggestions=[_chip(f"Roles in {bound_app['name'].split()[0]}", f"roles in {bound_app['code']}", icon="role")])
+                suggestions=[_chip(f"Roles in {eco.short_app_name(bound_app['name'])}", f"roles in {bound_app['code']}", icon="role")])
         return None
 
     # App-bounded: one application, so drop the redundant Application column.
@@ -901,7 +901,7 @@ async def _app_users(app: dict[str, Any], headers: dict[str, str] | None,
     return FlowResult(
         message=head + ":",
         blocks=[_table_block(f"{app['name']} — users", ["User", "Role(s)", "Access type(s)"], trows)],
-        suggestions=[_chip(f"Roles in {app['name'].split()[0]}", f"roles in {app['code']}", icon="role")])
+        suggestions=[_chip(f"Roles in {eco.short_app_name(app['name'])}", f"roles in {app['code']}", icon="role")])
 
 
 def _pick(d: dict[str, Any], *keys: str) -> str:
