@@ -57,14 +57,19 @@
   function render(){
     var groups = [];
     params.forEach(function(p){ if(groups.indexOf(p.group)<0) groups.push(p.group); });
-    elTabs.innerHTML = groups.map(function(g,i){ return tabBtn(g,g,i===0); }).join("")
+    var SH=function(t){ return '<div class="side-group" role="presentation">'+esc(t)+'</div>'; };
+    elTabs.innerHTML = SH("Settings")
+      + groups.map(function(g,i){ return tabBtn(g,g,i===0); }).join("")
+      + SH("Monitor")
       + tabBtn("Health","__health__",false)
       + tabBtn("Metrics","__metrics__",false)
       + tabBtn("Activity","__activity__",false)
+      + SH("Build")
       + tabBtn("Skills","__workflows__",false)
       + tabBtn("Guide","__guide__",false)
       + tabBtn("API","__api__",false)
       + tabBtn("Docs","__docs__",false)
+      + SH("Operations")
       + tabBtn("Audit","__audit__",false)
       + tabBtn("Backups","__backups__",false)
       + tabBtn("Logs","__logs__",false);
@@ -74,7 +79,8 @@
         +' id="panel-'+sid(g)+'" aria-labelledby="tab-'+sid(g)+'" tabindex="0"><div class="cards">'+cards+'</div></section>';
     }).join("") + healthSectionHTML() + metricsSectionHTML() + activitySectionHTML() + workflowsSectionHTML() + guideSectionHTML() + apiSectionHTML() + docsSectionHTML() + auditSectionHTML() + backupsSectionHTML() + logsSectionHTML();
     // tab switching — WAI-ARIA tabs: roving tabindex, arrow/Home/End keys, aria-selected.
-    var tabEls = Array.prototype.slice.call(elTabs.children);
+    // (only the .admin-tab buttons are tabs; the .side-group dividers are skipped)
+    var tabEls = Array.prototype.slice.call(elTabs.querySelectorAll(".admin-tab"));
     function selectTab(btn){
       tabEls.forEach(function(b){
         var on = b===btn;

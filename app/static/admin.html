@@ -45,6 +45,9 @@
     .brand-text strong{color:#fff;font-size:14.5px;font-weight:650;letter-spacing:-.01em}
     .brand-text span{font-size:11.5px;color:#8b92a6}
     .side-label{font-size:10.5px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:#6f7691;padding:6px 20px 5px;margin-top:4px}
+    /* In-list section dividers (Settings / Monitor / Build / Operations) */
+    .side-group{font-size:10px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;color:#656c86;padding:15px 12px 6px}
+    .side-group:first-child{padding-top:6px}
     .admin-tabs{display:flex;flex-direction:column;gap:1px;padding:4px 10px 12px;overflow-y:auto;flex:1;min-height:0;scrollbar-width:thin}
     .admin-tab{appearance:none;border:0;background:transparent;color:#c2c8d6;text-align:left;cursor:pointer;
       font-size:13.5px;font-weight:500;padding:8px 12px;border-radius:8px;display:flex;align-items:center;gap:9px;
@@ -266,7 +269,6 @@ table.api-params tr:last-child td{border-bottom:0}
         <div class="brand-mark" aria-hidden="true">◆</div>
         <div class="brand-text"><strong>GC Agent</strong><span>Admin console</span></div>
       </div>
-      <div class="side-label">Sections</div>
       <nav class="admin-tabs" id="tabs" role="tablist" aria-label="Admin sections"></nav>
       <div class="sidebar-foot">Changes persist to OpenSearch and apply on the next turn — no restart.</div>
     </aside>
