@@ -61,8 +61,8 @@
       + tabBtn("Health","__health__",false)
       + tabBtn("Metrics","__metrics__",false)
       + tabBtn("Activity","__activity__",false)
-      + tabBtn("Automations","__workflows__",false)
-      + tabBtn("Guided workflows","__guide__",false)
+      + tabBtn("Skills","__workflows__",false)
+      + tabBtn("Workflows","__guide__",false)
       + tabBtn("API","__api__",false)
       + tabBtn("Docs","__docs__",false)
       + tabBtn("Audit","__audit__",false)
@@ -588,21 +588,21 @@
     return '<section class="admin-section" data-tab="__workflows__" role="tabpanel" id="panel-__workflows__" aria-labelledby="tab-__workflows__" tabindex="0">'
       +'<div class="wfe-wrap">'
       // ── left: workflow list ──
-      +'<div class="card wfe-list-card"><div class="top"><span class="lbl">Automations <span id="wfe-count" class="key"></span></span>'
+      +'<div class="card wfe-list-card"><div class="top"><span class="lbl">Skills <span id="wfe-count" class="key"></span></span>'
       +'<span class="btns"><button id="wfe-new" class="btn" style="padding:5px 11px">+ New</button>'
       +'<button id="wfe-refresh" class="btn" style="padding:5px 11px">Refresh</button></span></div>'
       +'<div id="wfe-list" style="margin-top:10px">loading…</div>'
-      +'<div class="def" style="margin-top:12px;line-height:1.6"><b>Automations</b> are multi-step node graphs (fetch &rarr; mutate) the agent runs end-to-end &mdash; distinct from <b>Guided workflows</b> (the stepped create-flows in the widget; see that tab). Authored as <b>data, not code</b>: the same JSON the agent loads from <span class="mono">services/workflows/*.json</span>. Save here and it validates, persists (survives deploys), and the engine picks it up on the next turn.</div>'
+      +'<div class="def" style="margin-top:12px;line-height:1.6"><b>Skills</b> are multi-step node graphs (fetch &rarr; mutate) the agent runs end-to-end &mdash; distinct from <b>Workflows</b> (the stepped create-flows in the widget; see that tab). Authored as <b>data, not code</b>: the same JSON the agent loads from <span class="mono">services/workflows/*.json</span>. Save here and it validates, persists (survives deploys), and the engine picks it up on the next turn.</div>'
       +'</div>'
       // ── right: editor ──
       +'<div class="card wfe-edit-card"><div class="top">'
-      +'<span class="lbl" id="wfe-title">Select an automation</span>'
+      +'<span class="lbl" id="wfe-title">Select a skill</span>'
       +'<span class="btns"><span class="wfe-toggle" role="tablist">'
       +'<button id="wfe-v-diagram" class="wfe-vbtn active" data-v="diagram">Diagram</button>'
       +'<button id="wfe-v-json" class="wfe-vbtn" data-v="json">JSON</button></span></span></div>'
-      +'<div id="wfe-diagram" class="wfe-diagram">Pick an automation on the left, or <b>+ New</b> to author one.</div>'
+      +'<div id="wfe-diagram" class="wfe-diagram">Pick a skill on the left, or <b>+ New</b> to author one.</div>'
       +'<div id="wfe-json-wrap" hidden>'
-      +'<textarea id="wfe-json" class="wfe-json mono" spellcheck="false" aria-label="Automation JSON"></textarea>'
+      +'<textarea id="wfe-json" class="wfe-json mono" spellcheck="false" aria-label="Skill JSON"></textarea>'
       +'<details class="wfe-ref"><summary>Node types</summary><div id="wfe-ref"></div></details>'
       +'</div>'
       +'<div class="wfe-actions"><span id="wfe-status" class="def"></span><span style="flex:1"></span>'
@@ -620,7 +620,7 @@
   function renderWfList(){
     var el=document.getElementById("wfe-list"); if(!el) return;
     var cnt=document.getElementById("wfe-count"); if(cnt) cnt.textContent="("+_wfListCache.length+")";
-    if(!_wfListCache.length){ el.innerHTML='<div class="def">No automations registered.</div>'; return; }
+    if(!_wfListCache.length){ el.innerHTML='<div class="def">No skills registered.</div>'; return; }
     el.innerHTML=_wfListCache.map(function(w){
       var on=(w.id===_wfSelId);
       return '<div class="wfe-item'+(on?" sel":"")+'" data-id="'+esc(w.id)+'" tabindex="0" role="button">'
@@ -666,8 +666,8 @@
 
   function newWf(){
     _wfSelId=null;
-    document.getElementById("wfe-title").textContent="New automation";
-    var tmpl={ id:"my_automation", title:"My automation", trigger:"\\bmy trigger\\b", start:"ask_1",
+    document.getElementById("wfe-title").textContent="New skill";
+    var tmpl={ id:"my_skill", title:"My skill", trigger:"\\bmy trigger\\b", start:"ask_1",
       nodes:[ {id:"ask_1",type:"ask",field:"name",prompt:"What is your **name**?",next:"say_1"},
               {id:"say_1",type:"say",text:"✅ Thanks, $name."} ] };
     wfEditor().value=JSON.stringify(tmpl,null,2);
@@ -700,7 +700,7 @@
   }
   function deleteWf(){
     if(!_wfSelId) return;
-    if(!window.confirm("Delete automation “"+_wfSelId+"”? This removes the admin-authored copy.")) return;
+    if(!window.confirm("Delete skill “"+_wfSelId+"”? This removes the admin-authored copy.")) return;
     fetch(API+"/workflows/"+encodeURIComponent(_wfSelId),{method:"DELETE"})
       .then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});})
       .then(function(res){
