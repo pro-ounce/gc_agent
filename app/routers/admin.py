@@ -52,6 +52,38 @@ async def admin_js(request: Request):
     return JSONResponse({"detail": "admin.js not found"}, status_code=404)
 
 
+# The Guided Workflow authoring guide — a self-contained interactive page. Served here (not from
+# /static, which is behind RBAC) so it shares the /admin loopback guard and stays RBAC-exempt,
+# reachable from the admin console on the ops LAN. CSP-safe: external guide.js (script-src 'self'),
+# same-origin images (img-src 'self'), no external fonts.
+_WF_GUIDE_DIR = _STATIC_DIR / "workflows-guide"
+_WF_GUIDE_TYPES = {".js": "application/javascript; charset=utf-8", ".jpg": "image/jpeg",
+                   ".jpeg": "image/jpeg", ".png": "image/png", ".svg": "image/svg+xml",
+                   ".css": "text/css", ".html": "text/html; charset=utf-8"}
+
+
+@router.get("/admin/guide", include_in_schema=False)
+async def wf_guide_page(request: Request):
+    _guard(request)
+    idx = _WF_GUIDE_DIR / "index.html"
+    if idx.exists():
+        return FileResponse(str(idx), media_type="text/html; charset=utf-8", headers=_NOCACHE)
+    return JSONResponse({"detail": "workflow guide not found"}, status_code=404)
+
+
+@router.get("/admin/guide/{asset:path}", include_in_schema=False)
+async def wf_guide_asset(request: Request, asset: str):
+    _guard(request)
+    base = _WF_GUIDE_DIR.resolve()
+    target = (base / asset).resolve()
+    if base != target and base not in target.parents:  # no path traversal outside the guide dir
+        return JSONResponse({"detail": "forbidden"}, status_code=403)
+    if target.is_file():
+        return FileResponse(str(target), media_type=_WF_GUIDE_TYPES.get(target.suffix.lower()),
+                            headers=_NOCACHE)
+    return JSONResponse({"detail": "not found"}, status_code=404)
+
+
 @router.get("/admin/config", summary="Current runtime config (values + defaults)")
 async def admin_get_config(request: Request):
     _guard(request)

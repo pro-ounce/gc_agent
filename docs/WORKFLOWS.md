@@ -4,7 +4,7 @@
 flows in the agent widget) by writing **one declarative spec** — not step handlers or rendering code.
 
 **Interactive guide:** open **“Workflow authoring guide”** from the agent admin header (`/admin`) —
-served at `/static/workflows-guide/`. Explorable anatomy, the option-state colors
+served at `/admin/guide`. Explorable anatomy, the option-state colors
 (selectable / reference / boolean), lifecycle, real screens, an animated walkthrough, the icon set,
 design tokens, and a **live builder that generates the `_ENTITY_CREATE` spec**.
 
