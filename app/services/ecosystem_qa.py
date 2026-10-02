@@ -667,7 +667,12 @@ async def _about_app(app: dict[str, Any], headers: dict[str, str] | None,
     if not eco.is_available(app):
         parts.append("> ⚠️ *Not available on the current license.*")
     desc = app["desc"] or app["info"]
-    if desc:
+    # Skip a "description" that only repeats the name/code (some apps store their own name as the
+    # description → the card would show "Smart Hub / SMART_HUB / Smart HuB", the name three times).
+    if desc and desc.strip().lower() not in {
+        str(app["name"]).strip().lower(),
+        str(app["code"]).strip().lower(),
+    }:
         parts.append(desc)
     if wf and wf.get("workflow"):
         parts.append("**Workflow** — " + wf["workflow"])
