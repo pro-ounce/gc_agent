@@ -12,6 +12,7 @@
   // then render **bold**, *italic*, `code` so the Activity feed doesn't show raw ** and ` markers.
   var mdI = function(s){
     return esc(s)
+      .replace(/(^|\s)#{1,6}\s+/g,'$1')                 // strip ATX heading markers (### Title)
       .replace(/\*\*([^*]+)\*\*/g,'<b>$1</b>')
       .replace(/(^|[\s(])\*([^*\s][^*]*?)\*(?=[\s).,;:!?]|$)/g,'$1<i>$2</i>')
       .replace(/`([^`]+)`/g,'<code class="mdc">$1</code>');
