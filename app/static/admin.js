@@ -61,8 +61,8 @@
       + tabBtn("Health","__health__",false)
       + tabBtn("Metrics","__metrics__",false)
       + tabBtn("Activity","__activity__",false)
-      + tabBtn("Workflows","__workflows__",false)
-      + tabBtn("Guide","__guide__",false)
+      + tabBtn("Automations","__workflows__",false)
+      + tabBtn("Guided workflows","__guide__",false)
       + tabBtn("API","__api__",false)
       + tabBtn("Docs","__docs__",false)
       + tabBtn("Audit","__audit__",false)
@@ -478,7 +478,7 @@
       t.total_ms!=null?'<span class="mono">'+ms(t.total_ms)+'</span> total':'',
       t.llm_ms!=null?"llm "+ms(t.llm_ms):'', t.tools_ms!=null?"tools "+ms(t.tools_ms):'',
       toks, t.outcome?'outcome <span class="mono">'+esc(t.outcome)+'</span>':''].filter(Boolean).join('<span style="opacity:.4">·</span>');
-    return '<div class="turn'+(err.length?' err':'')+'" data-rid="'+esc(t.request_id||"")+'" style="cursor:pointer" title="Click to visualize this request’s workflow">'
+    return '<div class="turn'+(err.length?' err':'')+'" data-rid="'+esc(t.request_id||"")+'" style="cursor:pointer" title="Click to visualize this request’s trace">'
       +'<div class="q">'+srcBadge(t)+(t.question?esc(t.question):'<span class="def">(no prompt captured)</span>')
       +'<span class="pill" style="float:right;opacity:.6">⧉ workflow</span></div>'
       +(t.answer?'<div class="a">↳ '+esc(t.answer)+(t.blocks?' <span class="pill">'+t.blocks+' card'+(t.blocks>1?'s':'')+'</span>':'')+'</div>':'')
@@ -525,7 +525,7 @@
     m.style.cssText="position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:9999;display:none;align-items:flex-start;justify-content:center;padding:5vh 16px;overflow:auto";
     m.innerHTML='<div style="background:var(--bg,#fff);max-width:760px;width:100%;border-radius:14px;box-shadow:0 20px 60px rgba(0,0,0,.3);padding:18px 20px">'
       +'<div style="display:flex;justify-content:space-between;align-items:center;gap:12px">'
-      +'<div style="font-weight:600;font-size:15px" id="wf-title">Request workflow</div>'
+      +'<div style="font-weight:600;font-size:15px" id="wf-title">Request trace</div>'
       +'<div><span id="wf-live" class="badge-dev" style="margin-right:8px"></span>'
       +'<button id="wf-close" class="btn" style="padding:4px 10px">Close</button></div></div>'
       +'<div id="wf-head" class="def" style="margin:8px 0 4px"></div>'
@@ -588,21 +588,21 @@
     return '<section class="admin-section" data-tab="__workflows__" role="tabpanel" id="panel-__workflows__" aria-labelledby="tab-__workflows__" tabindex="0">'
       +'<div class="wfe-wrap">'
       // ── left: workflow list ──
-      +'<div class="card wfe-list-card"><div class="top"><span class="lbl">Workflows <span id="wfe-count" class="key"></span></span>'
+      +'<div class="card wfe-list-card"><div class="top"><span class="lbl">Automations <span id="wfe-count" class="key"></span></span>'
       +'<span class="btns"><button id="wfe-new" class="btn" style="padding:5px 11px">+ New</button>'
       +'<button id="wfe-refresh" class="btn" style="padding:5px 11px">Refresh</button></span></div>'
       +'<div id="wfe-list" style="margin-top:10px">loading…</div>'
-      +'<div class="def" style="margin-top:12px;line-height:1.6">Workflows are <b>data, not code</b> — the same JSON the agent loads from <span class="mono">services/workflows/*.json</span>. Save here and it validates, persists (survives deploys), and the chat engine picks it up on the next turn.</div>'
+      +'<div class="def" style="margin-top:12px;line-height:1.6"><b>Automations</b> are multi-step node graphs (fetch &rarr; mutate) the agent runs end-to-end &mdash; distinct from <b>Guided workflows</b> (the stepped create-flows in the widget; see that tab). Authored as <b>data, not code</b>: the same JSON the agent loads from <span class="mono">services/workflows/*.json</span>. Save here and it validates, persists (survives deploys), and the engine picks it up on the next turn.</div>'
       +'</div>'
       // ── right: editor ──
       +'<div class="card wfe-edit-card"><div class="top">'
-      +'<span class="lbl" id="wfe-title">Select a workflow</span>'
+      +'<span class="lbl" id="wfe-title">Select an automation</span>'
       +'<span class="btns"><span class="wfe-toggle" role="tablist">'
       +'<button id="wfe-v-diagram" class="wfe-vbtn active" data-v="diagram">Diagram</button>'
       +'<button id="wfe-v-json" class="wfe-vbtn" data-v="json">JSON</button></span></span></div>'
-      +'<div id="wfe-diagram" class="wfe-diagram">Pick a workflow on the left, or <b>+ New</b> to author one.</div>'
+      +'<div id="wfe-diagram" class="wfe-diagram">Pick an automation on the left, or <b>+ New</b> to author one.</div>'
       +'<div id="wfe-json-wrap" hidden>'
-      +'<textarea id="wfe-json" class="wfe-json mono" spellcheck="false" aria-label="Workflow JSON"></textarea>'
+      +'<textarea id="wfe-json" class="wfe-json mono" spellcheck="false" aria-label="Automation JSON"></textarea>'
       +'<details class="wfe-ref"><summary>Node types</summary><div id="wfe-ref"></div></details>'
       +'</div>'
       +'<div class="wfe-actions"><span id="wfe-status" class="def"></span><span style="flex:1"></span>'
@@ -620,7 +620,7 @@
   function renderWfList(){
     var el=document.getElementById("wfe-list"); if(!el) return;
     var cnt=document.getElementById("wfe-count"); if(cnt) cnt.textContent="("+_wfListCache.length+")";
-    if(!_wfListCache.length){ el.innerHTML='<div class="def">No workflows registered.</div>'; return; }
+    if(!_wfListCache.length){ el.innerHTML='<div class="def">No automations registered.</div>'; return; }
     el.innerHTML=_wfListCache.map(function(w){
       var on=(w.id===_wfSelId);
       return '<div class="wfe-item'+(on?" sel":"")+'" data-id="'+esc(w.id)+'" tabindex="0" role="button">'
@@ -666,8 +666,8 @@
 
   function newWf(){
     _wfSelId=null;
-    document.getElementById("wfe-title").textContent="New workflow";
-    var tmpl={ id:"my_workflow", title:"My workflow", trigger:"\\bmy trigger\\b", start:"ask_1",
+    document.getElementById("wfe-title").textContent="New automation";
+    var tmpl={ id:"my_automation", title:"My automation", trigger:"\\bmy trigger\\b", start:"ask_1",
       nodes:[ {id:"ask_1",type:"ask",field:"name",prompt:"What is your **name**?",next:"say_1"},
               {id:"say_1",type:"say",text:"✅ Thanks, $name."} ] };
     wfEditor().value=JSON.stringify(tmpl,null,2);
@@ -700,7 +700,7 @@
   }
   function deleteWf(){
     if(!_wfSelId) return;
-    if(!window.confirm("Delete workflow “"+_wfSelId+"”? This removes the admin-authored copy.")) return;
+    if(!window.confirm("Delete automation “"+_wfSelId+"”? This removes the admin-authored copy.")) return;
     fetch(API+"/workflows/"+encodeURIComponent(_wfSelId),{method:"DELETE"})
       .then(function(r){return r.json().then(function(d){return {ok:r.ok,d:d};});})
       .then(function(res){
