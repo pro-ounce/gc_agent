@@ -265,17 +265,33 @@ def workflow_for(code: str) -> dict[str, Any] | None:
 
 
 # ── grounding digest (compact, injected into the system prompt) ────────────────────
+def _is_clean_code(s: str) -> bool:
+    """A real app/role code is printable (no control bytes). b64decode of a header that
+    is NOT base64-of-plain-text can silently yield control characters — reject those so we
+    never store or display garbage like 'H\\x11Lu\\x01'."""
+    return bool(s) and all(c == "\t" or 32 <= ord(c) < 127 or ord(c) > 160 for c in s)
+
+
 def selected_app_code(headers: dict[str, str] | None) -> str:
-    """Decode the current application from the X-Selected-App header (base64 of the code)."""
+    """Decode the current application from the X-Selected-App header (base64 of the code).
+
+    Defensive: if the base64 decode yields control characters (the header was an encrypted/
+    binary token rather than base64 of a plain code), fall back to the raw value when it is
+    itself clean, else return "" (the handled 'no current app' case) — never garbage.
+    """
     if not headers:
         return ""
-    raw = headers.get("X-Selected-App") or headers.get("x-selected-app") or ""
+    raw = (headers.get("X-Selected-App") or headers.get("x-selected-app") or "").strip()
     if not raw:
         return ""
     try:
-        return base64.b64decode(raw).decode("utf-8", "ignore").strip()
+        dec = base64.b64decode(raw).decode("utf-8", "ignore").strip()
+        # Decoded cleanly → that's the code. Decoded to control bytes → the header was an
+        # encrypted/binary token, not base64 of a plain code → report no current app.
+        return dec if _is_clean_code(dec) else ""
     except Exception:  # noqa: BLE001
-        return raw.strip()
+        # Not valid base64 at all → the widget sent the plain code un-encoded; use it.
+        return raw if _is_clean_code(raw) else ""
 
 
 _NO_ROLE = {"", "null", "landing", "none", "undefined"}

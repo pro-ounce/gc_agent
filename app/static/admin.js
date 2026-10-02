@@ -16,6 +16,9 @@
       .replace(/(^|[\s(])\*([^*\s][^*]*?)\*(?=[\s).,;:!?]|$)/g,'$1<i>$2</i>')
       .replace(/`([^`]+)`/g,'<code class="mdc">$1</code>');
   };
+  // Strip control characters so a corrupted header value (e.g. an encrypted X-Selected-App
+  // that decoded to control bytes) can never render as mangled/cut-off text.
+  var cc = function(s){ return String(s==null?"":s).replace(/[\u0000-\u001f\u007f-\u009f]/g,"").trim(); };
   // Safe DOM id from an arbitrary config key/group (used to wire aria-labelledby / tabs).
   var sid = function(s){return String(s==null?"":s).replace(/[^\w-]/g,"_");};
   var params = [];       // from server
@@ -466,14 +469,28 @@
   }
 
   // ── Activity tab (live chat turns: prompt, answer, metrics, errors) ──
+  // Source lanes a turn can be answered by (matches turn.answered_by). "Model" == inference.
+  var AC_SRC = [ {k:"",label:"All"}, {k:"flow",label:"Flow"}, {k:"ecosystem",label:"Ecosystem"}, {k:"inference",label:"Model"} ];
   function activitySectionHTML(){
+    var seg=AC_SRC.map(function(s,i){
+      return '<button class="seg-btn'+(i===0?' active':'')+'" data-src="'+s.k+'" role="tab" aria-selected="'+(i===0)+'">'
+        +esc(s.label)+' <span class="seg-n" data-srcn="'+s.k+'"></span></button>';
+    }).join("");
     return '<section class="admin-section" data-tab="__activity__" role="tabpanel" id="panel-__activity__" aria-labelledby="tab-__activity__" tabindex="0">'
-      +'<div class="card"><div class="top"><span class="lbl">Live activity <span id="ac-count" class="key"></span></span>'
+      +'<div class="card ac-card">'
+      +'<div class="ac-head"><span class="lbl">Live activity <span id="ac-count" class="key"></span></span>'
       +'<span class="btns"><label class="switch" style="gap:6px"><input type="checkbox" id="ac-auto" checked aria-label="Auto-refresh activity">'
       +'<span class="track" aria-hidden="true"><span class="knob"></span></span><span class="state" style="font-size:12px">live</span></label>'
-      +'<label class="switch" style="gap:6px"><input type="checkbox" id="ac-erronly" aria-label="Errors only"><span class="track" aria-hidden="true"><span class="knob"></span></span><span class="state" style="font-size:12px">errors</span></label>'
-      +'<button id="ac-refresh" class="btn" style="padding:5px 11px">Refresh</button></span></div>'
-      +'<div id="ac-list" style="margin-top:8px;max-height:66vh;overflow:auto">loading…</div></div></section>';
+      +'<button id="ac-refresh" class="btn" style="padding:7px 13px">Refresh</button></span></div>'
+      +'<div class="ac-filters">'
+      +'<div class="ac-search"><svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true"><circle cx="7" cy="7" r="5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M11 11l3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>'
+      +'<input type="text" id="ac-q" placeholder="Search prompts, answers, users, tools…" aria-label="Search activity" autocomplete="off">'
+      +'<button id="ac-q-clear" class="ac-q-clear" aria-label="Clear search" hidden>&times;</button></div>'
+      +'<div class="seg" id="ac-src" role="tablist" aria-label="Filter by source">'+seg+'</div>'
+      +'<label class="chip-toggle"><input type="checkbox" id="ac-erronly" aria-label="Errors only"><span>Errors only</span></label>'
+      +'</div>'
+      +'<div id="ac-empty-note" class="ac-empty" hidden></div>'
+      +'<div id="ac-list">loading…</div></div></section>';
   }
   function srcBadge(t){
     var s=t.answered_by||''; if(!s) return '';
@@ -482,47 +499,105 @@
     var label=(harness?'⚙ '+s:'⚡ inference')+extra;
     return '<span class="pill" style="background:'+col+'1a;color:'+col+';border-color:'+col+'55;margin-right:6px">'+esc(label)+'</span>';
   }
+  // Turn completion status → plain language + a status colour. "stop" is the normal
+  // finish; others come from cancellation, errors, or the raw LLM finish_reason.
+  var OUTCOME={ stop:["Completed","ok"], complete:["Completed","ok"], cancelled:["Cancelled","warn"],
+    canceled:["Cancelled","warn"], error:["Error","err"], length:["Truncated (token cap)","warn"],
+    tool_calls:["Tool call","ok"], content_filter:["Filtered","warn"] };
+  function outcomeChip(o){
+    if(!o) return "";
+    var m=OUTCOME[String(o).toLowerCase()]||[String(o),"neutral"];
+    return '<span class="stat stat-'+m[1]+'"><span class="stat-dot"></span>'+esc(m[0])+'</span>';
+  }
   function turnRow(t){
     var err=(t.errors&&t.errors.length)?t.errors:[];
     var toks=(t.tokens_in!=null||t.tokens_out!=null)?(num(t.tokens_in)+"→"+num(t.tokens_out)+" tok"):"";
     var tools=(t.tools&&t.tools.length)?t.tools.map(function(x){return '<span class="pill">'+esc(x)+'</span>';}).join(" "):'<span class="def">no tools</span>';
-    var who=(t.user_name||t.user_id)?("👤 "+esc(t.user_name||t.user_id)+(t.client_ip?(" @"+esc(t.client_ip)):"")):"";
-    var ctx=(t.app?("📱 "+esc(t.app)):"")+(t.role?(" · 🎭 "+esc(t.role)):"");
-    var meta=[t.ts?'<span class="mono">'+esc(t.ts)+'</span>':'', who, ctx,
+    var who=(t.user_name||t.user_id)?("👤 "+esc(cc(t.user_name||t.user_id))+(t.client_ip?(" @"+esc(cc(t.client_ip))):"")):"";
+    var app=cc(t.app), role=cc(t.role);
+    var ctx=(app?("📱 "+esc(app)):"")+(role?((app?" · ":"")+"🎭 "+esc(role)):"");
+    var meta=[t.ts?'<span class="mono">'+esc(cc(t.ts))+'</span>':'', who, ctx,
       t.total_ms!=null?'<span class="mono">'+ms(t.total_ms)+'</span> total':'',
       t.llm_ms!=null?"llm "+ms(t.llm_ms):'', t.tools_ms!=null?"tools "+ms(t.tools_ms):'',
-      toks, t.outcome?'outcome <span class="mono">'+esc(t.outcome)+'</span>':''].filter(Boolean).join('<span style="opacity:.4">·</span>');
+      toks].filter(Boolean).join('<span class="meta-sep">·</span>');
     return '<div class="turn'+(err.length?' err':'')+'" data-rid="'+esc(t.request_id||"")+'" style="cursor:pointer" title="Click to visualize this request’s trace">'
       +'<div class="q">'+srcBadge(t)+(t.question?mdI(t.question):'<span class="def">(no prompt captured)</span>')
       +'<span class="pill trace-pill">⧉ trace</span></div>'
       +(t.answer?'<div class="a">↳ '+mdI(t.answer)+(t.blocks?' <span class="pill">'+t.blocks+' card'+(t.blocks>1?'s':'')+'</span>':'')+'</div>':'')
       +err.map(function(e){return '<div class="errline">⚠ '+esc(e)+'</div>';}).join('')
       +(tools!=='<span class="def">no tools</span>'?'<div class="meta tools-row">'+tools+'</div>':'')
-      +'<div class="meta">'+meta+'</div></div>';
+      +'<div class="meta meta-foot">'+outcomeChip(t.outcome)+'<span class="meta-info">'+meta+'</span></div></div>';
+  }
+  var _acTurns=[], _acSrc="";
+  function _turnText(t){
+    return [t.question,t.answer,t.user_name,t.user_id,t.app,t.role,t.skill,t.outcome,
+      (t.tools||[]).join(" "),(t.errors||[]).join(" ")].map(function(x){return cc(x);}).join(" ").toLowerCase();
+  }
+  function renderTurns(){
+    var el=document.getElementById("ac-list"); if(!el) return;
+    var errOnly=(document.getElementById("ac-erronly")||{}).checked;
+    var q=((document.getElementById("ac-q")||{}).value||"").trim().toLowerCase();
+    // Live per-lane counts (computed over the error-filtered set so they reflect what's shown).
+    var base=_acTurns.filter(function(t){ return errOnly ? (t.errors&&t.errors.length) : true; });
+    AC_SRC.forEach(function(s){ var n=s.k?base.filter(function(t){return (t.answered_by||"")===s.k;}).length:base.length;
+      var b=document.querySelector('[data-srcn="'+s.k+'"]'); if(b) b.textContent=n; });
+    var rows=base.filter(function(t){
+      if(_acSrc && (t.answered_by||"")!==_acSrc) return false;
+      if(q && _turnText(t).indexOf(q)<0) return false;
+      return true;
+    });
+    var cnt=document.getElementById("ac-count"); if(cnt) cnt.textContent="("+rows.length+")";
+    var note=document.getElementById("ac-empty-note");
+    if(!_acTurns.length){ el.innerHTML='<div class="ac-empty">No chat turns captured yet.</div>'; if(note) note.hidden=true; return; }
+    if(!rows.length){
+      el.innerHTML='';
+      if(note){ note.hidden=false; note.innerHTML='No turns match these filters. <button id="ac-clear-all" class="linklike">Clear filters</button>'; }
+      return;
+    }
+    if(note) note.hidden=true;
+    el.innerHTML=rows.map(turnRow).join("");
   }
   function loadTurns(){
     var el=document.getElementById("ac-list"); if(!el) return;
-    var errOnly=(document.getElementById("ac-erronly")||{}).checked;
     fetch(API+"/turns?limit=60",{cache:"no-store"}).then(function(r){return r.json();}).then(function(d){
-      var turns=(d.turns||[]).filter(function(t){ return errOnly ? (t.errors&&t.errors.length) : true; });
-      var cnt=document.getElementById("ac-count"); if(cnt) cnt.textContent="("+turns.length+")";
-      el.innerHTML = turns.length ? turns.map(turnRow).join("") : '<div class="def" style="padding:12px 2px">No chat turns captured yet.</div>';
+      _acTurns=d.turns||[]; renderTurns();
     }).catch(function(e){ el.innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; });
   }
   var _acTimer=null;
   function activityActive(){ var s=document.querySelector('[data-tab="__activity__"]'); return s&&s.classList.contains("active"); }
+  function _acResetFilters(){
+    _acSrc=""; var q=document.getElementById("ac-q"); if(q) q.value="";
+    var e=document.getElementById("ac-erronly"); if(e) e.checked=false;
+    var qc=document.getElementById("ac-q-clear"); if(qc) qc.hidden=true;
+    document.querySelectorAll("#ac-src .seg-btn").forEach(function(x){ var on=!x.getAttribute("data-src");
+      x.classList.toggle("active",on); x.setAttribute("aria-selected",on); });
+    renderTurns();
+  }
   function initActivity(){
     var b=document.getElementById("ac-refresh"); if(!b) return;
     b.addEventListener("click",loadTurns);
-    document.getElementById("ac-erronly").addEventListener("change",loadTurns);
+    document.getElementById("ac-erronly").addEventListener("change",renderTurns);
+    // Search — filter in place, no refetch.
+    var q=document.getElementById("ac-q"), qc=document.getElementById("ac-q-clear");
+    if(q) q.addEventListener("input",function(){ if(qc) qc.hidden=!q.value; renderTurns(); });
+    if(qc) qc.addEventListener("click",function(){ q.value=""; qc.hidden=true; renderTurns(); q.focus(); });
+    // Source lanes — segmented control.
+    var seg=document.getElementById("ac-src");
+    if(seg) seg.addEventListener("click",function(e){ var btn=e.target.closest?e.target.closest(".seg-btn"):null; if(!btn) return;
+      _acSrc=btn.getAttribute("data-src")||"";
+      seg.querySelectorAll(".seg-btn").forEach(function(x){ var on=(x===btn); x.classList.toggle("active",on); x.setAttribute("aria-selected",on); });
+      renderTurns();
+    });
     if(_acTimer){clearInterval(_acTimer);}
     _acTimer=setInterval(function(){ var a=document.getElementById("ac-auto"); if(a&&a.checked&&activityActive()) loadTurns(); }, 3000);
-    // Click a turn → open its live/replay workflow visualization.
+    // Click a turn → open its live/replay workflow visualization (ignore clicks on the clear-filters link).
     var list=document.getElementById("ac-list");
     if(list) list.addEventListener("click", function(e){
       var row=e.target.closest ? e.target.closest(".turn") : null;
       if(row && row.getAttribute("data-rid")) openWorkflow(row.getAttribute("data-rid"));
     });
+    var note=document.getElementById("ac-empty-note");
+    if(note) note.addEventListener("click",function(e){ if(e.target&&e.target.id==="ac-clear-all") _acResetFilters(); });
     loadTurns();
   }
 
