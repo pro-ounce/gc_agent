@@ -662,7 +662,7 @@ async def _about_app(app: dict[str, Any], headers: dict[str, str] | None,
     lead = (f"Since you're in **{app['name']}**, here's the rundown:" if from_current
             else _say(f"Here's the rundown on **{app['name']}**:",
                       f"Sure — here's a quick look at **{app['name']}**:",
-                      f"Happy to. **{app['name']}** in a nutshell:"))
+                      f"Happy to — here's **{app['name']}** in a nutshell:"))
     parts = [lead, f"### {app['name']}  \n`{app['code']}`"]
     if not eco.is_available(app):
         parts.append("> ⚠️ *Not available on the current license.*")
