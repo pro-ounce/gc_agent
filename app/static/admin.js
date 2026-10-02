@@ -62,6 +62,7 @@
       + tabBtn("Metrics","__metrics__",false)
       + tabBtn("Activity","__activity__",false)
       + tabBtn("Workflows","__workflows__",false)
+      + tabBtn("Guide","__guide__",false)
       + tabBtn("API","__api__",false)
       + tabBtn("Docs","__docs__",false)
       + tabBtn("Audit","__audit__",false)
@@ -71,7 +72,7 @@
       var cards = params.filter(function(p){return p.group===g;}).map(cardFor).join("");
       return '<section class="admin-section'+(i===0?" active":"")+'" data-tab="'+esc(g)+'" role="tabpanel"'
         +' id="panel-'+sid(g)+'" aria-labelledby="tab-'+sid(g)+'" tabindex="0"><div class="cards">'+cards+'</div></section>';
-    }).join("") + healthSectionHTML() + metricsSectionHTML() + activitySectionHTML() + workflowsSectionHTML() + apiSectionHTML() + docsSectionHTML() + auditSectionHTML() + backupsSectionHTML() + logsSectionHTML();
+    }).join("") + healthSectionHTML() + metricsSectionHTML() + activitySectionHTML() + workflowsSectionHTML() + guideSectionHTML() + apiSectionHTML() + docsSectionHTML() + auditSectionHTML() + backupsSectionHTML() + logsSectionHTML();
     // tab switching — WAI-ARIA tabs: roving tabindex, arrow/Home/End keys, aria-selected.
     var tabEls = Array.prototype.slice.call(elTabs.children);
     function selectTab(btn){
@@ -84,7 +85,13 @@
       Array.prototype.forEach.call(elSections.children, function(s){
         s.classList.toggle("active", s.getAttribute("data-tab")===btn.getAttribute("data-tab"));
       });
+      var pt=document.getElementById("page-title"); if(pt) pt.textContent = (btn.textContent||"").trim() || "Configuration";
+      // Lazy-load the guide iframe the first time its tab opens (keeps the admin load light).
+      if(btn.getAttribute("data-tab")==="__guide__"){ var gf=document.getElementById("guide-frame"); if(gf && !gf.getAttribute("src")) gf.setAttribute("src", API + "/guide"); }
     }
+    // The header "Workflow authoring guide" link opens the in-admin Guide tab (no new page).
+    var navG = document.getElementById("nav-guide");
+    if(navG) navG.addEventListener("click", function(e){ e.preventDefault(); var b=elTabs.querySelector('[data-tab="__guide__"]'); if(b){ b.focus(); selectTab(b); } });
     tabEls.forEach(function(btn, idx){
       btn.addEventListener("click", function(){ selectTab(btn); });
       btn.addEventListener("keydown", function(e){
@@ -995,6 +1002,13 @@
       <text class="h" x="56" y="1122">Oracle<tspan class="t m" dx="8" font-weight="400">DEV_COMPASS</tspan></text>
       <text class="mono" x="922" y="1122" text-anchor="end">compass-dev-dbase · JNDI datasources</text>
     </svg>`; }
+  // ── Guide tab — the Workflow authoring guide, embedded inline so navigation stays in the admin ──
+  function guideSectionHTML(){
+    return '<section class="admin-section" data-tab="__guide__" role="tabpanel" id="panel-__guide__" aria-labelledby="tab-__guide__" tabindex="0">'
+      +'<div class="guide-wrap"><iframe id="guide-frame" title="Guided Workflow Template" loading="lazy"></iframe></div>'
+      +'</section>';
+  }
+
   // ── Docs tab (live capability + architecture reference) ──
   // ── API tab (live, Swagger-like reference of the agent's tool surface, grouped by module) ──
   var _apiData=null, _apiQuery="", _apiRW="all", _apiInit=false;
@@ -1215,10 +1229,6 @@
 
   function docsSectionHTML(){
     return '<section class="admin-section" data-tab="__docs__" role="tabpanel" id="panel-__docs__" aria-labelledby="tab-__docs__" tabindex="0">'
-      +'<div class="card" style="margin-bottom:14px;border-color:#c7b8f0;background:var(--accent-wash,#f3effc)"><div class="top">'
-      +'<span class="lbl">Workflow authoring guide</span>'
-      +'<span class="btns"><a href="'+API+'/guide" target="_blank" rel="noopener" class="btn primary" style="padding:5px 12px">Open the guide ↗</a></span></div>'
-      +'<div class="def" style="margin-top:8px">Interactive reference for building guided workflows — anatomy, option-state colors (selectable / reference / boolean), lifecycle, real screens, an animated walkthrough, the icon set, design tokens, and a live <code>_ENTITY_CREATE</code> builder.</div></div>'
       +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Architecture</span>'
       +'<span class="btns"><a id="dc-diagram" href="#" target="_blank" rel="noopener" class="btn" style="padding:5px 11px">Open full diagram ↗</a></span></div>'
       +'<div id="dc-arch" class="def" style="margin-top:10px">loading…</div></div>'
