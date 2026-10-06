@@ -242,6 +242,21 @@
   .wrow .wc{font-family:var(--font-mono);font-size:11px;color:var(--violet-ink);background:var(--violet-soft);border:1px solid color-mix(in srgb,var(--violet) 24%,var(--line));padding:1.5px 7px;border-radius:6px;white-space:nowrap}
   .wrow .wd{color:var(--muted);font-size:12.5px;line-height:1.55;flex:1 1 280px;min-width:230px}
   .wrow .wd code{font-family:var(--font-mono);font-size:11px;color:var(--code-ink);background:var(--code-bg);padding:.5px 4px;border-radius:4px}
+  .wnum{width:18px;height:18px;border-radius:50%;background:var(--violet-soft);color:var(--violet-ink);border:1px solid color-mix(in srgb,var(--violet) 32%,var(--line));font-family:var(--font-mono);font-size:10.5px;font-weight:700;display:inline-grid;place-items:center;flex:0 0 auto;align-self:center}
+  /* Annotated panel/flow-window diagram */
+  .wdiagram{display:flex;justify-content:center;margin:2px 0 22px}
+  .wd-panel{position:relative;width:min(440px,100%);border:1.5px solid var(--line-strong);border-radius:16px;background:var(--surface-2);padding:27px 12px 12px;display:flex;flex-direction:column;gap:8px}
+  .wd-flow{position:relative;border:1.5px solid color-mix(in srgb,var(--violet) 42%,var(--line));border-radius:12px;background:var(--violet-soft);padding:27px 10px 10px;display:flex;flex-direction:column;gap:7px}
+  .wd-tag{position:absolute;top:8px;left:12px;font-family:var(--font-mono);font-size:10px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:var(--muted)}
+  .wd-tag.v{color:var(--violet-ink)}
+  .wd-box{position:relative;border:1px solid var(--line);border-radius:9px;background:var(--surface);padding:9px 11px 9px 34px;font-size:12px;color:var(--muted);min-height:21px;display:flex;align-items:center;flex-wrap:wrap;gap:6px}
+  .wd-box b{color:var(--ink);font-weight:600}
+  .wd-card{min-height:38px}
+  .wd-n{position:absolute;left:9px;top:50%;transform:translateY(-50%);width:18px;height:18px;border-radius:50%;background:var(--violet);color:#fff;font-size:10px;font-weight:700;display:grid;place-items:center;font-family:var(--font-mono)}
+  .wd-side{margin-left:auto;position:relative;padding-left:24px;color:var(--muted);font-size:11px;white-space:nowrap}
+  .wd-side .wd-n{left:0}
+  .wd-bub{margin-left:auto;background:linear-gradient(135deg,#e879f9,#9333ea);color:#fff;border-radius:11px;padding:4px 10px;font-size:11px}
+  .wd-chip{border:1px solid color-mix(in srgb,var(--violet) 32%,var(--line));border-radius:999px;padding:2px 9px;font-size:11px;color:var(--violet-ink);background:var(--violet-soft)}
   @media (max-width:560px){.wrow.l1{margin-left:11px}.wrow.l2{margin-left:24px}.wrow.l2::before{left:-13px;width:9px}}
 </style>
 </head>
@@ -345,19 +360,34 @@
     <div class="eyebrow" style="margin:28px 0 11px">Window anatomy — every container, and what it holds</div>
     <p class="lede" style="margin-bottom:14px">That spec drives this UI. Here is the widget tree the
       user sees, each container named with its class and what it contains.</p>
+    <div class="wdiagram" role="img" aria-label="Annotated diagram of the agent panel and flow window, each container numbered">
+      <div class="wd-panel"><span class="wd-tag">1 &middot; Panel</span>
+        <div class="wd-box"><span class="wd-n">2</span><b>Agent GC</b> &middot; Smart Hub &middot; Super Admin</div>
+        <div class="wd-box"><span class="wd-n">3</span>message thread<span class="wd-bub">create a role</span></div>
+        <div class="wd-flow"><span class="wd-tag v">4 &middot; FlowWindow</span>
+          <div class="wd-box"><span class="wd-n">5</span><b>Create role</b> &middot; 2 / 7 &middot; &#9707;&#9707;<span class="wd-side"><span class="wd-n">6</span>size &middot; &#8856;</span></div>
+          <div class="wd-box"><span class="wd-n">7</span>&#10003; Application &middot; &#9679; Role name &middot; &#9675; Menu</div>
+          <div class="wd-box wd-card"><span class="wd-n">8</span>What's the <b>display name</b>?</div>
+          <div class="wd-box"><span class="wd-n">9</span>Awaiting &bull;&bull;&bull; <span class="wd-chip">Menus 4 &#9662;</span></div>
+          <div class="wd-box"><span class="wd-n">10</span><span class="wd-chip">Budget Dashboard</span> <span class="wd-chip">Approvals</span></div>
+        </div>
+        <div class="wd-box"><span class="wd-n">12</span>+ Type the role name&hellip; &#10148;</div>
+      </div>
+    </div>
+    <p class="lede" style="margin:2px 0 14px;font-size:12.5px">The grey frame is <b>1 · Panel</b>; the violet box is <b>4 · FlowWindow</b>. <b>11 · On finish</b> replaces the flow with a collapsed card (last row below).</p>
     <div class="wanat">
-      <div class="wrow"><span class="wn">Panel</span><code class="wc">.gc-panel</code><span class="wd">The whole widget. Width set by the size toggle (Compact / Cozy / Roomy); floored at Cozy during a workflow.</span></div>
-      <div class="wrow l1"><span class="wn">Header bar</span><code class="wc">.gc-head-*</code><span class="wd">Brand, status dot (<code>.gc-head-dot</code>), current application (<code>.gc-head-app</code>), role badge (<code>.gc-head-role</code>), and the window buttons (<code>.gc-headbtn</code>): appearance, new chat, minimize, expand, close.</span></div>
-      <div class="wrow l1"><span class="wn">Message thread</span><code class="wc">.gc-msg</code><span class="wd">Chat bubbles — user (<code>.gc-user</code>) and agent (<code>.gc-bubble</code>). Guided-flow prompts never appear here; they stay in the flow window.</span></div>
-      <div class="wrow l1 hl"><span class="wn">FlowWindow</span><code class="wc">.gc-flow</code><span class="wd">The pinned guided-flow window — the entire workflow runs inside it. Turns amber on confirm (<code>.gc-flow--confirm</code>), green on finish (<code>.gc-flow--done</code>).</span></div>
-      <div class="wrow l2"><span class="wn">Flow header</span><code class="wc">.gc-flow-headline</code><span class="wd">Title (<code>.gc-wf-title</code> + role name <code>.gc-wf-title-nm</code>), step counter (<code>.gc-flow-step</code>), and the layout toggle (<code>.gc-flow-toggle</code> — carousel / stacked).</span></div>
-      <div class="wrow l2"><span class="wn">Controls aside</span><code class="wc">.gc-flow-controls-aside</code><span class="wd">Panel size toggle (<code>.gc-flow-size</code>) and the cancel control (<code>.gc-flow-cancel-ic</code>).</span></div>
-      <div class="wrow l2"><span class="wn">Progress rail</span><code class="wc">.gc-wf</code><span class="wd">One row per field (<code>.gc-wf-s</code>, state <code>.ok</code> / <code>.on</code> / <code>.todo</code>): the field icon (<code>.b</code>), the label, and the captured value (<code>.v</code>; codes get <code>.v-code</code>).</span></div>
-      <div class="wrow l2"><span class="wn">Flow body</span><code class="wc">carousel / stacked</code><span class="wd">Carousel — one card (<code>.gc-flow-track</code> &rarr; <code>.gc-flow-card</code>) with &lsaquo; &rsaquo; arrows and dots. Stacked — the answered Q&amp;A (<code>.gc-flow-scroll</code> &rarr; <code>.gc-qa</code> <code>.past</code>/<code>.now</code>) with up/down arrows.</span></div>
-      <div class="wrow l2"><span class="wn">Awaiting cue</span><code class="wc">.gc-flow-await</code><span class="wd">"Awaiting your answer" + dots, then the field name — or, on picker steps, the hint chip (<code>.gc-flow-hint-chip</code>: entity icon + name + count) that opens the picker popover (<code>.gc-flow-pop</code>).</span></div>
-      <div class="wrow l2"><span class="wn">Step controls</span><code class="wc">per field kind</code><span class="wd">Quick-pick chips (<code>.gc-chip</code>) · Yes / No (<code>.gc-flow-yesno</code>) · decision buttons (<code>.gc-flow-decide</code>) · confirm actions (<code>.gc-flow-actions</code>: Confirm &amp; create / Cancel).</span></div>
-      <div class="wrow l2"><span class="wn">On finish</span><code class="wc">.gc-flow-done</code><span class="wd">A completed banner, then the flow collapses to a thread card (<code>.gc-wf-collapsed</code>; <code>.cancelled</code> rose variant) carrying the "Next steps" actions (<code>.gc-wf-next</code>).</span></div>
-      <div class="wrow l1"><span class="wn">Composer</span><code class="wc">.gc-composer</code><span class="wd">Attach (+), the input (<code>.gc-input</code>, with the step-specific placeholder), and send (<code>.gc-send</code>).</span></div>
+      <div class="wrow"><span class="wnum">1</span><span class="wn">Panel</span><code class="wc">.gc-panel</code><span class="wd">The whole widget. Width set by the size toggle (Compact / Cozy / Roomy); floored at Cozy during a workflow.</span></div>
+      <div class="wrow l1"><span class="wnum">2</span><span class="wn">Header bar</span><code class="wc">.gc-head-*</code><span class="wd">Brand, status dot (<code>.gc-head-dot</code>), current application (<code>.gc-head-app</code>), role badge (<code>.gc-head-role</code>), and the window buttons (<code>.gc-headbtn</code>): appearance, new chat, minimize, expand, close.</span></div>
+      <div class="wrow l1"><span class="wnum">3</span><span class="wn">Message thread</span><code class="wc">.gc-msg</code><span class="wd">Chat bubbles — user (<code>.gc-user</code>) and agent (<code>.gc-bubble</code>). Guided-flow prompts never appear here; they stay in the flow window.</span></div>
+      <div class="wrow l1 hl"><span class="wnum">4</span><span class="wn">FlowWindow</span><code class="wc">.gc-flow</code><span class="wd">The pinned guided-flow window — the entire workflow runs inside it. Turns amber on confirm (<code>.gc-flow--confirm</code>), green on finish (<code>.gc-flow--done</code>).</span></div>
+      <div class="wrow l2"><span class="wnum">5</span><span class="wn">Flow header</span><code class="wc">.gc-flow-headline</code><span class="wd">Title (<code>.gc-wf-title</code> + role name <code>.gc-wf-title-nm</code>), step counter (<code>.gc-flow-step</code>), and the layout toggle (<code>.gc-flow-toggle</code> — carousel / stacked).</span></div>
+      <div class="wrow l2"><span class="wnum">6</span><span class="wn">Controls aside</span><code class="wc">.gc-flow-controls-aside</code><span class="wd">Panel size toggle (<code>.gc-flow-size</code>) and the cancel control (<code>.gc-flow-cancel-ic</code>).</span></div>
+      <div class="wrow l2"><span class="wnum">7</span><span class="wn">Progress rail</span><code class="wc">.gc-wf</code><span class="wd">One row per field (<code>.gc-wf-s</code>, state <code>.ok</code> / <code>.on</code> / <code>.todo</code>): the field icon (<code>.b</code>), the label, and the captured value (<code>.v</code>; codes get <code>.v-code</code>).</span></div>
+      <div class="wrow l2"><span class="wnum">8</span><span class="wn">Flow body</span><code class="wc">carousel / stacked</code><span class="wd">Carousel — one card (<code>.gc-flow-track</code> &rarr; <code>.gc-flow-card</code>) with &lsaquo; &rsaquo; arrows and dots. Stacked — the answered Q&amp;A (<code>.gc-flow-scroll</code> &rarr; <code>.gc-qa</code> <code>.past</code>/<code>.now</code>) with up/down arrows.</span></div>
+      <div class="wrow l2"><span class="wnum">9</span><span class="wn">Awaiting cue</span><code class="wc">.gc-flow-await</code><span class="wd">"Awaiting your answer" + dots, then the field name — or, on picker steps, the hint chip (<code>.gc-flow-hint-chip</code>: entity icon + name + count) that opens the picker popover (<code>.gc-flow-pop</code>).</span></div>
+      <div class="wrow l2"><span class="wnum">10</span><span class="wn">Step controls</span><code class="wc">per field kind</code><span class="wd">Quick-pick chips (<code>.gc-chip</code>) · Yes / No (<code>.gc-flow-yesno</code>) · decision buttons (<code>.gc-flow-decide</code>) · confirm actions (<code>.gc-flow-actions</code>: Confirm &amp; create / Cancel).</span></div>
+      <div class="wrow l2"><span class="wnum">11</span><span class="wn">On finish</span><code class="wc">.gc-flow-done</code><span class="wd">A completed banner, then the flow collapses to a thread card (<code>.gc-wf-collapsed</code>; <code>.cancelled</code> rose variant) carrying the "Next steps" actions (<code>.gc-wf-next</code>).</span></div>
+      <div class="wrow l1"><span class="wnum">12</span><span class="wn">Composer</span><code class="wc">.gc-composer</code><span class="wd">Attach (+), the input (<code>.gc-input</code>, with the step-specific placeholder), and send (<code>.gc-send</code>).</span></div>
     </div>
   </section>
 
