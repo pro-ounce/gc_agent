@@ -231,6 +231,18 @@
   ol.checklist{color:var(--ink);font-size:14.5px;line-height:1.7;padding-left:20px;max-width:72ch}
   ol.checklist code{background:var(--code-bg);color:var(--code-ink);padding:1px 5px;border-radius:5px;font-size:12.5px}
   @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+  /* Window anatomy tree */
+  .wanat{display:flex;flex-direction:column;gap:7px;margin-top:6px}
+  .wrow{display:flex;flex-wrap:wrap;align-items:baseline;gap:7px 10px;padding:10px 13px;border:1px solid var(--line);border-radius:11px;background:var(--surface)}
+  .wrow.l1{margin-left:22px}
+  .wrow.l2{margin-left:46px;position:relative}
+  .wrow.l2::before{content:"";position:absolute;left:-23px;top:22px;width:15px;height:1px;background:var(--line-strong)}
+  .wrow.hl{border-color:color-mix(in srgb,var(--violet) 48%,var(--line));background:var(--violet-soft)}
+  .wrow .wn{font-weight:650;color:var(--ink);font-size:13.5px}
+  .wrow .wc{font-family:var(--font-mono);font-size:11px;color:var(--violet-ink);background:var(--violet-soft);border:1px solid color-mix(in srgb,var(--violet) 24%,var(--line));padding:1.5px 7px;border-radius:6px;white-space:nowrap}
+  .wrow .wd{color:var(--muted);font-size:12.5px;line-height:1.55;flex:1 1 280px;min-width:230px}
+  .wrow .wd code{font-family:var(--font-mono);font-size:11px;color:var(--code-ink);background:var(--code-bg);padding:.5px 4px;border-radius:4px}
+  @media (max-width:560px){.wrow.l1{margin-left:11px}.wrow.l2{margin-left:24px}.wrow.l2::before{left:-13px;width:9px}}
 </style>
 </head>
 <body>
@@ -329,6 +341,24 @@
       <code>start_entity_create → _entity_create → _efield_step → _entity_finalize</code> read the spec
       and drive prompting, pickers, validation, uniqueness, the rail, break-out, confirm, the tool call,
       and the collapsed card.</p>
+
+    <div class="eyebrow" style="margin:28px 0 11px">Window anatomy — every container, and what it holds</div>
+    <p class="lede" style="margin-bottom:14px">That spec drives this UI. Here is the widget tree the
+      user sees, each container named with its class and what it contains.</p>
+    <div class="wanat">
+      <div class="wrow"><span class="wn">Panel</span><code class="wc">.gc-panel</code><span class="wd">The whole widget. Width set by the size toggle (Compact / Cozy / Roomy); floored at Cozy during a workflow.</span></div>
+      <div class="wrow l1"><span class="wn">Header bar</span><code class="wc">.gc-head-*</code><span class="wd">Brand, status dot (<code>.gc-head-dot</code>), current application (<code>.gc-head-app</code>), role badge (<code>.gc-head-role</code>), and the window buttons (<code>.gc-headbtn</code>): appearance, new chat, minimize, expand, close.</span></div>
+      <div class="wrow l1"><span class="wn">Message thread</span><code class="wc">.gc-msg</code><span class="wd">Chat bubbles — user (<code>.gc-user</code>) and agent (<code>.gc-bubble</code>). Guided-flow prompts never appear here; they stay in the flow window.</span></div>
+      <div class="wrow l1 hl"><span class="wn">FlowWindow</span><code class="wc">.gc-flow</code><span class="wd">The pinned guided-flow window — the entire workflow runs inside it. Turns amber on confirm (<code>.gc-flow--confirm</code>), green on finish (<code>.gc-flow--done</code>).</span></div>
+      <div class="wrow l2"><span class="wn">Flow header</span><code class="wc">.gc-flow-headline</code><span class="wd">Title (<code>.gc-wf-title</code> + role name <code>.gc-wf-title-nm</code>), step counter (<code>.gc-flow-step</code>), and the layout toggle (<code>.gc-flow-toggle</code> — carousel / stacked).</span></div>
+      <div class="wrow l2"><span class="wn">Controls aside</span><code class="wc">.gc-flow-controls-aside</code><span class="wd">Panel size toggle (<code>.gc-flow-size</code>) and the cancel control (<code>.gc-flow-cancel-ic</code>).</span></div>
+      <div class="wrow l2"><span class="wn">Progress rail</span><code class="wc">.gc-wf</code><span class="wd">One row per field (<code>.gc-wf-s</code>, state <code>.ok</code> / <code>.on</code> / <code>.todo</code>): the field icon (<code>.b</code>), the label, and the captured value (<code>.v</code>; codes get <code>.v-code</code>).</span></div>
+      <div class="wrow l2"><span class="wn">Flow body</span><code class="wc">carousel / stacked</code><span class="wd">Carousel — one card (<code>.gc-flow-track</code> &rarr; <code>.gc-flow-card</code>) with &lsaquo; &rsaquo; arrows and dots. Stacked — the answered Q&amp;A (<code>.gc-flow-scroll</code> &rarr; <code>.gc-qa</code> <code>.past</code>/<code>.now</code>) with up/down arrows.</span></div>
+      <div class="wrow l2"><span class="wn">Awaiting cue</span><code class="wc">.gc-flow-await</code><span class="wd">"Awaiting your answer" + dots, then the field name — or, on picker steps, the hint chip (<code>.gc-flow-hint-chip</code>: entity icon + name + count) that opens the picker popover (<code>.gc-flow-pop</code>).</span></div>
+      <div class="wrow l2"><span class="wn">Step controls</span><code class="wc">per field kind</code><span class="wd">Quick-pick chips (<code>.gc-chip</code>) · Yes / No (<code>.gc-flow-yesno</code>) · decision buttons (<code>.gc-flow-decide</code>) · confirm actions (<code>.gc-flow-actions</code>: Confirm &amp; create / Cancel).</span></div>
+      <div class="wrow l2"><span class="wn">On finish</span><code class="wc">.gc-flow-done</code><span class="wd">A completed banner, then the flow collapses to a thread card (<code>.gc-wf-collapsed</code>; <code>.cancelled</code> rose variant) carrying the "Next steps" actions (<code>.gc-wf-next</code>).</span></div>
+      <div class="wrow l1"><span class="wn">Composer</span><code class="wc">.gc-composer</code><span class="wd">Attach (+), the input (<code>.gc-input</code>, with the step-specific placeholder), and send (<code>.gc-send</code>).</span></div>
+    </div>
   </section>
 
   <section id="fields">
