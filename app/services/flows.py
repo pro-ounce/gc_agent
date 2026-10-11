@@ -1178,11 +1178,14 @@ class PickerStep:
 # VERIFY against live responses (scratchpad/baseline_probe.py) — source label/value field
 # names are per the product spec; if a picker renders blank, correct the field here.
 BASELINE_STEPS: tuple[PickerStep, ...] = (
-    # Show the year, send its fiscalYearId (the payload keys off the id, not the year number).
+    # Send the fiscal YEAR NUMBER (not fiscalYearId): the BaselineGeneratePayload fields
+    # sourceFiscalYear/fiscalYear are the year value — confirmed by the formulation FE
+    # (generate-baseline.jsx sends `Number(fiscalYear - 1)` and every FY dropdown binds
+    # `value: item.fiscalYear`) and by the service querying findByFiscalYear(<year>).
     PickerStep("sourceFiscalYear", "Choose the **source** fiscal year (BFY)",
-               "getAllFiscalYears_post", "fiscalYear", "fiscalYearId"),
+               "getAllFiscalYears_post", "fiscalYear", "fiscalYear"),
     PickerStep("fiscalYear", "Choose the **target** fiscal year",
-               "getAllFiscalYears_post", "fiscalYear", "fiscalYearId"),
+               "getAllFiscalYears_post", "fiscalYear", "fiscalYear"),
     PickerStep("businessRuleGroups", "Choose the **baseline** business rule group(s)",
                "getAllValidationGroups_post", "groupName", "validationGroupId", multi=True,
                source_args={"groupType": "BASELINE", "applicationId": 3}),
@@ -1210,6 +1213,9 @@ BASELINE_STEPS: tuple[PickerStep, ...] = (
 BASELINE_DEFAULTS: dict[str, Any] = {
     "applicationCode": "FORMULATION", "withdrawnRequest": "N", "deletedRequest": "N",
     "fundGroupId": 0, "quarter": "", "orgIds": [], "requestTypes": [], "acquisitionVehicles": [],
+    # Sent explicitly (backend BaselineGeneratePayload defaults this to "N" too); a dry run
+    # that only validates inputs, not a real generation.
+    "healthCheck": "N",
 }
 BASELINE_LABELS: dict[str, str] = {
     "sourceFiscalYear": "Source FY", "fiscalYear": "Target FY",
