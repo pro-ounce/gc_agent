@@ -197,3 +197,51 @@ Readiness (`/actuator/health/readiness`) returns 200 only when **store + mcp** a
 - Python wheels: build a local wheelhouse (`pip download -r requirements.txt -d wheels/`) and
   `pip install --no-index --find-links wheels/ -r requirements.txt` on the server.
 - No external services touched: LLM = Ollama (local), store = OpenSearch (local), tools = your services.
+
+---
+
+## 10. Sandbox box — access & day-to-day redeploy
+
+**SSH access** — the sandbox/DGX box (hostname `sparkbee`) is reached by **IP with the PEM passed
+explicitly**:
+
+```bash
+ssh -i ~/certs/keys/sthota_instances.pem gcusr@192.168.0.180
+```
+
+- The PEM **must** be given with `-i`. The ssh-agent gets swapped out mid-session and goes empty, so
+  agent-based auth — and the `gcusr@sparkbee` host alias, which resolves but only offers the agent key —
+  fail with `Permission denied (publickey,password)`. Use the IP + the PEM.
+- Requires the VPN to be routing internal traffic (DNS + routes), or the host won't resolve at all.
+
+**Redeploy the agent (gc_agent)** — push to `main`, then on the box:
+
+```bash
+cd /apps/gc_agent && SKIP_SNAPSHOT=1 deploy/pull-deploy.sh main
+```
+
+Hard-resets to `origin/main`, `pip install` only if `requirements.txt` changed, restarts supervisor
+`ai-agent-service`. An autopull systemd timer (~1 min) may also deploy `main` automatically. Verify:
+
+```bash
+curl -s http://localhost:17024/actuator/info | python3 -c 'import sys,json;d=json.load(sys.stdin);print("commit:",d["build"]["commit"],"| tools:",d["runtime"]["tools_loaded"])'
+```
+
+**Redeploy the FE widget** — push to `sandbox`, then on the box:
+
+```bash
+bash /apps/fe-build-deploy.sh sandbox
+```
+
+Triggers Jenkins `pl_ui_build_deploy_modules`, waits for SUCCESS, runs `/apps/deploy-fe.sh` (downloads
+the build tar, swaps `/apps/build`, bumps `importmap.json`). Takes several minutes.
+
+**Verify the live widget bundle** — `importmap.json` maps `@gc360/widget-app` →
+`/<epoch>_prj241001_fe_widget-app/gc360-widget-app.js` at docroot `/apps/build`, so the browser URL is:
+
+```bash
+curl -s https://sparkbee.proounce.ai/<epoch>_prj241001_fe_widget-app/gc360-widget-app.js | grep -c "<signature>"
+```
+
+(NOT `/apps/build/...`, which hits the SPA catch-all and returns `index.html`.) Grep the fetched bundle
+for string signatures of each change — inlined CSS and string literals survive minification.
