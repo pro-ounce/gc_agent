@@ -87,6 +87,17 @@ def _store(key: str, value: Any) -> Any:
     return value
 
 
+def invalidate(*keys: str) -> None:
+    """Drop cached catalogue entries after a mutation so the next read refetches live — otherwise
+    a just-created/deleted role keeps showing (or staying absent) for up to _TTL. No args clears
+    everything; pass specific keys ('apps', 'roles') to scope it."""
+    if not keys:
+        _cache.clear()
+        return
+    for k in keys:
+        _cache.pop(k, None)
+
+
 def _rows(output: Any) -> list[dict[str, Any]]:
     """Pull the list payload out of a GC envelope (or a raw list)."""
     data = output.get("data") if isinstance(output, dict) else output

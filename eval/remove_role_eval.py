@@ -83,9 +83,21 @@ async def run() -> list[tuple[str, bool, str]]:
     check("no fire: remove access", not flows._detect_remove_role("remove access to Formulation"))
     check("no fire: create a role", not flows._detect_remove_role("create a role"))
 
+    # Routing precedence: ecosystem_qa (the read-listing handler) runs BEFORE maybe_start, so a
+    # "delete/drop the <role> role" turn must trip its mutation-cue and bail — otherwise it is
+    # hijacked as a "roles in <app>" listing and the guided remove flow never starts. (A pure read
+    # must NOT bail.)
+    from app.services import ecosystem_qa  # noqa: E402
+    bail = lambda m: bool(ecosystem_qa._MUTATION_CUE.search(m))
+    check("ecosystem bails: delete the <role> role", bail("delete the AI Validation Temp role in Formulation"))
+    check("ecosystem bails: delete role definition", bail("delete the AI_VALIDATION_TEMP role definition"))
+    check("ecosystem bails: drop the role", bail("drop the QA_REVIEWER role"))
+    check("ecosystem keeps read: roles in app", not bail("roles in Formulation"))
+    check("ecosystem keeps read: list all roles", not bail("list all roles"))
+
     # start via maybe_start
     s = _Session()
-    fr = flows.maybe_start(s, "delete a role in Formulation")
+    fr = await flows.maybe_start(s, "delete a role in Formulation")
     check("maybe_start arms remove_role", (s.metadata.get("flow") or {}).get("name") == "remove_role")
     check("start shows rail", bool(fr.progress) and fr.progress.get("title") == "Remove application role")
 
@@ -102,7 +114,7 @@ async def run() -> list[tuple[str, bool, str]]:
 
     # seeded role refused
     s2 = _Session()
-    flows.maybe_start(s2, "delete a role in Formulation")
+    await flows.maybe_start(s2, "delete a role in Formulation")
     await flows.handle(s2, "Formulation Planner", {})
     fr = await flows.handle(s2, "Budget Admin", {})
     check("seeded role refused", "seeded" in (fr.message or "").lower() and fr.done)

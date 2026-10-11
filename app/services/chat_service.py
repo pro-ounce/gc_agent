@@ -487,6 +487,11 @@ class ChatService:
         in-flow step resumes it; otherwise the skill's plain follow-up is appended."""
         args = tool_args or {}
 
+        # A confirmed mutation changes the catalogue (a role/app/user just created or removed), so
+        # drop the cached ecosystem model — otherwise the next "list roles/apps" read serves a stale
+        # snapshot (still listing a deleted role, or missing a new one) for up to the cache TTL.
+        eco.invalidate()
+
         def _fr(fr):
             # A resumed flow may hand back ANOTHER confirm-gated step (e.g. create-menu →
             # resume create-role): arm its pending so the caller can surface a fresh confirm,
