@@ -210,9 +210,32 @@ class MCPClient:
                 status_code=None,
             )
 
-        log.bind(func="execute_tool", tool=tool_name, duration_ms=duration_ms).info(
-            f"Tool '{tool_name}' completed in {duration_ms}ms"
-        )
+        # Observability: row count + the selected-header fingerprint actually forwarded. A
+        # user-scoped read that comes back with 0 rows is almost always a context/header problem
+        # (selected app/role lost or garbled), which is otherwise invisible — a 200 with an empty
+        # list looks like "no data". Decode is best-effort and never breaks the call.
+        result = data.get("result")
+        rows = result.get("data") if isinstance(result, dict) else result
+        n_rows = len(rows) if isinstance(rows, list) else (-1 if rows is None else -2)
+        fwd = {k.lower(): v for k, v in (request_headers or {}).items()}
+
+        def _dec(raw: str | None) -> str:
+            raw = (raw or "").strip()
+            if not raw:
+                return "(absent)"
+            try:
+                import base64 as _b64
+                d = _b64.b64decode(raw + "==").decode("utf-8", "ignore").strip()
+                clean = bool(d) and all(c == "\t" or 32 <= ord(c) < 127 or ord(c) > 160 for c in d)
+                return d if clean else f"GARBAGE(len={len(raw)})"
+            except Exception:  # noqa: BLE001
+                return f"RAW({raw[:12]})"
+
+        log.bind(
+            func="execute_tool", tool=tool_name, duration_ms=duration_ms, rows=n_rows,
+            sel_app=_dec(fwd.get("x-selected-app")), sel_role=_dec(fwd.get("x-selected-role")),
+            has_auth=("authorization" in fwd), has_int=(cfg.GC_INTERNAL_HEADER.lower() in fwd),
+        ).info(f"Tool '{tool_name}' completed in {duration_ms}ms rows={n_rows}")
         return data  # caller reads data["result"]
 
     # ── Prompts ───────────────────────────────────────────────────────────────
