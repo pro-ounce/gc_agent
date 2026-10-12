@@ -242,7 +242,7 @@ async def advance(wf: Workflow, state: dict, message: str,
                                "say **cancel** to stop, then try again.")
             val = _match_option(message, opts, node.label_key, node.value_key)
             if val is None:
-                return _render(node, data, note="I didn't catch that — pick one of the options above.")
+                return _render(node, data, note="That's not one of the options — tap one of the choices above.")
             if node.multi:
                 data.setdefault(node.field, []).append(val)
                 if not _DONE.search(message):                 # keep collecting until "done"

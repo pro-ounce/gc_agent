@@ -1496,7 +1496,7 @@ async def _baseline(session: Any, flow: dict[str, Any], msg: str,
                 added.append(opt["label"])
         if not added:
             return await _baseline_prompt(flow, step, headers,
-                                          prefix="I didn't catch that — pick from the list. ", options=options)
+                                          prefix="That's not one of the options — tap a choice below, or type its name. ", options=options)
         chosen = ", ".join(b["label"] for b in buf)
         return await _baseline_prompt(flow, step, headers,
                                       prefix=f"Added **{', '.join(added)}** (so far: {chosen}). Add more or choose Done. ",
@@ -1898,7 +1898,7 @@ async def _entity_create(session: Any, flow: dict[str, Any], msg: str,
         apps = (flow.get("_opts", {}) or {}).get("app") or await _apps(headers)
         app = _match(msg, apps)
         if not app:
-            return await _efield_step(flow, f, headers, prefix="I didn't catch that — pick one. ")
+            return await _efield_step(flow, f, headers, prefix="That's not one of the options — tap a choice below, or type its name. ")
         data[f.key] = app["id"]; labels[f.key] = app["name"]
         return await _advance_entity(flow, headers)
 
