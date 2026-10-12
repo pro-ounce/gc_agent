@@ -10,6 +10,7 @@ import collections
 import json as _json
 import logging
 import os as _os
+import re as _re
 import sys
 import time as _time
 import uuid
@@ -91,6 +92,31 @@ def get_user_id() -> str:
 
 # ── Custom formatter ───────────────────────────────────────────────────────────
 
+# ── On-disk redaction ────────────────────────────────────────────────────────────
+# Chat CONTENT and PII must never reach the on-disk sinks — the stdout log and the metrics JSONL
+# are world-readable, and a tool result once wrote a user's name + email there. The in-memory ring
+# that powers the access-controlled /admin feed keeps the RAW text; the files get a length
+# placeholder for content fields and have email addresses masked everywhere (defense in depth).
+_CONTENT_FIELDS = ("question", "answer", "result_preview", "preview")
+_EMAIL_RE = _re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+
+
+def _mask_text(v: Any) -> Any:
+    return _EMAIL_RE.sub("<email>", v) if isinstance(v, str) else v
+
+
+def _redact_for_file(fields: dict) -> dict:
+    """A copy of `fields` safe for the on-disk sinks: content fields reduced to a length, emails
+    masked in every other string. Never mutates the input (the ring keeps the raw dict)."""
+    out: dict = {}
+    for k, v in fields.items():
+        if k in _CONTENT_FIELDS and isinstance(v, str):
+            out[k] = f"<redacted:{len(v)}>"
+        else:
+            out[k] = _mask_text(v)
+    return out
+
+
 class _ContextFormatter(jsonlogger.JsonFormatter):
     """Injects request/session/user IDs from context vars into every log record."""
 
@@ -117,6 +143,14 @@ class _ContextFormatter(jsonlogger.JsonFormatter):
         tid = _trace_id_ctx.get()
         if tid:
             log_record["trace_id"] = tid
+
+        # Keep chat content / PII out of the (world-readable) stdout file: content fields → length,
+        # emails masked. The in-memory /admin ring is built separately and keeps the raw text.
+        for _k in list(log_record.keys()):
+            if _k in _CONTENT_FIELDS and isinstance(log_record[_k], str):
+                log_record[_k] = f"<redacted:{len(log_record[_k])}>"
+            elif isinstance(log_record[_k], str):
+                log_record[_k] = _EMAIL_RE.sub("<email>", log_record[_k])
 
 
 # ── In-memory ring buffer (recent logs for the /admin Logs view) ─────────────────
@@ -218,9 +252,12 @@ class _RingHandler(logging.Handler):
                 "msg": record.getMessage(),
                 "fields": fields,
             }
-            _LOG_RING.append(rec)
+            _LOG_RING.append(rec)                            # in-memory /admin feed — raw text
             if _metric_relevant(fields, record.levelname):   # durable → survives restart
-                _persist_record(rec)
+                # The JSONL is world-readable and rehydrates the ring after a restart; persist a
+                # redacted copy so no chat content / PII lands on disk (post-restart history shows
+                # content length, not text — the live ring still has the raw text until then).
+                _persist_record({**rec, "fields": _redact_for_file(fields)})
         except Exception:  # noqa: BLE001 — logging must never raise
             pass
 
