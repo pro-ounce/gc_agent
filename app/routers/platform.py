@@ -167,15 +167,26 @@ def _emit_chat_headers(request: Request, scope: str, app_code: str | None) -> No
 
 
 def _headers_with_app(request: Request, app_code: str | None) -> dict[str, str]:
-    """Forwarded headers, but with X-Selected-App backfilled from the request BODY's appCode when
-    the header itself didn't arrive. The widget sends the current application in the POST body
-    (scope=APPLICATION, appCode=…) but the gateway does NOT forward the X-Selected-App header on
-    the chat POST — so without this, every chat turn looks app-less and all app-boundary logic
-    (current-app scoping, named_access bounding, my_* in-app) fails open. Encodes as base64 to
-    match the header's documented format so `ecosystem.selected_app_code` decodes it cleanly."""
+    """Forwarded headers, with X-Selected-App NORMALIZED to a clean base64(appCode) before it
+    travels downstream (MCP → gateway → domain service).
+
+    The widget sends the current application in the POST body (scope=APPLICATION, appCode=…). The
+    gateway's X-Selected-App header is unreliable on the chat path: sometimes absent, sometimes
+    delivered garbled/encrypted (its b64decode yields control bytes). A bad app value makes the
+    downstream service REJECT the call (403) or return empty — which silently broke the baseline
+    flow (getAllFiscalYears / getFundGroupsByUser came back empty, blocking it at Source FY). The
+    body's appCode is always a clean plain code, so when we have it we re-encode it ourselves and
+    OVERRIDE whatever arrived — exactly the value the web app sends (btoa of the code). With no
+    appCode, keep the incoming header only if it already decodes cleanly, else drop it so the
+    downstream falls back to the token's user context instead of 403-ing on garbage."""
+    from ..services.ecosystem import selected_app_code as _eco_app_code
     h = _forward_headers(request)
-    if app_code and not (h.get("X-Selected-App") or h.get("x-selected-app")):
+    if app_code:
+        h.pop("x-selected-app", None)
         h["X-Selected-App"] = base64.b64encode(str(app_code).strip().encode()).decode()
+    elif (h.get("X-Selected-App") or h.get("x-selected-app")) and not _eco_app_code(h):
+        h.pop("X-Selected-App", None)
+        h.pop("x-selected-app", None)
     return h
 
 
@@ -494,11 +505,13 @@ async def agent_confirm_stream(
         raise HTTPException(status_code=400, detail="Streaming is disabled")
 
     async def gen():
+        # No appCode on a confirm body, but still normalize: drop a garbled X-Selected-App so the
+        # paused mutation doesn't 403 downstream (keeps a clean header, falls back to token context).
         async for chunk in chat_service.confirm_stream(
             session_id=body.sessionId,
             action_id=body.actionId,
             confirmed=body.confirmed,
-            request_headers=_forward_headers(request),
+            request_headers=_headers_with_app(request, None),
         ):
             yield {"data": chunk.model_dump_json()}
             if chunk.type in ("done", "error"):
