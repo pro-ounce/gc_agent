@@ -140,7 +140,8 @@ class FlowResult:
 
 
 def _chip(label: str, send: str | None = None, icon: str | None = None,
-          selectable: bool = True, noun: str | None = None) -> dict[str, Any]:
+          selectable: bool = True, noun: str | None = None,
+          selected: bool = False) -> dict[str, Any]:
     c = {"label": label, "send": send if send is not None else label, "icon": icon,
          "selectable": selectable}
     # Field-picker chips carry the singular noun of what they pick ("fiscal year", "program
@@ -148,6 +149,10 @@ def _chip(label: str, send: str | None = None, icon: str | None = None,
     # glyph implies. Omitted for entity (app/role/menu) chips, which keep the icon vocabulary.
     if noun:
         c["noun"] = noun
+    # Already-picked option in a multi-select — the widget marks it (check + filled) so the user
+    # sees their running selection in the one-line chip row.
+    if selected:
+        c["selected"] = True
     return c
 
 
@@ -1373,16 +1378,21 @@ async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
         return FlowResult(message=f"{prefix}{step.prompt} (type a value)",
                           suggestions=_baseline_control_chips(step, bool(flow.get("buf"))))
     icon = "role" if step.multi else "app"
+    # Values already picked this step, so their chips render as selected (check + filled).
+    picked = {str(b.get("value")) for b in (flow.get("buf") or [])}
+
+    def _mk(o: dict[str, Any]) -> dict[str, Any]:
+        return _chip(str(o["label"]), str(o["label"]), icon=icon, noun=step.noun,
+                     selected=str(o.get("value")) in picked)
+
     # Fiscal-year pickers are a small, bounded set and the widget lays them out as a compact
     # year grid, so send them all (sorted, newest first) rather than capping to a chip row.
     if step.noun == "fiscal year":
         opts_sorted = sorted(options, key=lambda o: str(o["label"]), reverse=True)
-        chips = [_chip(str(o["label"]), str(o["label"]), icon=icon, noun=step.noun)
-                 for o in opts_sorted]
+        chips = [_mk(o) for o in opts_sorted]
         note = ""
     else:
-        chips = [_chip(str(o["label"]), str(o["label"]), icon=icon, noun=step.noun)
-                 for o in options[:MAX_CHIPS]]
+        chips = [_mk(o) for o in options[:MAX_CHIPS]]
         note = f"\n\n*Showing {MAX_CHIPS} of {len(options)} — or type a name.*" if len(options) > MAX_CHIPS else ""
     return FlowResult(message=f"{prefix}{step.prompt}{note}",
                       suggestions=chips + _baseline_control_chips(step, bool(flow.get("buf"))))

@@ -72,6 +72,8 @@ class Suggestion(BaseModel):
     noun: str | None = None   # singular name of what a field picker selects ("fiscal year",
     # "program office"); the widget labels the hint chip/popover with it instead of the generic
     # entity the icon glyph implies. Omitted for entity (app/role/menu) chips.
+    selected: bool = False    # a multi-select option already picked this step — the widget marks
+    # it (check + filled) so the running selection shows in the one-line chip row.
 
 
 class ChatResponse(BaseModel):
