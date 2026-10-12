@@ -255,6 +255,22 @@ def _trigger_checks() -> list[tuple[str, bool, str]]:
     out.append(("entity tool-map matches _ENTITY_CREATE",
                 all(flows._ENTITY_CREATE.get(e, {}).get("tool") == t
                     for t, e in flows._ENTITY_BY_TOOL.items()), "tool map drift"))
+
+    # Seasonal hints: fire in-season for the right app, stay empty out-of-season / for other apps,
+    # and EVERY hint's `send` must arm its flow (tapping a seasonal hint opens the real guided flow).
+    import datetime as _dt
+    from app.services import seasonal
+    in_season = seasonal.seasonal_hints("FORMULATION", _dt.datetime(2026, 4, 1))
+    out.append(("seasonal: formulation hints fire in-season", len(in_season) > 0, "no hints"))
+    out.append(("seasonal: baseline seasonal hint arms the flow",
+                any(arms(h["send"]) for h in in_season if "baseline" in h["send"].lower()),
+                "baseline hint does not arm"))
+    out.append(("seasonal: empty out-of-season",
+                seasonal.seasonal_hints("FORMULATION", _dt.datetime(2026, 12, 1)) == [],
+                "fired off-season"))
+    out.append(("seasonal: empty for a different app in-season",
+                seasonal.seasonal_hints("ADMINISTRATION", _dt.datetime(2026, 4, 1)) == [],
+                "fired for wrong app"))
     return out
 
 

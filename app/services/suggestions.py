@@ -20,6 +20,7 @@ from typing import Any
 
 from . import ecosystem as eco
 from . import balloon_store
+from . import seasonal
 
 # Hand-curated headline balloons for a few hubs, kept as an override for where we want a very
 # specific set. Everything else is generated from the catalogue.
@@ -105,6 +106,11 @@ async def _build(module: str, headers: dict[str, str] | None, limit: int) -> lis
         ][:limit]
 
     out: list[dict[str, Any]] = []
+    # Seasonal hints lead the list: during the relevant budget-cycle window, promote that season's
+    # workflows (taught phrasings, so a tap opens the REAL guided flow) — e.g. baseline + data call
+    # during formulation. _dedup below keeps the seasonal copy of any shared entry on top.
+    out.extend(seasonal.seasonal_hints(app["code"]))
+
     # Concise-but-complete app label (shared helper; keeps "Smart Hub" whole, drops only a
     # trailing Planner/Manager suffix, guards bare ambiguous words like "Systems").
     short = eco.short_app_name(str(app["name"]))
