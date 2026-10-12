@@ -82,7 +82,9 @@ class MCPClient:
                    # organizationsByUser) filter by the caller's SELECTED app + role, exactly as the
                    # web app sends them. Forward them so MCP can carry them to the service.
                    "X-Selected-App", "X-Selected-Role",
-                   "X-TRACE-ID", "X-Time-Zone", "X-Date-Time")
+                   # Client environment: IP / machine / timezone / timestamp / tracing.
+                   "X-Forwarded-For", "User-Agent",
+                   "X-TRACE-ID", "X-Time-Zone", "X-Date-Time", "X-Request-Id")
         headers: dict[str, str] = {}
         if extra:
             lower = {k.lower(): v for k, v in extra.items()}

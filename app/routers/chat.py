@@ -41,10 +41,12 @@ def _request_headers(request: Request) -> dict[str, str]:
     token (X-INT-TKN) and role/tracing context so MCP can act on behalf of the user.
     """
     forward = (
-        cfg.GC_INTERNAL_HEADER,  # X-INT-TKN — gateway internal token (gateway mode)
+        cfg.GC_INTERNAL_HEADER,  # X-INT-TKN — gateway internal token (user identity)
         cfg.GC_ROLE_HEADER,      # X-AR-KEY  — role
-        "Authorization", "X-API-KEY", "X-Forwarded-For",
-        "X-TRACE-ID", "X-Time-Zone", "X-Date-Time",
+        "Authorization", "X-API-KEY",
+        "X-Selected-App", "X-Selected-Role",   # selected app + role (user-scoped queries key on these)
+        # Client environment: IP / machine / timezone / timestamp / tracing.
+        "X-Forwarded-For", "User-Agent", "X-TRACE-ID", "X-Time-Zone", "X-Date-Time", "X-Request-Id",
     )
     headers: dict[str, str] = {}
     for h in forward:

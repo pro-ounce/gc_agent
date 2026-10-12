@@ -126,11 +126,13 @@ def _ground(
 def _forward_headers(request: Request) -> dict[str, str]:
     """Pass gateway/user context downstream to MCP → gateway → domain services."""
     forward = (
-        cfg.GC_INTERNAL_HEADER,   # X-INT-TKN — gateway internal token
+        cfg.GC_INTERNAL_HEADER,   # X-INT-TKN — gateway internal token (user identity)
         cfg.GC_ROLE_HEADER,       # X-AR-KEY  — role
-        "Authorization",
-        "X-Trace-Id", "X-Time-Zone", "X-Date-Time",
-        "X-Selected-App", "X-Selected-Role",
+        "Authorization", "X-API-KEY",
+        "X-Selected-App", "X-Selected-Role",   # selected app + role (user-scoped queries key on these)
+        # Client environment: IP, machine, timezone, timestamp, tracing — some endpoints key on
+        # these; forward whatever the caller sent so every downstream call carries full context.
+        "X-Forwarded-For", "User-Agent", "X-Time-Zone", "X-Date-Time", "X-Trace-Id", "X-Request-Id",
     )
     return {h: request.headers[h] for h in forward if h in request.headers}
 
