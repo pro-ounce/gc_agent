@@ -1218,10 +1218,10 @@ BASELINE_STEPS: tuple[PickerStep, ...] = (
     # feed it into the office fetch (and into the payload, replacing the fundGroupId default).
     PickerStep("fundGroupId", "Choose the **fund group**",
                "getFundGroupsByUser_post", "fundGroupName", "fundGroupId",
-               source_args={"applicationId": 3}, noun="fund group", auto_if_single=True),
+               source_args={"applicationId": "3"}, noun="fund group", auto_if_single=True),
     PickerStep("orgIds", "Choose program office(s) — or select all",
                "getOrganizationsByUser_post", "organizationName", "organizationId",
-               multi=True, optional=True, source_args={"applicationId": 3},
+               multi=True, optional=True, source_args={"applicationId": "3"},
                source_args_from={"fundGroupId": "fundGroupId"}, noun="program office"),
     PickerStep("requestTypes", "Choose request type(s) — or select all",
                "getActiveRequestTypeMappings_post", "requestTypeName", "requestTypeCode",
