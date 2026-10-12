@@ -64,10 +64,15 @@ _ACQ_VEHICLES = [
     {"acquisitionVehicleId": 7, "acquisitionVehicleName": "Contract Vehicle X"},
     {"acquisitionVehicleId": 8, "acquisitionVehicleName": "Contract Vehicle Y"},
 ]
+_FUND_GROUPS = [
+    {"fundGroupId": 1, "fundGroupName": "General Fund"},
+    {"fundGroupId": 2, "fundGroupName": "Reimbursable Fund"},
+]
 
 _BY_TOOL = {
     "getAllFiscalYears_post": _FISCAL_YEARS,
     "getAllValidationGroups_post": _RULE_GROUPS,
+    "getFundGroupsByUser_post": _FUND_GROUPS,
     "getOrganizationsByUser_post": _ORGS,
     "getActiveRequestTypeMappings_post": _REQUEST_TYPES,
     "getActiveAcquisitionVehicleMappingsIds_post": _ACQ_VEHICLES,
@@ -97,6 +102,7 @@ _SCRIPT = [
     ("done", "finish rule-group selection"),
     ("FY26 Program Baseline", "baseline title (free text)"),
     ("Baseline for FY26 planning", "description (free text)"),
+    ("General Fund", "fund group — single pick (auto-advances)"),
     ("select all", "program offices — all"),
     ("all", "request types — all"),
     ("all", "acquisition vehicles — all"),
@@ -176,6 +182,8 @@ async def run(verbose: bool = True) -> list[tuple[str, bool, str]]:
           and args.get("isRecommended") == "Y" and args.get("isDeferred") == "N"
           and args.get("isWithdrawn") == "N")
     check("quarter captured", args.get("quarter") == "Q1", args.get("quarter"))
+    check("fundGroupId sent from the picked fund group (General Fund = 1)",
+          args.get("fundGroupId") == 1, args.get("fundGroupId"))
     check("healthCheck sent explicitly", args.get("healthCheck") == "N", args.get("healthCheck"))
     check("applicationCode FORMULATION", args.get("applicationCode") == "FORMULATION",
           args.get("applicationCode"))

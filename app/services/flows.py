@@ -1190,6 +1190,12 @@ class PickerStep:
     static_options: tuple[str, ...] = ()  # fixed choices (no fetch), e.g. Y/N or Q1..Q4
     source_args: dict[str, Any] = field(default_factory=dict)
     noun: str = ""                   # singular name of what the picker selects (for the widget label)
+    # Dependent fetch: {source_arg: earlier_field} — pull these args from already-answered fields so
+    # this step's options narrow to that choice (e.g. program offices scoped to the picked fund group).
+    source_args_from: dict[str, str] = field(default_factory=dict)
+    # Resolve without asking when the fetch yields a single option (auto-pick) or none (skip, leave
+    # default) — e.g. the user's sole assigned fund group, or no fund-group access at all.
+    auto_if_single: bool = False
 
 
 # VERIFY against live responses (scratchpad/baseline_probe.py) — source label/value field
@@ -1208,9 +1214,15 @@ BASELINE_STEPS: tuple[PickerStep, ...] = (
                source_args={"groupType": "BASELINE", "applicationId": 3}, noun="rule group"),
     PickerStep("baselineTitle", "Enter a **title** for this baseline"),
     PickerStep("description", "Enter a short **description**"),
+    # Fund group scopes which program offices the caller can pick — collect it before offices and
+    # feed it into the office fetch (and into the payload, replacing the fundGroupId default).
+    PickerStep("fundGroupId", "Choose the **fund group**",
+               "getFundGroupsByUser_post", "fundGroupName", "fundGroupId",
+               source_args={"applicationId": 3}, noun="fund group", auto_if_single=True),
     PickerStep("orgIds", "Choose program office(s) — or select all",
                "getOrganizationsByUser_post", "organizationName", "organizationId",
-               multi=True, optional=True, source_args={"applicationId": 3}, noun="program office"),
+               multi=True, optional=True, source_args={"applicationId": 3},
+               source_args_from={"fundGroupId": "fundGroupId"}, noun="program office"),
     PickerStep("requestTypes", "Choose request type(s) — or select all",
                "getActiveRequestTypeMappings_post", "requestTypeName", "requestTypeCode",
                multi=True, optional=True, noun="request type"),
@@ -1238,6 +1250,7 @@ BASELINE_DEFAULTS: dict[str, Any] = {
 BASELINE_LABELS: dict[str, str] = {
     "sourceFiscalYear": "Source FY", "fiscalYear": "Target FY",
     "businessRuleGroups": "Rule group(s)", "baselineTitle": "Title", "description": "Description",
+    "fundGroupId": "Fund group",
     "orgIds": "Program office(s)", "requestTypes": "Request type(s)",
     "acquisitionVehicles": "Acquisition vehicle(s)", "quarter": "Quarter",
     "isTargetApplicable": "Target applicable", "isRecommended": "Include recommended",
@@ -1292,17 +1305,24 @@ def _yn(msg: str) -> str | None:
     return None
 
 
-async def _fetch_options(step: PickerStep, headers: dict[str, str] | None) -> list[dict[str, Any]]:
+async def _fetch_options(step: PickerStep, headers: dict[str, str] | None,
+                         flow: dict[str, Any] | None = None) -> list[dict[str, Any]]:
     """A step's options as [{value, label}] — defensive about field names and row shapes."""
     if step.static_options:
         return [{"value": o, "label": ("Yes" if o == "Y" else "No" if o == "N" else o)}
                 for o in step.static_options]
     if not step.source_tool:
         return []
+    args = dict(step.source_args)
+    # Dependent fetch: pull scoping args from already-answered fields (e.g. fundGroupId → offices).
+    data = (flow or {}).get("data", {}) if flow else {}
+    for arg, src_field in (step.source_args_from or {}).items():
+        if data.get(src_field) not in (None, "", [], {}):
+            args[arg] = data[src_field]
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     try:
-        res = await tool_registry.execute(step.source_tool, dict(step.source_args), headers)
+        res = await tool_registry.execute(step.source_tool, args, headers)
         data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
         for r in (data or []):
             if isinstance(r, dict):
@@ -1376,7 +1396,7 @@ async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
     """Render the current step: fetched/static chips (+ controls), or a free-text ask."""
     if not step.source_tool and not step.static_options:      # free text
         return FlowResult(message=f"{prefix}{step.prompt}")
-    options = options if options is not None else await _fetch_options(step, headers)
+    options = options if options is not None else await _fetch_options(step, headers, flow)
     flow.setdefault("opts", {})[step.field] = options          # cache for matching/summary
     if not options:
         return FlowResult(message=f"{prefix}{step.prompt} (type a value)",
@@ -1438,6 +1458,20 @@ async def _advance_baseline(flow: dict[str, Any], headers: dict[str, str] | None
     """Move to the next step and prompt it; finalize (confirm hand-off) when past the last."""
     flow["idx"] += 1
     flow["buf"] = []
+    # Auto-resolve steps that shouldn't be asked when they have a single option (pick it) or none
+    # (skip, leave default) — e.g. the user's sole assigned fund group, or no fund-group access.
+    while flow["idx"] < len(BASELINE_STEPS) and BASELINE_STEPS[flow["idx"]].auto_if_single:
+        st = BASELINE_STEPS[flow["idx"]]
+        opts = await _fetch_options(st, headers, flow)
+        if len(opts) == 1:                          # sole option → pick it
+            flow.setdefault("data", {})[st.field] = opts[0]["value"]
+            flow.setdefault("labels", {})[st.field] = opts[0]["label"]
+        elif len(opts) == 0:                        # none (e.g. no fund-group access) → leave default
+            flow.setdefault("labels", {})[st.field] = "—"
+        else:
+            break                                   # several → ask
+        flow["idx"] += 1
+        flow["buf"] = []
     if flow["idx"] >= len(BASELINE_STEPS):
         flow["stage"] = "confirm"
         return _baseline_finalize(flow)
@@ -1470,7 +1504,7 @@ async def _baseline(session: Any, flow: dict[str, Any], msg: str,
 
     # ── static single-choice (Y/N, quarter) ──
     if step.static_options and not step.multi:
-        if step.optional and _SKIP_RE.search(msg) and not _match_opt(msg, await _fetch_options(step, headers)):
+        if step.optional and _SKIP_RE.search(msg) and not _match_opt(msg, await _fetch_options(step, headers, flow)):
             flow["data"].pop(step.field, None)          # leave default
             flow["labels"][step.field] = "—"
             return await _advance_baseline(flow, headers)
@@ -1481,7 +1515,7 @@ async def _baseline(session: Any, flow: dict[str, Any], msg: str,
             flow["data"][step.field] = yn
             flow["labels"][step.field] = "Yes" if yn == "Y" else "No"
             return await _advance_baseline(flow, headers)
-        opt = _match_opt(msg, await _fetch_options(step, headers))
+        opt = _match_opt(msg, await _fetch_options(step, headers, flow))
         if not opt:
             return await _baseline_prompt(flow, step, headers, prefix="Please pick one. ")
         flow["data"][step.field] = opt["value"]
@@ -1489,7 +1523,7 @@ async def _baseline(session: Any, flow: dict[str, Any], msg: str,
         return await _advance_baseline(flow, headers)
 
     # ── fetched picker (single or multi) ──
-    options = await _fetch_options(step, headers)
+    options = await _fetch_options(step, headers, flow)
 
     if step.multi:
         # Multi-select keeps a running buffer (pick several), finished with Continue — the widget
