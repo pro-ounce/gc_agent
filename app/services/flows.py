@@ -1242,7 +1242,9 @@ BASELINE_STEPS: tuple[PickerStep, ...] = (
 # product owner). Empty optional lists mean "all" per the baseline contract.
 BASELINE_DEFAULTS: dict[str, Any] = {
     "applicationCode": "FORMULATION", "withdrawnRequest": "N", "deletedRequest": "N",
-    "fundGroupId": 0, "quarter": "", "orgIds": [], "requestTypes": [], "acquisitionVehicles": [],
+    # fundGroupId is collected (never defaulted to an empty 0) — a baseline must be scoped to a
+    # real fund group, and the flow blocks rather than send a blank.
+    "quarter": "", "orgIds": [], "requestTypes": [], "acquisitionVehicles": [],
     # Sent explicitly (backend BaselineGeneratePayload defaults this to "N" too); a dry run
     # that only validates inputs, not a real generation.
     "healthCheck": "N",
@@ -1466,12 +1468,17 @@ async def _advance_baseline(flow: dict[str, Any], headers: dict[str, str] | None
         if len(opts) == 1:                          # sole option → pick it
             flow.setdefault("data", {})[st.field] = opts[0]["value"]
             flow.setdefault("labels", {})[st.field] = opts[0]["label"]
-        elif len(opts) == 0:                        # none (e.g. no fund-group access) → leave default
-            flow.setdefault("labels", {})[st.field] = "—"
+            flow["idx"] += 1
+            flow["buf"] = []
+        elif len(opts) == 0:                        # none → can't hold an empty value (guardrail): stop
+            noun = st.noun or st.field
+            return FlowResult(
+                message=(f"You don't have any **{noun}s** assigned in this application, so I can't "
+                         f"continue — every step needs a value. Tap **Cancel** above to exit, or ask "
+                         f"an admin to grant you {noun} access."),
+                progress=_baseline_progress(flow))
         else:
             break                                   # several → ask
-        flow["idx"] += 1
-        flow["buf"] = []
     if flow["idx"] >= len(BASELINE_STEPS):
         flow["stage"] = "confirm"
         return _baseline_finalize(flow)
