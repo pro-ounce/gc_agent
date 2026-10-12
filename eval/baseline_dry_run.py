@@ -192,8 +192,45 @@ async def run(verbose: bool = True) -> list[tuple[str, bool, str]]:
     return r
 
 
+def _trigger_checks() -> list[tuple[str, bool, str]]:
+    """Trigger-robustness battery. arm = _BASELINE_INTENT_RE ∧ ¬_FLOW_QUERY_RE — the exact predicate
+    maybe_start uses. Every taught 'generate a baseline' phrasing MUST arm; every question / read /
+    status / cancel about baselines MUST NOT. Keeps the trigger at 100% for recognised intents."""
+    def arms(s: str) -> bool:
+        return bool(flows._BASELINE_INTENT_RE.search(s)) and not bool(flows._FLOW_QUERY_RE.search(s))
+
+    POSITIVE = [  # a clear GENERATE request → must open the flow
+        "generate a formulation baseline", "create a baseline", "run baseline",
+        "build a new baseline", "new baseline", "start baseline", "formulation baseline",
+        "generate the FORMULATION budget baseline", "create a budget baseline for appropriated",
+        "can you generate a baseline", "could you create a baseline", "generate baseline for FY2027",
+        "I want to generate a baseline", "make a baseline", "set up a baseline", "prepare a baseline",
+        "kick off a baseline", "produce a baseline", "regenerate the baseline", "bob baseline",
+        "generate baselines", "create formulation baselines", "formulate a baseline",
+        "spin up a baseline", "initiate baseline generation", "please generate a baseline",
+        "go ahead and create a baseline",
+    ]
+    NEGATIVE = [  # a question / read / status / cancel → must NOT open the generate flow
+        "what is a baseline", "show me the baseline", "delete the baseline", "list baselines",
+        "view the baseline", "explain how baselines work", "how many baselines do I have",
+        "open the baseline planner", "what fund groups do I have", "who can create a baseline",
+        "what is baseline generation", "explain baseline generation",
+        "how does baseline generation work", "cancel baseline generation",
+        "generate a report, not a baseline", "why did the baseline generation fail",
+        "status of baseline generation", "how do I generate a baseline", "is the baseline ready",
+        "do you have a baseline",
+    ]
+    out: list[tuple[str, bool, str]] = []
+    for s in POSITIVE:
+        out.append((f"trigger ARMS: {s!r}", arms(s), "did NOT arm"))
+    for s in NEGATIVE:
+        out.append((f"trigger no-misfire: {s!r}", not arms(s), "WRONGLY armed"))
+    return out
+
+
 def main() -> int:
     results = asyncio.run(run(verbose=True))
+    results += _trigger_checks()
     passed = sum(1 for _, ok, _ in results if ok)
     total = len(results)
     print("\n" + "-" * 78)

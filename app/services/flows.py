@@ -198,11 +198,31 @@ _STANDALONE_CREATE_RE = re.compile(
 _SKILL_INTENT_RE = re.compile(
     r"\b(create|add|make|build|teach|define|register)\b.{0,20}\b(skill|capabilit(y|ies)|"
     r"new (action|command|ability))\b", re.I)
-# Formulation baseline generation — a 13-field guided flow ending in one confirmed mutation.
-# Matched deterministically so the mutation is ALWAYS flow-gated (never LLM-driven).
+# Formulation baseline generation — a guided flow ending in one confirmed mutation. Recognised
+# deterministically so the mutation is ALWAYS flow-gated (never LLM-driven). A GENERATE VERB is
+# required (broadened set + plural + bob/formulation); the bare noun "baseline generation" is
+# descriptive and shows up in questions, so it no longer triggers on its own.
 _BASELINE_INTENT_RE = re.compile(
-    r"\b(generate|create|run|build|new|start)\b[^.?]{0,24}\bbaseline\b|"
-    r"\bbaseline\b[^.?]{0,12}\b(generation|generate)\b|\bformulation baseline\b", re.I)
+    r"\b(?:re)?generate\b[^.?!]{0,30}\bbaselines?\b"
+    r"|\b(?:create|run|build|make|produce|prepare|initiate|start|formulate)\b[^.?!]{0,30}\bbaselines?\b"
+    r"|\b(?:kick\s*off|set\s*up|spin\s*up|new)\b[^.?!]{0,30}\bbaselines?\b"
+    r"|\b(?:formulation|bob)\s+baselines?\b", re.I)
+
+# Guard: a QUESTION / READ / STATUS / CANCEL that merely mentions a workflow's subject must never
+# OPEN a generate flow (it should be answered, not acted on). Leading interrogatives / read-or-cancel
+# verbs + a few explicit non-action phrases — but NOT polite "can/could/would you <verb>" asks, which
+# are real requests. Applied to fresh-intent arming AND mid-flow break-out so neither misfires.
+_FLOW_QUERY_RE = re.compile(
+    r"^\s*(?:what|which|who|whom|whose|when|where|why|how|list|show|view|open|display|find|see|"
+    r"count|explain|describe|define|tell|cancel|stop|abort|discard|status|check|do|does|did|is|are|was|were|should)\b"
+    r"|\b(?:not a baseline|instead of|rather than|status of|why did|how to|meaning of|definition of|"
+    r"has failed|failed to|what's)\b", re.I)
+
+# Guided flows that open with NO required args, keyed by the mutation tool each performs. A confident
+# SEMANTIC match to one of these (skills.match_semantic already gates mutations to a high score) opens
+# the REAL guided flow — instead of merely grounding the LLM, which would emit a convincing flow-looking
+# reply WITHOUT arming the flow, leaving the user's next answer unhandled. Extensible to other flows.
+_FLOW_OPENER_TOOLS = {"bobBaseLineGenerate_put"}
 
 # ── Fail-safe: universal exit commands, honoured at ANY stage of ANY flow ───────
 # Standalone commands (whole message ≈ one of these) always cancel.
@@ -481,8 +501,15 @@ async def maybe_start(session: Any, message: str, headers: dict[str, str] | None
     # Skill authoring intent takes precedence ("create a skill" must not read as create-user).
     if _SKILL_INTENT_RE.search(message or ""):
         return start_create_skill(session, message or "")
-    # Formulation baseline generation → open the guided flow (mutation stays flow-gated).
-    if _BASELINE_INTENT_RE.search(message or ""):
+    # Formulation baseline generation → open the REAL guided flow, recognised by EITHER the
+    # (broadened) generate-intent regex OR a confident semantic match to the baseline tool — so a
+    # taught paraphrase ("make a baseline", "kick off a baseline") opens the flow instead of a fake
+    # LLM intro. A question / read / status (guarded) never opens it; the mutation stays flow-gated.
+    _msg = message or ""
+    if not _FLOW_QUERY_RE.search(_msg) and (
+        _BASELINE_INTENT_RE.search(_msg)
+        or getattr(skill, "tool", None) in _FLOW_OPENER_TOOLS
+    ):
         return start_formulation_baseline(session)
     # Remove a role definition → guided, dependency-previewed, confirm-gated delete. Detected
     # before the create front door; un-assigning a role from a user is NOT caught here.
@@ -534,7 +561,7 @@ def _should_break_out(flow: dict[str, Any], msg: str) -> bool:
         return True
     if _SKILL_INTENT_RE.search(msg):
         return name != "create_skill"
-    if _BASELINE_INTENT_RE.search(msg):
+    if _BASELINE_INTENT_RE.search(msg) and not _FLOW_QUERY_RE.search(msg):
         return name != "formulation_baseline"
     # A clear read/navigation command (e.g. "my access", "roles in Smart HuB", "look up a license")
     # never belongs to a create/remove flow, so it breaks out rather than being eaten as a value.
