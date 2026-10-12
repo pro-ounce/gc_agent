@@ -287,10 +287,14 @@ class _RingHandler(logging.Handler):
             }
             _LOG_RING.append(rec)                            # in-memory /admin feed — raw text
             if _metric_relevant(fields, record.levelname):   # durable → survives restart
-                # The JSONL is world-readable and rehydrates the ring after a restart; persist a
-                # redacted copy so no chat content / PII lands on disk (post-restart history shows
-                # content length, not text — the live ring still has the raw text until then).
-                _persist_record({**rec, "fields": _redact_for_file(fields)})
+                # The JSONL rehydrates the ring after a restart; persist a fully-redacted copy so no
+                # chat content / PII lands on disk — scrub BOTH the message string and the fields
+                # (the live ring still has the raw text until the next restart).
+                _persist_record({
+                    **rec,
+                    "msg": _scrub("msg", rec.get("msg")),
+                    "fields": _redact_for_file(fields),
+                })
         except Exception:  # noqa: BLE001 — logging must never raise
             pass
 
