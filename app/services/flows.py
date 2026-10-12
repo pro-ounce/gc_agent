@@ -1350,7 +1350,10 @@ def start_formulation_baseline(session: Any) -> FlowResult:
 def _baseline_control_chips(step: PickerStep, has_buf: bool) -> list[dict[str, Any]]:
     tail: list[dict[str, Any]] = []
     if step.multi:
-        tail.append(_chip("Done selecting" if has_buf else "Done", "done", icon="check"))
+        # Only offer "Done" once something is picked — a bare "Done" before any selection is
+        # just confusing (there's nothing to be done yet).
+        if has_buf:
+            tail.append(_chip("Done selecting", "done", icon="check"))
         if step.optional:
             tail.append(_chip("Select all", "select all", icon="app"))
     if step.optional and not step.multi:
