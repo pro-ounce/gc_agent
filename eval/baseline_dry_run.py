@@ -127,12 +127,17 @@ async def run(verbose: bool = True) -> list[tuple[str, bool, str]]:
         print(_chips(fr))
 
     first_fy_chips: list[str] = []
+    first_fy_noun = None
     pending = None
     for i, (msg, note) in enumerate(_SCRIPT):
         fr = await flows.handle(s, msg, {})
         rail_ok = rail_ok and fr.progress is not None   # every step stays in the FlowWindow
         if i == 0:  # the source-FY prompt right after 'start'
             first_fy_chips = [c.get("label") for c in (fr.suggestions or []) if isinstance(c, dict)]
+            # Picker chips carry the field noun so the widget labels the popover "fiscal years",
+            # not the generic entity ("applications") the icon glyph would otherwise imply.
+            first_fy_noun = next((c.get("noun") for c in (fr.suggestions or [])
+                                  if isinstance(c, dict) and c.get("noun")), None)
         if verbose:
             print(f"\nUSER:  {msg!r}   ({note})")
             print("AGENT:", (fr.message or "").replace("\n", " "))
@@ -142,6 +147,8 @@ async def run(verbose: bool = True) -> list[tuple[str, bool, str]]:
 
     check("source-FY chips are year numbers", "2026" in first_fy_chips and "2025" in first_fy_chips,
           first_fy_chips)
+    check("source-FY picker chips carry noun='fiscal year'", first_fy_noun == "fiscal year",
+          first_fy_noun)
     check("every step renders in the FlowWindow (progress rail present)", rail_ok)
     check("reaches confirm with a pending mutation", bool(pending))
 

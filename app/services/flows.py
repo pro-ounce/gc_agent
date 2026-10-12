@@ -140,9 +140,15 @@ class FlowResult:
 
 
 def _chip(label: str, send: str | None = None, icon: str | None = None,
-          selectable: bool = True) -> dict[str, Any]:
-    return {"label": label, "send": send if send is not None else label, "icon": icon,
-            "selectable": selectable}
+          selectable: bool = True, noun: str | None = None) -> dict[str, Any]:
+    c = {"label": label, "send": send if send is not None else label, "icon": icon,
+         "selectable": selectable}
+    # Field-picker chips carry the singular noun of what they pick ("fiscal year", "program
+    # office") so the widget's hint/popover read the field — not the generic entity the icon
+    # glyph implies. Omitted for entity (app/role/menu) chips, which keep the icon vocabulary.
+    if noun:
+        c["noun"] = noun
+    return c
 
 
 _FLOWS = ("onboard", "create_user", "create_skill", "data_call", "formulation_baseline",
@@ -1174,6 +1180,7 @@ class PickerStep:
     optional: bool = False           # allow skip / "select all"
     static_options: tuple[str, ...] = ()  # fixed choices (no fetch), e.g. Y/N or Q1..Q4
     source_args: dict[str, Any] = field(default_factory=dict)
+    noun: str = ""                   # singular name of what the picker selects (for the widget label)
 
 
 # VERIFY against live responses (scratchpad/baseline_probe.py) — source label/value field
@@ -1184,23 +1191,24 @@ BASELINE_STEPS: tuple[PickerStep, ...] = (
     # (generate-baseline.jsx sends `Number(fiscalYear - 1)` and every FY dropdown binds
     # `value: item.fiscalYear`) and by the service querying findByFiscalYear(<year>).
     PickerStep("sourceFiscalYear", "Choose the **source** fiscal year (BFY)",
-               "getAllFiscalYears_post", "fiscalYear", "fiscalYear"),
+               "getAllFiscalYears_post", "fiscalYear", "fiscalYear", noun="fiscal year"),
     PickerStep("fiscalYear", "Choose the **target** fiscal year",
-               "getAllFiscalYears_post", "fiscalYear", "fiscalYear"),
+               "getAllFiscalYears_post", "fiscalYear", "fiscalYear", noun="fiscal year"),
     PickerStep("businessRuleGroups", "Choose the **baseline** business rule group(s)",
                "getAllValidationGroups_post", "groupName", "validationGroupId", multi=True,
-               source_args={"groupType": "BASELINE", "applicationId": 3}),
+               source_args={"groupType": "BASELINE", "applicationId": 3}, noun="rule group"),
     PickerStep("baselineTitle", "Enter a **title** for this baseline"),
     PickerStep("description", "Enter a short **description**"),
     PickerStep("orgIds", "Choose program office(s) — or select all",
                "getOrganizationsByUser_post", "organizationName", "organizationId",
-               multi=True, optional=True, source_args={"applicationId": 3}),
+               multi=True, optional=True, source_args={"applicationId": 3}, noun="program office"),
     PickerStep("requestTypes", "Choose request type(s) — or select all",
                "getActiveRequestTypeMappings_post", "requestTypeName", "requestTypeCode",
-               multi=True, optional=True),
+               multi=True, optional=True, noun="request type"),
     PickerStep("acquisitionVehicles", "Choose acquisition vehicle(s) — or select all",
                "getActiveAcquisitionVehicleMappingsIds_post",
-               "acquisitionVehicleName", "acquisitionVehicleId", multi=True, optional=True),
+               "acquisitionVehicleName", "acquisitionVehicleId", multi=True, optional=True,
+               noun="acquisition vehicle"),
     PickerStep("quarter", "Choose a quarter (optional)",
                static_options=("Q1", "Q2", "Q3", "Q4"), optional=True),
     PickerStep("isTargetApplicable", "Is **target** applicable?", static_options=("Y", "N")),
@@ -1362,7 +1370,8 @@ async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
         return FlowResult(message=f"{prefix}{step.prompt} (type a value)",
                           suggestions=_baseline_control_chips(step, bool(flow.get("buf"))))
     icon = "role" if step.multi else "app"
-    chips = [_chip(str(o["label"]), str(o["label"]), icon=icon) for o in options[:MAX_CHIPS]]
+    chips = [_chip(str(o["label"]), str(o["label"]), icon=icon, noun=step.noun)
+             for o in options[:MAX_CHIPS]]
     note = f"\n\n*Showing {MAX_CHIPS} of {len(options)} — or type a name.*" if len(options) > MAX_CHIPS else ""
     return FlowResult(message=f"{prefix}{step.prompt}{note}",
                       suggestions=chips + _baseline_control_chips(step, bool(flow.get("buf"))))
