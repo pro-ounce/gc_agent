@@ -166,27 +166,51 @@ def _emit_chat_headers(request: Request, scope: str, app_code: str | None) -> No
            f"X-Selected-App {'present' if hdr_app else 'ABSENT'}")
 
 
-def _headers_with_app(request: Request, app_code: str | None) -> dict[str, str]:
-    """Forwarded headers, with X-Selected-App NORMALIZED to a clean base64(appCode) before it
-    travels downstream (MCP → gateway → domain service).
+def _is_clean_b64_code(raw: str) -> bool:
+    """True when `raw` is base64 of a clean printable code (not plain text / an encrypted blob)."""
+    try:
+        d = base64.b64decode(raw + "==").decode("utf-8", "ignore").strip()
+    except Exception:  # noqa: BLE001
+        return False
+    return bool(d) and all(c == "\t" or 32 <= ord(c) < 127 or ord(c) > 160 for c in d)
 
-    The widget sends the current application in the POST body (scope=APPLICATION, appCode=…). The
-    gateway's X-Selected-App header is unreliable on the chat path: sometimes absent, sometimes
-    delivered garbled/encrypted (its b64decode yields control bytes). A bad app value makes the
-    downstream service REJECT the call (403) or return empty — which silently broke the baseline
-    flow (getAllFiscalYears / getFundGroupsByUser came back empty, blocking it at Source FY). The
-    body's appCode is always a clean plain code, so when we have it we re-encode it ourselves and
-    OVERRIDE whatever arrived — exactly the value the web app sends (btoa of the code). With no
-    appCode, keep the incoming header only if it already decodes cleanly, else drop it so the
-    downstream falls back to the token's user context instead of 403-ing on garbage."""
-    from ..services.ecosystem import selected_app_code as _eco_app_code
+
+def _b64_code(raw: str) -> str:
+    """Normalize a selected-app/role header to base64-of-the-plain-code, which is what the web app
+    sends and the downstream gateway/domain services decode. The gateway hands the AGENT the PLAIN
+    code (e.g. `FORMULATION`, `BUDGET_ADMINISTRATOR`), so b64decode of it yields control bytes and
+    downstream rejects it. Encode a plain value; pass a value that is already clean base64 through."""
+    raw = (raw or "").strip()
+    if not raw:
+        return ""
+    return raw if _is_clean_b64_code(raw) else base64.b64encode(raw.encode()).decode()
+
+
+def _headers_with_app(request: Request, app_code: str | None) -> dict[str, str]:
+    """Forwarded headers, with X-Selected-App / X-Selected-Role NORMALIZED to base64 of the plain
+    code before they travel downstream (MCP → gateway → domain service).
+
+    The web app sends these headers as base64 of the code (btoa('FORMULATION')). The gateway,
+    however, hands the AGENT the PLAIN code on the chat path — so forwarding it verbatim gives the
+    downstream a value whose b64decode is control-byte garbage, and it REJECTS the call or returns
+    empty. That silently broke the baseline flow: getAllFiscalYears / getFundGroupsByUser came back
+    empty, dead-ending at Source FY. For the app we prefer the request BODY's appCode (always a clean
+    plain code) and re-encode it; for the role we normalize the incoming header. Either way the
+    downstream receives exactly the base64 the web app would have sent."""
     h = _forward_headers(request)
+    # X-Selected-App: on APPLICATION scope re-encode the body appCode (the authoritative clean
+    # code). On GLOBAL scope the query is deliberately not app-bound, so DROP the incoming header
+    # rather than encode+forward it (forwarding would wrongly scope cross-app queries to one app).
+    h.pop("x-selected-app", None)
     if app_code:
-        h.pop("x-selected-app", None)
         h["X-Selected-App"] = base64.b64encode(str(app_code).strip().encode()).decode()
-    elif (h.get("X-Selected-App") or h.get("x-selected-app")) and not _eco_app_code(h):
-        h.pop("X-Selected-App", None)
-        h.pop("x-selected-app", None)
+    # X-Selected-Role: base64-normalize the incoming (plain) role so downstream can decode it.
+    norm_role = _b64_code(h.get("X-Selected-Role") or h.get("x-selected-role") or "")
+    h.pop("x-selected-role", None)
+    if norm_role:
+        h["X-Selected-Role"] = norm_role
+    else:
+        h.pop("X-Selected-Role", None)
     return h
 
 
