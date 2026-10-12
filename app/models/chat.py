@@ -69,6 +69,9 @@ class Suggestion(BaseModel):
     icon: str | None = None   # optional icon key the widget maps (app, role, check, list, …)
     selectable: bool = True   # false = shown for reference but NOT pickable (e.g. a role name
     # already in use — can't duplicate); the widget greys it and tags it "in use"
+    noun: str | None = None   # singular name of what a field picker selects ("fiscal year",
+    # "program office"); the widget labels the hint chip/popover with it instead of the generic
+    # entity the icon glyph implies. Omitted for entity (app/role/menu) chips.
 
 
 class ChatResponse(BaseModel):
