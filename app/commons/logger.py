@@ -93,28 +93,54 @@ def get_user_id() -> str:
 # ── Custom formatter ───────────────────────────────────────────────────────────
 
 # ── On-disk redaction ────────────────────────────────────────────────────────────
-# Chat CONTENT and PII must never reach the on-disk sinks — the stdout log and the metrics JSONL
-# are world-readable, and a tool result once wrote a user's name + email there. The in-memory ring
-# that powers the access-controlled /admin feed keeps the RAW text; the files get a length
-# placeholder for content fields and have email addresses masked everywhere (defense in depth).
-_CONTENT_FIELDS = ("question", "answer", "result_preview", "preview")
+# NO PII reaches the on-disk sinks — the stdout log and the metrics JSONL are world-readable, and a
+# tool result once wrote a user's name + email there. The in-memory ring that powers the
+# access-controlled /admin feed keeps the RAW text (and the audit 'who/where'); the files get a
+# length placeholder for any content- or identity-bearing field, and every remaining string has
+# email / SSN / phone patterns masked (recursively, so nested dicts/lists are covered too).
+#
+# Field names whose VALUE is user content or directly identifies a person — dropped to a length.
+_REDACT_FIELDS = frozenset({
+    # free-text content (user-typed or model-generated — may contain anything)
+    "question", "answer", "result_preview", "preview", "message_text",
+    "user_message", "assistant_message", "system_prompt", "prompt", "content", "text",
+    "title", "description", "note", "hint", "reason", "summary",
+    # directly identifying
+    "user_name", "username", "sso_user_name", "full_name", "first_name", "last_name",
+    "middle_name", "client_ip", "user_agent", "origin", "referer",
+    # PII-typed values + header dumps that carry IP / UA / referer
+    "email", "email_address", "emailaddress", "phone", "phone_num", "fax", "ssn",
+    "user_image", "carried_headers",
+})
 _EMAIL_RE = _re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_SSN_RE = _re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+# Phone: require separators so bare digit runs (ids, org numbers, token counts, timestamps) are safe.
+_PHONE_RE = _re.compile(r"(?<!\d)(?:\+?\d{1,2}[ .-])?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}(?!\d)")
 
 
-def _mask_text(v: Any) -> Any:
-    return _EMAIL_RE.sub("<email>", v) if isinstance(v, str) else v
+def _mask_text(v: str) -> str:
+    v = _EMAIL_RE.sub("<email>", v)
+    v = _SSN_RE.sub("<ssn>", v)
+    return _PHONE_RE.sub("<phone>", v)
+
+
+def _scrub(key: str | None, v: Any) -> Any:
+    """Redact one value for an on-disk sink. `key` (its field name) drops content/identity fields to
+    a length; otherwise strings are pattern-masked and dicts/lists scrubbed recursively."""
+    if key is not None and key.lower() in _REDACT_FIELDS:
+        return f"<redacted:{len(v)}>" if isinstance(v, str) else "<redacted>"
+    if isinstance(v, str):
+        return _mask_text(v)
+    if isinstance(v, dict):
+        return {k: _scrub(k, vv) for k, vv in v.items()}
+    if isinstance(v, list):
+        return [_scrub(None, vv) for vv in v]
+    return v
 
 
 def _redact_for_file(fields: dict) -> dict:
-    """A copy of `fields` safe for the on-disk sinks: content fields reduced to a length, emails
-    masked in every other string. Never mutates the input (the ring keeps the raw dict)."""
-    out: dict = {}
-    for k, v in fields.items():
-        if k in _CONTENT_FIELDS and isinstance(v, str):
-            out[k] = f"<redacted:{len(v)}>"
-        else:
-            out[k] = _mask_text(v)
-    return out
+    """A copy of `fields` safe for the on-disk sinks. Never mutates the input (the ring keeps raw)."""
+    return {k: _scrub(k, v) for k, v in fields.items()}
 
 
 class _ContextFormatter(jsonlogger.JsonFormatter):
@@ -144,13 +170,11 @@ class _ContextFormatter(jsonlogger.JsonFormatter):
         if tid:
             log_record["trace_id"] = tid
 
-        # Keep chat content / PII out of the (world-readable) stdout file: content fields → length,
-        # emails masked. The in-memory /admin ring is built separately and keeps the raw text.
+        # Keep ALL content / PII out of the (world-readable) stdout file: content & identity fields
+        # become a length, email/SSN/phone patterns are masked everywhere (recursively). The
+        # in-memory /admin ring is built separately and keeps the raw text.
         for _k in list(log_record.keys()):
-            if _k in _CONTENT_FIELDS and isinstance(log_record[_k], str):
-                log_record[_k] = f"<redacted:{len(log_record[_k])}>"
-            elif isinstance(log_record[_k], str):
-                log_record[_k] = _EMAIL_RE.sub("<email>", log_record[_k])
+            log_record[_k] = _scrub(_k, log_record[_k])
 
 
 # ── In-memory ring buffer (recent logs for the /admin Logs view) ─────────────────
