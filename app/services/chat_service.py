@@ -260,21 +260,25 @@ class ChatService:
                 return self._flow_response(session, fr, source="flow", question=user_message,
                                            app=sel_app, role=sel_role)
         if not flows.is_active(session):        # a fresh intent, or the flow we just switched out of
-            src = "meta"
             mr = await meta.handle(user_message, request_headers)
-            if mr is None:
-                mr = await ecosystem_qa.handle(user_message, request_headers)
-                src = "ecosystem"
             if mr is not None:
-                return self._flow_response(session, mr, source=src, question=user_message,
+                return self._flow_response(session, mr, source="meta", question=user_message,
                                            app=sel_app, role=sel_role)
-            # Resolve the skill once (keyword, then semantic fallback for paraphrases) and
-            # thread it into flow-start so 'onboard a new person' opens the guided intake too.
+            # Guided-flow arming runs BEFORE read-routing: a clear CREATE/mutation intent (guarded
+            # against questions inside maybe_start) must OPEN the real flow — not be answered as a
+            # read by ecosystem_qa, which would otherwise claim e.g. "set up a new role" as a roles
+            # lookup and the guided create flow would never run. Skill resolved here (keyword, then
+            # semantic for paraphrases) so 'onboard a new person' opens the intake too.
             skill = skills.match(user_message) or await skills.match_semantic(user_message)
             started = await flows.maybe_start(session, user_message, request_headers, skill=skill)
             started = await self._gate_onboarding(session, started, request_headers)
             if started is not None:
                 return self._flow_response(session, started, source="flow", question=user_message,
+                                           app=sel_app, role=sel_role)
+            # Not a guided-flow intent → ecosystem read / Q&A.
+            mr = await ecosystem_qa.handle(user_message, request_headers)
+            if mr is not None:
+                return self._flow_response(session, mr, source="ecosystem", question=user_message,
                                            app=sel_app, role=sel_role)
 
         system = self._ground(system_prompt or cfg.AGENT_SYSTEM_PROMPT) \
@@ -657,18 +661,24 @@ class ChatService:
         if not flows.is_active(session):        # a fresh intent, or the flow we just switched out of
             src = "meta"
             mr = await meta.handle(user_message, request_headers)
-            if mr is None:
-                mr = await ecosystem_qa.handle(user_message, request_headers)
-                src = "ecosystem"
-            if mr is None:      # resolve skill (keyword → semantic) for flow-start + the model
+            if mr is not None:
+                started = mr
+            else:
+                # Guided-flow arming BEFORE read-routing: a clear create/mutation intent (guarded
+                # against questions in maybe_start) opens the REAL flow instead of being claimed as a
+                # read by ecosystem_qa. Resolve the skill (keyword → semantic) for flow-start + model.
                 skill = skills.match(user_message) or await skills.match_semantic(user_message)
-            started = mr if mr is not None else await flows.maybe_start(
-                session, user_message, request_headers, skill=skill)
-            if mr is None:      # only a fresh flow needs the onboarding authority gate
+                started = await flows.maybe_start(session, user_message, request_headers, skill=skill)
                 started = await self._gate_onboarding(session, started, request_headers)
+                if started is not None:
+                    src = "flow"
+                else:                           # not a guided-flow intent → ecosystem read / Q&A
+                    mr = await ecosystem_qa.handle(user_message, request_headers)
+                    started = mr
+                    src = "ecosystem"
             if started is not None:
                 chunks = self._flow_chunks(session, started)
-                turn.answered_by = src if mr is not None else "flow"
+                turn.answered_by = src
                 _log_turn_source(session_id, turn.answered_by, question=user_message,
                                  answer=(started.message or "")[:240], request_id=turn.request_id,
                                  app=turn.app, role=turn.role)
