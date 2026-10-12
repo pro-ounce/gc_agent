@@ -64,9 +64,10 @@ _ACQ_VEHICLES = [
     {"acquisitionVehicleId": 7, "acquisitionVehicleName": "Contract Vehicle X"},
     {"acquisitionVehicleId": 8, "acquisitionVehicleName": "Contract Vehicle Y"},
 ]
+# Field names mirror the live getFundGroupsByUser_post response: id=fundGroupId, label=name.
 _FUND_GROUPS = [
-    {"fundGroupId": 1, "fundGroupName": "General Fund"},
-    {"fundGroupId": 2, "fundGroupName": "Reimbursable Fund"},
+    {"fundGroupId": 1, "name": "General Fund", "code": "G", "description": "General Fund"},
+    {"fundGroupId": 2, "name": "Reimbursable Fund", "code": "R", "description": "Reimbursable Fund"},
 ]
 
 _BY_TOOL = {
