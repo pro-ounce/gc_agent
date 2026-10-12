@@ -222,9 +222,39 @@ def _trigger_checks() -> list[tuple[str, bool, str]]:
     ]
     out: list[tuple[str, bool, str]] = []
     for s in POSITIVE:
-        out.append((f"trigger ARMS: {s!r}", arms(s), "did NOT arm"))
+        out.append((f"baseline ARMS: {s!r}", arms(s), "did NOT arm"))
     for s in NEGATIVE:
-        out.append((f"trigger no-misfire: {s!r}", not arms(s), "WRONGLY armed"))
+        out.append((f"baseline no-misfire: {s!r}", not arms(s), "WRONGLY armed"))
+
+    # The remaining guided flows — arm = (deterministic detector) ∧ ¬_FLOW_QUERY_RE, the exact
+    # predicate maybe_start uses. Every taught phrasing must arm; every question/read/status must not.
+    g = flows._FLOW_QUERY_RE
+    def arms_entity(s): return flows._detect_entity(s) is not None and not g.search(s)
+    def arms_remove(s): return bool(flows._detect_remove_role(s)) and not g.search(s)
+    def arms_skill(s):  return bool(flows._SKILL_INTENT_RE.search(s)) and not g.search(s)
+    batteries = [
+        ("entity-create", arms_entity,
+         ["create a role", "add a new role", "create an application", "set up an application",
+          "add a menu", "make a new menu", "create a role privilege", "create a user",
+          "onboard a new user", "create an app role"],
+         ["what roles do I have", "list applications", "show me the menus",
+          "who can create a role", "how do I create a role", "delete the menu"]),
+        ("remove-role", arms_remove,
+         ["delete the Budget Approver role", "remove the admin role definition", "delete a role"],
+         ["who has the admin role", "what is a role", "list roles"]),
+        ("create-skill", arms_skill,
+         ["create a skill", "add a new skill", "build a skill"],
+         ["what is a skill", "list skills", "how do skills work"]),
+    ]
+    for label, fn, pos, neg in batteries:
+        for s in pos:
+            out.append((f"{label} ARMS: {s!r}", fn(s), "did NOT arm"))
+        for s in neg:
+            out.append((f"{label} no-misfire: {s!r}", not fn(s), "WRONGLY armed"))
+    # The tool→opener map must stay consistent with the entity specs it drives.
+    out.append(("entity tool-map matches _ENTITY_CREATE",
+                all(flows._ENTITY_CREATE.get(e, {}).get("tool") == t
+                    for t, e in flows._ENTITY_BY_TOOL.items()), "tool map drift"))
     return out
 
 

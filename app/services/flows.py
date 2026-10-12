@@ -223,6 +223,10 @@ _FLOW_QUERY_RE = re.compile(
 # the REAL guided flow — instead of merely grounding the LLM, which would emit a convincing flow-looking
 # reply WITHOUT arming the flow, leaving the user's next answer unhandled. Extensible to other flows.
 _FLOW_OPENER_TOOLS = {"bobBaseLineGenerate_put"}
+# Create-entity intakes keyed by the add-tool each performs, so a confident semantic match opens the
+# REAL guided intake for that entity (application / role / menu / privilege) instead of a fake intro.
+_ENTITY_BY_TOOL = {"addApplication_post": "application", "addApplicationRole_post": "role",
+                   "addMenu_post": "menu", "addAppRolePrivilege_post": "privilege"}
 
 # ── Fail-safe: universal exit commands, honoured at ANY stage of ANY flow ───────
 # Standalone commands (whole message ≈ one of these) always cancel.
@@ -494,32 +498,35 @@ async def maybe_start(session: Any, message: str, headers: dict[str, str] | None
     like 'onboard a new person' opens the guided intake too."""
     if is_active(session):
         return None
+    # A question / read / status / cancel that merely mentions a workflow's subject must never OPEN a
+    # mutation flow (it should be answered, not acted on). One guard, applied to every arming check.
+    _is_query = bool(_FLOW_QUERY_RE.search(message or ""))
     # Declarative node-graph workflows (workflow.py) get first look at the message.
     wf_started = _maybe_start_workflow(session, message or "")
     if wf_started:
         return wf_started
     # Skill authoring intent takes precedence ("create a skill" must not read as create-user).
-    if _SKILL_INTENT_RE.search(message or ""):
+    if _SKILL_INTENT_RE.search(message or "") and not _is_query:
         return start_create_skill(session, message or "")
     # Formulation baseline generation → open the REAL guided flow, recognised by EITHER the
     # (broadened) generate-intent regex OR a confident semantic match to the baseline tool — so a
     # taught paraphrase ("make a baseline", "kick off a baseline") opens the flow instead of a fake
     # LLM intro. A question / read / status (guarded) never opens it; the mutation stays flow-gated.
-    _msg = message or ""
-    if not _FLOW_QUERY_RE.search(_msg) and (
-        _BASELINE_INTENT_RE.search(_msg)
+    if not _is_query and (
+        _BASELINE_INTENT_RE.search(message or "")
         or getattr(skill, "tool", None) in _FLOW_OPENER_TOOLS
     ):
         return start_formulation_baseline(session)
     # Remove a role definition → guided, dependency-previewed, confirm-gated delete. Detected
     # before the create front door; un-assigning a role from a user is NOT caught here.
-    if _detect_remove_role(message or ""):
+    if _detect_remove_role(message or "") and not _is_query:
         return start_remove_role(session)
     # Entity onboarding front door: disambiguate onboard/create BEFORE a skill can pin a
     # wrong-entity mutation ("create a role" must not become assign_access; a bare "onboard"
     # must ask, not create a user). A fully-detailed create-user message (has an email) still
-    # goes to the normal skill path so nothing regresses.
-    ent = _detect_entity(message or "")
+    # goes to the normal skill path so nothing regresses. A question ("who can create a role")
+    # is guarded so it never opens the create flow.
+    ent = _detect_entity(message or "") if not _is_query else None
     if ent is not None:
         if ent == "user":
             if not re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", message or ""):
@@ -533,8 +540,22 @@ async def maybe_start(session: Any, message: str, headers: dict[str, str] | None
                 return await start_entity_create(session, None, headers)   # ask which entity
     from ..services import skills
     sk = skill if skill is not None else skills.match(message or "")
-    if sk and sk.name == "create_user" and not re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", message or ""):
+    if (sk and sk.name == "create_user" and not _is_query
+            and not re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", message or "")):
         return start_create(session)
+    # Semantic catch-all: a confident paraphrase that resolved to a guided flow's backing tool opens
+    # the REAL flow (never a fake LLM intro that leaves the next answer unhandled). Guarded so a
+    # question/read/status never opens a mutation flow; the explicit detectors above take precedence.
+    tool = getattr(sk, "tool", None)
+    if tool is not None and not _is_query:
+        has_email = bool(re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", message or ""))
+        if tool == "bobBaseLineGenerate_put":
+            return start_formulation_baseline(session)
+        if tool == "addUser_post" and not has_email:
+            return start_create(session)
+        _ent = _ENTITY_BY_TOOL.get(tool)
+        if _ent is not None:
+            return await start_entity_create(session, _ent, headers)
     return None
 
 
@@ -546,6 +567,8 @@ def _should_break_out(flow: dict[str, Any], msg: str) -> bool:
     legitimate field value rarely trips it. `workflow` manages its own switch, so it's excluded."""
     name = flow.get("name")
     if name == "workflow":
+        return False
+    if _FLOW_QUERY_RE.search(msg):          # a question / read / status never breaks out to a flow
         return False
     if _detect_remove_role(msg):
         return name != "remove_role"
