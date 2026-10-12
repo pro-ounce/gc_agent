@@ -1473,10 +1473,9 @@ async def _advance_baseline(flow: dict[str, Any], headers: dict[str, str] | None
         elif len(opts) == 0:                        # none → can't hold an empty value (guardrail): stop
             noun = st.noun or st.field
             return FlowResult(
-                message=(f"You don't have any **{noun}s** assigned in this application, so I can't "
-                         f"continue — every step needs a value. Tap **Cancel** above to exit, or ask "
-                         f"an admin to grant you {noun} access."),
-                progress=_baseline_progress(flow))
+                message=(f"No **{noun}s** resolved for your account — `{st.source_tool}` "
+                         f"returned empty for this application. Can't scope the baseline."),
+                progress={**_baseline_progress(flow), "error": True})
         else:
             break                                   # several → ask
     if flow["idx"] >= len(BASELINE_STEPS):
