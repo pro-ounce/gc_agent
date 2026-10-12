@@ -210,38 +210,40 @@ class MCPClient:
                 status_code=None,
             )
 
-        # Observability: row count + the selected-header fingerprint actually forwarded. A
-        # user-scoped read that comes back with 0 rows is almost always a context/header problem
-        # (selected app/role lost or garbled), which is otherwise invisible — a 200 with an empty
-        # list looks like "no data". Decode is best-effort and never breaks the call.
+        # Observability: a row COUNT and whether the selected app/role headers were present and
+        # well-formed — enough to spot a context/header problem (a user-scoped read that comes back
+        # empty because selected app/role was lost or garbled). NEVER log response content: tool
+        # results can carry user PII (profiles, emails) or other sensitive payloads. We log only the
+        # shape (count / "error" / "no-list"), not the data, and a cleanliness flag for the headers
+        # rather than their raw values.
         result = data.get("result")
         rows = result.get("data") if isinstance(result, dict) else result
-        n_rows = len(rows) if isinstance(rows, list) else (-1 if rows is None else -2)
+        if isinstance(rows, list):
+            shape = len(rows)
+        elif isinstance(result, dict):
+            shape = "error" if str(result.get("success")).lower() == "false" else "no-list"
+        else:
+            shape = "non-dict"
         fwd = {k.lower(): v for k, v in (request_headers or {}).items()}
 
-        def _dec(raw: str | None) -> str:
+        def _state(raw: str | None) -> str:
+            """Header health only — never the value. 'ok' = base64 of a clean code, 'malformed' =
+            present but not clean base64, 'absent' = missing."""
             raw = (raw or "").strip()
             if not raw:
-                return "(absent)"
+                return "absent"
             try:
                 import base64 as _b64
                 d = _b64.b64decode(raw + "==").decode("utf-8", "ignore").strip()
-                clean = bool(d) and all(c == "\t" or 32 <= ord(c) < 127 or ord(c) > 160 for c in d)
-                return d if clean else f"GARBAGE(len={len(raw)})"
+                return "ok" if (d and all(c == "\t" or 32 <= ord(c) < 127 or ord(c) > 160 for c in d)) else "malformed"
             except Exception:  # noqa: BLE001
-                return f"RAW({raw[:12]})"
+                return "malformed"
 
-        # When a call comes back without a data list (n_rows < 0), capture a short preview of the
-        # result so a server-side error / rejection string is visible instead of looking like "no data".
-        preview = ""
-        if n_rows < 0:
-            preview = str(result)[:300] if result is not None else str(data)[:300]
         log.bind(
-            func="execute_tool", tool=tool_name, duration_ms=duration_ms, rows=n_rows,
-            sel_app=_dec(fwd.get("x-selected-app")), sel_role=_dec(fwd.get("x-selected-role")),
+            func="execute_tool", tool=tool_name, duration_ms=duration_ms, rows=shape,
+            sel_app=_state(fwd.get("x-selected-app")), sel_role=_state(fwd.get("x-selected-role")),
             has_auth=("authorization" in fwd), has_int=(cfg.GC_INTERNAL_HEADER.lower() in fwd),
-            result_preview=preview,
-        ).info(f"Tool '{tool_name}' completed in {duration_ms}ms rows={n_rows}")
+        ).info(f"Tool '{tool_name}' completed in {duration_ms}ms rows={shape}")
         return data  # caller reads data["result"]
 
     # ── Prompts ───────────────────────────────────────────────────────────────
