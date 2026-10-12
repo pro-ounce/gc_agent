@@ -33,7 +33,7 @@ def _spec(key: str, label: str, group: str, type_: str, default: Any, desc: str,
 def _param_specs() -> list[dict]:
     """The tunable surface. Defaults are the current .env/cfg values (the fallback when a
     param has no override). type: int | float | bool | string | select."""
-    return [
+    specs = [
         # ── Model ──
         _spec("LLM_MODEL", "Model", "Model", "select", cfg.LLM_MODEL,
               "Ollama model for chat + tool-calling. Larger = better tool-calls, slower.",
@@ -74,6 +74,13 @@ def _param_specs() -> list[dict]:
         _spec("LOG_USER_PROMPTS", "Log user prompts", "Feature flags", "bool", flags.log_user_prompts,
               "Log each question + the tools RAG retrieved (chat_prompt line)."),
     ]
+    # Seasonal-hints tunables (defined in services/seasonal.py so each season owns its own config).
+    try:
+        from . import seasonal
+        specs += seasonal.tunable_specs()
+    except Exception:  # noqa: BLE001 — never break the config surface on a seasonal import
+        pass
+    return specs
 
 
 _SPECS_BY_KEY = {s["key"]: s for s in _param_specs()}
