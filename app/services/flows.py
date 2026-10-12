@@ -1370,9 +1370,17 @@ async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
         return FlowResult(message=f"{prefix}{step.prompt} (type a value)",
                           suggestions=_baseline_control_chips(step, bool(flow.get("buf"))))
     icon = "role" if step.multi else "app"
-    chips = [_chip(str(o["label"]), str(o["label"]), icon=icon, noun=step.noun)
-             for o in options[:MAX_CHIPS]]
-    note = f"\n\n*Showing {MAX_CHIPS} of {len(options)} — or type a name.*" if len(options) > MAX_CHIPS else ""
+    # Fiscal-year pickers are a small, bounded set and the widget lays them out as a compact
+    # year grid, so send them all (sorted, newest first) rather than capping to a chip row.
+    if step.noun == "fiscal year":
+        opts_sorted = sorted(options, key=lambda o: str(o["label"]), reverse=True)
+        chips = [_chip(str(o["label"]), str(o["label"]), icon=icon, noun=step.noun)
+                 for o in opts_sorted]
+        note = ""
+    else:
+        chips = [_chip(str(o["label"]), str(o["label"]), icon=icon, noun=step.noun)
+                 for o in options[:MAX_CHIPS]]
+        note = f"\n\n*Showing {MAX_CHIPS} of {len(options)} — or type a name.*" if len(options) > MAX_CHIPS else ""
     return FlowResult(message=f"{prefix}{step.prompt}{note}",
                       suggestions=chips + _baseline_control_chips(step, bool(flow.get("buf"))))
 
