@@ -78,6 +78,10 @@ class MCPClient:
         tool listing). X-API-KEY is already a default header on the httpx client.
         """
         forward = (cfg.GC_INTERNAL_HEADER, "Authorization", cfg.GC_ROLE_HEADER,
+                   # Selected app + role: user-scoped downstream queries (fundGroupsByUser,
+                   # organizationsByUser) filter by the caller's SELECTED app + role, exactly as the
+                   # web app sends them. Forward them so MCP can carry them to the service.
+                   "X-Selected-App", "X-Selected-Role",
                    "X-TRACE-ID", "X-Time-Zone", "X-Date-Time")
         headers: dict[str, str] = {}
         if extra:
