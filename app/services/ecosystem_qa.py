@@ -64,7 +64,7 @@ async def _entity_table(tool: str, headers: dict[str, str] | None, cols: list[tu
     rows = [[(fmt[k](r.get(k)) if k in fmt else str(r.get(k) or "")) for _, k in cols]
             for r in rows_in[:cap]]
     total = len(rows_in)
-    note = f"\n\n_Showing {cap} of {total}._" if total > cap else ""
+    note = f"\n\n*Showing {cap} of {total}.*" if total > cap else ""
     return FlowResult(message=lead.format(n=total) + note,
                       blocks=[_table_block(title, [h for h, _ in cols], rows)])
 

@@ -939,7 +939,7 @@ async def _create_skill(session: Any, flow: dict[str, Any], msg: str, headers: d
                 others = [_chip(n, n, icon="app") for n in sugg_names if n != det["name"]]
                 return FlowResult(
                     message=(f"**{det['name']}**\n{det['desc'] or 'No description available.'}\n\n"
-                             f"_Required inputs: {needs}_\n_All inputs: {allp}_\n\n"
+                             f"*Required inputs: {needs}*\n*All inputs: {allp}*\n\n"
                              "Use this tool, or pick another below."),
                     suggestions=[_chip(f"Use {det['name']}", det["name"], icon="check")] + others)
             return FlowResult(message=f"I couldn't find a tool called “{m.group(1).strip()}”. Pick one below.",
@@ -1363,7 +1363,7 @@ async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
                           suggestions=_baseline_control_chips(step, bool(flow.get("buf"))))
     icon = "role" if step.multi else "app"
     chips = [_chip(str(o["label"]), str(o["label"]), icon=icon) for o in options[:MAX_CHIPS]]
-    note = f"\n\n_Showing {MAX_CHIPS} of {len(options)} — or type a name._" if len(options) > MAX_CHIPS else ""
+    note = f"\n\n*Showing {MAX_CHIPS} of {len(options)} — or type a name.*" if len(options) > MAX_CHIPS else ""
     return FlowResult(message=f"{prefix}{step.prompt}{note}",
                       suggestions=chips + _baseline_control_chips(step, bool(flow.get("buf"))))
 
