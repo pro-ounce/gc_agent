@@ -116,6 +116,11 @@ _EMAIL_RE = _re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
 _SSN_RE = _re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 # Phone: require separators so bare digit runs (ids, org numbers, token counts, timestamps) are safe.
 _PHONE_RE = _re.compile(r"(?<!\d)(?:\+?\d{1,2}[ .-])?\(?\d{3}\)?[ .-]\d{3}[ .-]\d{4}(?!\d)")
+# A human-readable log MESSAGE sometimes quotes the user's text (e.g. prompt "<question>"); mask any
+# double-quoted span in message strings so embedded content never reaches disk. Structured data uses
+# the fields (redacted above), and tool lists render with single quotes, so this is well-targeted.
+_QUOTED_RE = _re.compile(r'"[^"]*"')
+_MSG_KEYS = ("msg", "message")
 
 
 def _mask_text(v: str) -> str:
@@ -126,11 +131,15 @@ def _mask_text(v: str) -> str:
 
 def _scrub(key: str | None, v: Any) -> Any:
     """Redact one value for an on-disk sink. `key` (its field name) drops content/identity fields to
-    a length; otherwise strings are pattern-masked and dicts/lists scrubbed recursively."""
+    a length; otherwise strings are pattern-masked (and quoted spans in log messages dropped) and
+    dicts/lists scrubbed recursively."""
     if key is not None and key.lower() in _REDACT_FIELDS:
         return f"<redacted:{len(v)}>" if isinstance(v, str) else "<redacted>"
     if isinstance(v, str):
-        return _mask_text(v)
+        v = _mask_text(v)
+        if key is not None and key.lower() in _MSG_KEYS:
+            v = _QUOTED_RE.sub('"<redacted>"', v)
+        return v
     if isinstance(v, dict):
         return {k: _scrub(k, vv) for k, vv in v.items()}
     if isinstance(v, list):

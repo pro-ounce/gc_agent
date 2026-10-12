@@ -160,11 +160,12 @@ def _log_prompt(session_id: str, user_id: str | None, question: str,
         return
     q = question or ""
     names = _schema_names(tools)
-    preview = q if len(q) <= 300 else q[:300] + "…"
+    # The question text rides in the `question` field (kept raw in the in-memory /admin ring,
+    # redacted on disk); never embed it in the human-readable message, which is world-visible.
     log.bind(
         event="chat_prompt", mode=mode, session_id=session_id, user_id=str(user_id or ""),
         question=q, question_len=len(q), retrieved_tools=names, tool_count=len(names),
-    ).info(f'prompt [{session_id}] "{preview}" → {len(names)} tools retrieved: {names}')
+    ).info(f'prompt [{session_id}] ({len(q)} chars) → {len(names)} tools retrieved: {names}')
 
 
 def _log_turn_source(session_id: str, answered_by: str, **stats: Any) -> None:
