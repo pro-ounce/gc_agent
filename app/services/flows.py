@@ -608,7 +608,8 @@ async def handle(session: Any, message: str, headers: dict[str, str] | None) -> 
         return await _data_call(session, flow, msg, headers)
 
     if name == "formulation_baseline":
-        return await _baseline(session, flow, msg, headers)
+        fr = await _baseline(session, flow, msg, headers)
+        return _bp(fr, session.metadata.get("flow"))
 
     if name == "entity_create":
         fr = await _entity_create(session, flow, msg, headers)
@@ -1226,6 +1227,40 @@ BASELINE_LABELS: dict[str, str] = {
     "isDeferred": "Include deferred", "isWithdrawn": "Include withdrawn",
 }
 
+
+def _baseline_progress(flow: dict[str, Any]) -> dict[str, Any]:
+    """The workflow rail for the baseline flow: every picker step + a final Review step as
+    done/current/todo, so the widget renders it IN the FlowWindow (not as loose chat bubbles)."""
+    labels = flow.get("labels", {}) or {}
+    stage = flow.get("stage")
+    idx = flow.get("idx", 0)
+    collecting = stage in ("intro", "collect")   # intro: the rail opens with step 1 next
+    steps: list[dict[str, Any]] = []
+    for i, st in enumerate(BASELINE_STEPS):
+        if st.field in labels:
+            state = "done"
+        elif collecting and i == idx:
+            state = "current"
+        else:
+            state = "todo"
+        val = labels.get(st.field, "")
+        if isinstance(val, list):
+            val = ", ".join(str(x) for x in val)
+        steps.append({"label": BASELINE_LABELS.get(st.field, st.field), "value": str(val), "state": state})
+    steps.append({"label": "Review & confirm", "value": "",
+                  "state": "current" if stage == "confirm" else "todo"})
+    done_n = sum(1 for s in steps if s["state"] == "done")
+    return {"title": "Generate FORMULATION baseline",
+            "current": min(done_n + 1, len(steps)), "total": len(steps), "steps": steps}
+
+
+def _bp(fr: "FlowResult | None", flow: dict[str, Any] | None) -> "FlowResult | None":
+    """Attach the baseline progress rail to a flow result (no-op for other flows / after cancel)."""
+    if fr is not None and fr.progress is None and flow and flow.get("name") == "formulation_baseline":
+        fr.progress = _baseline_progress(flow)
+    return fr
+
+
 _DONE_RE = re.compile(r"\b(done|that'?s all|thats all|finish(ed)?|no more|next|proceed|complete|that is all)\b", re.I)
 _ALL_RE = re.compile(r"\b(all|everything|every one|everyone|entire|any)\b", re.I)
 _SKIP_RE = re.compile(r"\b(skip|none|not now|later|no thanks|n/?a|leave (it )?(blank|empty))\b", re.I)
@@ -1300,6 +1335,7 @@ def start_formulation_baseline(session: Any) -> FlowResult:
         message=("Let's generate a **FORMULATION** budget baseline. I'll ask a few questions "
                  "one at a time, then show everything for your confirmation before anything runs."),
         suggestions=[_chip("Start", "start", icon="check"), _chip("Cancel", "cancel", icon="skip")],
+        progress=_baseline_progress(session.metadata["flow"]),   # open the FlowWindow from the intro
     )
 
 
@@ -2075,6 +2111,8 @@ def terminal_progress(flow: dict[str, Any] | None) -> dict[str, Any] | None:
         rail = _entity_progress({**flow, "stage": "confirm"})
     elif name == "remove_role":
         rail = _remove_progress({**flow, "stage": "confirm"})
+    elif name == "formulation_baseline":
+        rail = _baseline_progress({**flow, "stage": "confirm"})
     else:
         return None
     if not rail:

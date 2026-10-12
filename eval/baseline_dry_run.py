@@ -119,6 +119,9 @@ async def run(verbose: bool = True) -> list[tuple[str, bool, str]]:
     fr = await flows.maybe_start(s, "generate a formulation baseline", {})
     check("maybe_start arms formulation_baseline",
           (s.metadata.get("flow") or {}).get("name") == "formulation_baseline")
+    # Must carry the progress rail from the INTRO so the widget opens a FlowWindow (not loose
+    # chat bubbles) — the title is what the window header shows.
+    rail_ok = fr.progress is not None and fr.progress.get("title") == "Generate FORMULATION baseline"
     if verbose:
         print("\nAGENT:", (fr.message or "").replace("\n", " "))
         print(_chips(fr))
@@ -127,6 +130,7 @@ async def run(verbose: bool = True) -> list[tuple[str, bool, str]]:
     pending = None
     for i, (msg, note) in enumerate(_SCRIPT):
         fr = await flows.handle(s, msg, {})
+        rail_ok = rail_ok and fr.progress is not None   # every step stays in the FlowWindow
         if i == 0:  # the source-FY prompt right after 'start'
             first_fy_chips = [c.get("label") for c in (fr.suggestions or []) if isinstance(c, dict)]
         if verbose:
@@ -138,6 +142,7 @@ async def run(verbose: bool = True) -> list[tuple[str, bool, str]]:
 
     check("source-FY chips are year numbers", "2026" in first_fy_chips and "2025" in first_fy_chips,
           first_fy_chips)
+    check("every step renders in the FlowWindow (progress rail present)", rail_ok)
     check("reaches confirm with a pending mutation", bool(pending))
 
     args = (pending or {}).get("tool_args", {})
