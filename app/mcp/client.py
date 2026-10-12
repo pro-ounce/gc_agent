@@ -231,10 +231,16 @@ class MCPClient:
             except Exception:  # noqa: BLE001
                 return f"RAW({raw[:12]})"
 
+        # When a call comes back without a data list (n_rows < 0), capture a short preview of the
+        # result so a server-side error / rejection string is visible instead of looking like "no data".
+        preview = ""
+        if n_rows < 0:
+            preview = str(result)[:300] if result is not None else str(data)[:300]
         log.bind(
             func="execute_tool", tool=tool_name, duration_ms=duration_ms, rows=n_rows,
             sel_app=_dec(fwd.get("x-selected-app")), sel_role=_dec(fwd.get("x-selected-role")),
             has_auth=("authorization" in fwd), has_int=(cfg.GC_INTERNAL_HEADER.lower() in fwd),
+            result_preview=preview,
         ).info(f"Tool '{tool_name}' completed in {duration_ms}ms rows={n_rows}")
         return data  # caller reads data["result"]
 
