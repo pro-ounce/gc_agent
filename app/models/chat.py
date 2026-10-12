@@ -74,6 +74,8 @@ class Suggestion(BaseModel):
     # entity the icon glyph implies. Omitted for entity (app/role/menu) chips.
     selected: bool = False    # a multi-select option already picked this step — the widget marks
     # it (check + filled) so the running selection shows in the one-line chip row.
+    multi: bool = False       # an option of a multi-select step — the widget gives these a distinct
+    # colour + a "pick one or more" hint so the extra Continue step reads as deliberate.
 
 
 class ChatResponse(BaseModel):

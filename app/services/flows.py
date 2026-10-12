@@ -141,7 +141,7 @@ class FlowResult:
 
 def _chip(label: str, send: str | None = None, icon: str | None = None,
           selectable: bool = True, noun: str | None = None,
-          selected: bool = False) -> dict[str, Any]:
+          selected: bool = False, multi: bool = False) -> dict[str, Any]:
     c = {"label": label, "send": send if send is not None else label, "icon": icon,
          "selectable": selectable}
     # Field-picker chips carry the singular noun of what they pick ("fiscal year", "program
@@ -153,6 +153,10 @@ def _chip(label: str, send: str | None = None, icon: str | None = None,
     # sees their running selection in the one-line chip row.
     if selected:
         c["selected"] = True
+    # Marks a multi-select step's options so the widget gives them a distinct colour + a "pick one
+    # or more" hint — making the extra Continue step read as deliberate, not a surprise.
+    if multi:
+        c["multi"] = True
     return c
 
 
@@ -1383,7 +1387,7 @@ async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
 
     def _mk(o: dict[str, Any]) -> dict[str, Any]:
         return _chip(str(o["label"]), str(o["label"]), icon=icon, noun=step.noun,
-                     selected=str(o.get("value")) in picked)
+                     selected=str(o.get("value")) in picked, multi=step.multi)
 
     # Fiscal-year pickers are a small, bounded set and the widget lays them out as a compact
     # year grid, so send them all (sorted, newest first) rather than capping to a chip row.
@@ -1394,6 +1398,10 @@ async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
     else:
         chips = [_mk(o) for o in options[:MAX_CHIPS]]
         note = f"\n\n*Showing {MAX_CHIPS} of {len(options)} — or type a name.*" if len(options) > MAX_CHIPS else ""
+    # A hint that this step takes several — only on the first prompt (before anything is buffered),
+    # so it introduces the multi-select without nagging on every added pick.
+    if step.multi and not prefix and not flow.get("buf"):
+        note = "\n\n*You can pick one or more — tap each, then Continue.*" + note
     return FlowResult(message=f"{prefix}{step.prompt}{note}",
                       suggestions=chips + _baseline_control_chips(step, bool(flow.get("buf"))))
 
@@ -1484,6 +1492,8 @@ async def _baseline(session: Any, flow: dict[str, Any], msg: str,
     options = await _fetch_options(step, headers)
 
     if step.multi:
+        # Multi-select keeps a running buffer (pick several), finished with Continue — the widget
+        # marks these steps as multi (distinct colour + hint) so the extra step reads clearly.
         buf: list[dict[str, Any]] = flow.setdefault("buf", [])
         if step.optional and _ALL_RE.search(msg) and not _match_opt(msg, options):
             flow["data"][step.field] = []               # empty == all
@@ -1496,7 +1506,7 @@ async def _baseline(session: Any, flow: dict[str, Any], msg: str,
                     flow["labels"][step.field] = "All"
                     return await _advance_baseline(flow, headers)
                 return await _baseline_prompt(flow, step, headers,
-                                              prefix="Pick at least one, then choose Done. ", options=options)
+                                              prefix="Pick at least one to continue. ", options=options)
             flow["data"][step.field] = [b["value"] for b in buf]
             flow["labels"][step.field] = [b["label"] for b in buf]
             return await _advance_baseline(flow, headers)
@@ -1512,7 +1522,7 @@ async def _baseline(session: Any, flow: dict[str, Any], msg: str,
                                           prefix="That's not one of the options — tap a choice below, or type its name. ", options=options)
         chosen = ", ".join(b["label"] for b in buf)
         return await _baseline_prompt(flow, step, headers,
-                                      prefix=f"Added **{', '.join(added)}** (so far: {chosen}). Add more or choose Done. ",
+                                      prefix=f"Added **{', '.join(added)}** (so far: {chosen}). Pick more, or Continue. ",
                                       options=options)
 
     # single fetched picker
