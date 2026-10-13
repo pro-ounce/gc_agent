@@ -14,6 +14,7 @@ from typing import Any
 
 from . import skill_store
 from .flows import FlowResult
+from ..models.chat import UIBlock
 
 # ── intent patterns ────────────────────────────────────────────────────────────
 _LIST_SKILLS = re.compile(r"\b(list|show|see|which|what)\b[^.?]{0,25}\bskills?\b", re.I)
@@ -49,21 +50,47 @@ async def handle(message: str, headers: dict[str, str] | None) -> FlowResult | N
 
 
 def _skills_list() -> FlowResult:
+    """A proper capabilities MENU — an actionable card (tap a row to start) rather than a plain
+    bullet dump. Each item carries the REAL launch phrase in `send`, so the widget fires that flow
+    on tap; `icon` is a key the widget maps to a glyph. Curated top capabilities first, then any
+    other registered skill not already covered so the menu stays complete."""
     from .skills import SKILLS
-    lines = [
-        "• **Create a user** — guided intake (name, email, account type & category), then "
-        "assign apps & roles. Say “create a user”.",
-        "• **Onboard access** — assign applications and roles to a user. Say “assign an application”.",
-        "• **Create a new skill** — teach me a new action from your input. Say “create a skill”.",
-        "• **Explore tools** — “tools for <topic>”, or “about <tool>” for full detail.",
+    # Curated, well-captioned primary capabilities, in the order a budget admin reaches for them.
+    items: list[dict[str, Any]] = [
+        {"label": "Create a user", "send": "create a user", "icon": "user",
+         "desc": "Guided intake — name, email, account type — then assign apps & roles."},
+        {"label": "Onboard access", "send": "assign an application", "icon": "app",
+         "desc": "Assign applications and roles to a user, one at a time."},
+        {"label": "Look up a user", "send": "look up user", "icon": "search",
+         "desc": "A user's account details, by username."},
+        {"label": "Generate an access report", "send": "generate report", "icon": "report",
+         "desc": "A user's application-access report."},
+        {"label": "Generate a baseline", "send": "generate a formulation baseline", "icon": "baseline",
+         "desc": "A formulation baseline for an application across fiscal years."},
+        {"label": "Set up a data call", "send": "set up a data call", "icon": "datacall",
+         "desc": "A data call with attendees and reminders."},
+        {"label": "Edit an assignment", "send": "make default", "icon": "edit",
+         "desc": "Set a default app, or enable / disable / favourite a role."},
+        {"label": "Remove access", "send": "remove role", "icon": "remove",
+         "desc": "Un-assign a role, or remove a whole application from a user."},
+        {"label": "Create a new skill", "send": "create a skill", "icon": "skill",
+         "desc": "Teach me a new action from your own input."},
+        {"label": "Explore tools", "send": "list tools", "icon": "tools",
+         "desc": "Browse the platform's tools by topic, or get detail on one."},
     ]
-    seen = {"create_user", "assign_access"}
+    seen = {"create_user", "assign_access", "user_lookup", "generate_report",
+            "formulation_baseline", "create_data_call", "edit_access", "remove_access",
+            "remove_application", "create_skill"}
     for s in SKILLS:
         if s.name in seen or not s.keywords:
             continue
         seen.add(s.name)
-        lines.append(f"• **{(s.summary or s.name).capitalize()}** — say “{s.keywords[0]}”.")
-    return FlowResult(message="Here's what I can help with:\n\n" + "\n".join(lines))
+        items.append({"label": (s.summary or s.name).capitalize(), "send": s.keywords[0],
+                      "icon": "spark", "desc": ""})
+    block = UIBlock(type="menu", title="What I can help with", items=items)
+    return FlowResult(
+        message="Here's what I can help you with — tap any one to get started:",
+        blocks=[block])
 
 
 def _tools_hint() -> FlowResult:

@@ -43,10 +43,12 @@ class UIBlock(BaseModel):
     tool results so the client renders structured data (cards/tables) instead of prose —
     faster (near-zero LLM generation for data) and accurate (from source, not the model).
     Clients that don't understand blocks fall back to `ChatResponse.assistant_message`."""
-    type: Literal["text", "fields", "table", "list", "code", "notice"]
+    type: Literal["text", "fields", "table", "list", "code", "notice", "menu"]
     title: str | None = None
     text: str | None = None                       # text / notice / code body
-    items: list[Any] | None = None                # fields: [{label,value}] · list: [str]
+    items: list[Any] | None = None                # fields: [{label,value}] · list: [str] ·
+    # menu: [{label, desc, send, icon}] → an actionable capability card; the widget renders each as
+    # a clickable row that fires `send` (like a chip). icon is a key the widget maps to a glyph.
     columns: list[str] | None = None              # table header
     rows: list[list[Any]] | None = None           # table rows
     level: str | None = None                      # notice: info|success|warn|error
