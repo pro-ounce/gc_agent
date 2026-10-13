@@ -1267,11 +1267,13 @@ BASELINE_STEPS: tuple[PickerStep, ...] = (
     # rail, it rides the first row beside the two years (3-up). Optional.
     PickerStep("quarter", "Choose a quarter (optional)",
                static_options=("Q1", "Q2", "Q3", "Q4"), optional=True),
+    # Title + description are asked right after the fiscal years (before the pickers) so the baseline
+    # is named up front, while the fiscal context is fresh.
+    PickerStep("baselineTitle", "Enter a **title** for this baseline", maxlen=100, noun="title"),
+    PickerStep("description", "Enter a short **description**", maxlen=255, noun="description"),
     PickerStep("businessRuleGroups", "Choose the **baseline** business rule group(s)",
                "getAllValidationGroups_post", "groupName", "validationGroupId", multi=True,
                source_args={"groupType": "BASELINE", "applicationId": 3}, noun="rule group"),
-    PickerStep("baselineTitle", "Enter a **title** for this baseline", maxlen=100, noun="title"),
-    PickerStep("description", "Enter a short **description**", maxlen=255, noun="description"),
     # Fund group scopes which program offices the caller can pick — collect it before offices and
     # feed it into the office fetch (and into the payload, replacing the fundGroupId default).
     PickerStep("fundGroupId", "Choose the **fund group**",
