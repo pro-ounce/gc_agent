@@ -215,13 +215,18 @@ class AppConfig:
     OPENSEARCH_PASSWORD: str | None = _secret("OPENSEARCH_PASSWORD")
     OPENSEARCH_VERIFY_CERTS: bool = env_bool("OPENSEARCH_VERIFY_CERTS", True)
     OPENSEARCH_INDEX: str = env_str("OPENSEARCH_INDEX", "agent-kv") or "agent-kv"
+    # Durable AUDIT sink: each metric-relevant record is mirrored (off the log hot-path) into this
+    # OpenSearch index so the audit trail is snapshotted/backed up like the rest — not just a local
+    # file. 0 disables the OpenSearch mirror (local rotating JSONL remains the durable copy).
+    OPENSEARCH_AUDIT_INDEX: str = env_str("OPENSEARCH_AUDIT_INDEX", "agent-audit") or "agent-audit"
     # Manual/scheduled snapshot target — the registered repo + which indices to snapshot.
     # The scheduled SM policy uses the same repo; the /admin "Backups" button and the deploy
     # script take an on-demand snapshot into it (e.g. before a major push).
     OPENSEARCH_SNAPSHOT_REPO: str = env_str("OPENSEARCH_SNAPSHOT_REPO", "agent-s3") or "agent-s3"
+    # agent-kv holds the sessions + the history archive; agent-audit holds the durable audit trail.
     OPENSEARCH_SNAPSHOT_INDICES: str = (
-        env_str("OPENSEARCH_SNAPSHOT_INDICES", "agent-kv,agent-tools,admin_configs")
-        or "agent-kv,agent-tools,admin_configs"
+        env_str("OPENSEARCH_SNAPSHOT_INDICES", "agent-kv,agent-tools,admin_configs,agent-audit")
+        or "agent-kv,agent-tools,admin_configs,agent-audit"
     )
     # Snapshot Management (SM) policy the /admin Backups tab views/edits for the schedule.
     OPENSEARCH_SM_POLICY: str = env_str("OPENSEARCH_SM_POLICY", "agent-daily") or "agent-daily"

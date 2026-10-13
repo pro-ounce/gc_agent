@@ -197,7 +197,14 @@ _LOG_RING: collections.deque = collections.deque(maxlen=800)
 # dashboards survive restarts. Best-effort throughout: persistence never breaks logging.
 _METRICS_FILE = _os.environ.get("METRICS_LOG_FILE", "metrics_log.jsonl")
 _METRICS_EVENTS = {"chat_prompt", "turn_summary", "turn_source", "chat_answer"}
-_METRICS_MAXLINES = 8000      # trim target when the file grows past ~2x this
+_METRICS_MAXLINES = 8000      # rotate the live file when it grows past ~2x this
+# DURABILITY: the live file is ROTATED (never trim-dropped) — kept as a bounded local cache of the
+# last N rotations. The full, "very-low-loss" copy is the durable OpenSearch audit index, which is
+# snapshotted/backed up. Each metric-relevant record is queued and drained into it OFF the log
+# hot-path (a slow/down OpenSearch never adds latency; retried next cycle).
+_METRICS_ROTATIONS = int(_os.environ.get("METRICS_LOG_ROTATIONS", "12") or 12)
+_AUDIT_INDEX = _os.environ.get("OPENSEARCH_AUDIT_INDEX", "agent-audit")
+_AUDIT_Q: "collections.deque" = collections.deque(maxlen=20000)   # non-blocking overflow buffer
 _persist_n = 0
 
 
@@ -214,33 +221,115 @@ def _persist_record(rec: dict) -> None:
         with open(_METRICS_FILE, "a", encoding="utf-8") as f:
             f.write(_json.dumps(rec, ensure_ascii=False) + "\n")
         _persist_n += 1
-        if _persist_n % 500 == 0:               # occasional trim to keep the file bounded
+        if _persist_n % 500 == 0:               # occasional rotation to keep the live file bounded
             _trim_metrics_file()
+    except Exception:  # noqa: BLE001
+        pass
+    # Queue for the durable OpenSearch audit sink (non-blocking; drained by flush_audit_sink()).
+    try:
+        _AUDIT_Q.append(rec)
     except Exception:  # noqa: BLE001
         pass
 
 
 def _trim_metrics_file() -> None:
+    """ROTATE (never drop): when the live file exceeds 2x the target, roll it to a timestamped
+    archive and start fresh, keeping the last _METRICS_ROTATIONS archives (local durable cache).
+    The OpenSearch audit index holds the full, snapshotted trail."""
     try:
+        if not _os.path.exists(_METRICS_FILE):
+            return
         with open(_METRICS_FILE, encoding="utf-8") as f:
-            lines = f.readlines()
-        if len(lines) > 2 * _METRICS_MAXLINES:
-            with open(_METRICS_FILE, "w", encoding="utf-8") as f:
-                f.writelines(lines[-_METRICS_MAXLINES:])
+            line_count = sum(1 for _ in f)
+        if line_count <= 2 * _METRICS_MAXLINES:
+            return
+        import time as _time
+        import glob as _glob
+        _os.replace(_METRICS_FILE, f"{_METRICS_FILE}.{int(_time.time())}")   # rotate, don't drop
+        rots = sorted(_glob.glob(f"{_glob.escape(_METRICS_FILE)}.*"))
+        for old in rots[:-_METRICS_ROTATIONS] if len(rots) > _METRICS_ROTATIONS else []:
+            try:
+                _os.remove(old)                  # bounded local cache; OpenSearch keeps everything
+            except Exception:  # noqa: BLE001
+                pass
     except Exception:  # noqa: BLE001
         pass
 
 
-def load_persisted_metrics(limit: int = 800) -> int:
-    """Rehydrate the ring from the last `limit` persisted records (oldest-first) so the admin
-    dashboards show history immediately after a restart. Called once at startup."""
+async def flush_audit_sink(interval: float = 5.0) -> None:
+    """Background worker: drain the audit queue into the durable OpenSearch audit index in batches,
+    OFF the logging hot-path. Best-effort — if the sink is unavailable the records stay in the local
+    rotating file, and the next cycle retries. Runs for the life of the process."""
+    import asyncio
+    while True:
+        try:
+            await asyncio.sleep(interval)
+            if not _AUDIT_Q:
+                continue
+            try:
+                from ..connections import os_client
+                client = os_client()
+            except Exception:  # noqa: BLE001
+                client = None
+            if client is None:                   # memory/redis backend → local file is the copy
+                _AUDIT_Q.clear()
+                continue
+            batch = []
+            while _AUDIT_Q and len(batch) < 500:
+                batch.append(_AUDIT_Q.popleft())
+            if not batch:
+                continue
+            body: list = []
+            for rec in batch:
+                body.append({"index": {"_index": _AUDIT_INDEX}})   # auto-id → indexed once
+                body.append(rec)
+            try:
+                client.bulk(body=body, request_timeout=10)
+            except Exception:  # noqa: BLE001 — keep the local copy; don't re-queue (avoid growth)
+                pass
+        except Exception:  # noqa: BLE001 — the worker must never die
+            try:
+                import asyncio as _a
+                await _a.sleep(interval)
+            except Exception:  # noqa: BLE001
+                pass
+
+
+def _rehydrate_from_opensearch(limit: int) -> int:
+    """Fallback rehydrate: pull the newest `limit` audit records from the durable OpenSearch index
+    (used when the local file is missing — e.g. a fresh box after disk loss)."""
     try:
-        if not _os.path.exists(_METRICS_FILE):
+        from ..connections import os_client
+        client = os_client()
+        if client is None:
             return 0
-        with open(_METRICS_FILE, encoding="utf-8") as f:
-            lines = f.readlines()[-limit:]
+        res = client.search(index=_AUDIT_INDEX, body={
+            "size": limit, "query": {"match_all": {}},
+            "sort": [{"ts.keyword": {"order": "desc", "unmapped_type": "keyword"}}]},
+            request_timeout=10)
+        hits = [h.get("_source") for h in (res.get("hits", {}).get("hits") or [])]
+        n = 0
+        for rec in reversed(hits):               # oldest-first into the ring
+            if isinstance(rec, dict) and "fields" in rec:
+                _LOG_RING.append(rec)
+                n += 1
+        return n
     except Exception:  # noqa: BLE001
         return 0
+
+
+def load_persisted_metrics(limit: int = 800) -> int:
+    """Rehydrate the ring on startup so the admin dashboards show history after a restart. Prefers
+    the local rotating file; falls back to the durable OpenSearch audit index if the file is gone."""
+    lines: list = []
+    try:
+        if _os.path.exists(_METRICS_FILE):
+            with open(_METRICS_FILE, encoding="utf-8") as f:
+                lines = f.readlines()[-limit:]
+    except Exception:  # noqa: BLE001
+        lines = []
+    if not lines:
+        return _rehydrate_from_opensearch(limit)
     n = 0
     for ln in lines:
         try:

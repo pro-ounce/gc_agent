@@ -62,14 +62,17 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:  # noqa: BLE001 — never block startup on custom workflows
         log.warning(f"custom workflow load failed (non-fatal): {exc}")
 
-    # Rehydrate the metrics/activity ring from disk so the admin dashboards survive restarts.
+    # Rehydrate the metrics/activity ring (local rotating file, else the durable OpenSearch audit
+    # index) so the admin dashboards survive restarts, and start the background audit drain that
+    # mirrors the audit trail into the durable, snapshotted OpenSearch sink (off the log hot-path).
     try:
-        from .commons.logger import load_persisted_metrics
+        from .commons.logger import load_persisted_metrics, flush_audit_sink
         n = load_persisted_metrics()
         if n:
-            log.bind(func="lifespan", records=n).info(f"rehydrated {n} metric records from disk")
+            log.bind(func="lifespan", records=n).info(f"rehydrated {n} audit records")
+        asyncio.create_task(flush_audit_sink())
     except Exception as exc:  # noqa: BLE001
-        log.warning(f"metrics rehydrate failed (non-fatal): {exc}")
+        log.warning(f"audit rehydrate/drain scheduling failed (non-fatal): {exc}")
 
     # Warm the LLM so the first chat after a (re)start isn't a cold model reload. Fire-and-
     # forget: it must not delay the server accepting requests, and keep_alive=-1 pins it after.
