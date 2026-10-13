@@ -63,10 +63,10 @@ def tunable_specs() -> list[dict[str, Any]]:
     """The one scalar tunable for runtime_config/admin: the master on/off. The season DEFINITIONS
     (add/remove/edit) are data-driven via seasonal_store + the /admin/seasons endpoints."""
     return [{
-        "key": ENABLED_KEY, "label": "Seasonal hints", "group": "Seasonal hints", "type": "bool",
+        "key": ENABLED_KEY, "label": "Calendar hints", "group": "Calendar", "type": "bool",
         "default": True,
-        "description": "Lead the widget suggestions with season-relevant workflows during the "
-                       "budget cycle. Edit the seasons themselves under the Seasons tab.",
+        "description": "Lead the widget suggestions with calendar-relevant workflows during the "
+                       "budget cycle. Edit the calendar entries themselves under the Calendar tab.",
     }]
 
 

@@ -78,7 +78,7 @@
       + tabBtn("Activity","__activity__",false)
       + SH("Build")
       + tabBtn("Skills","__workflows__",false)
-      + tabBtn("Seasons","__seasons__",false)
+      + tabBtn("Calendar","__seasons__",false)
       + tabBtn("Guide","__guide__",false)
       + tabBtn("API","__api__",false)
       + tabBtn("Docs","__docs__",false)
@@ -1211,23 +1211,23 @@
     loadHealth();
   }
 
-  // ── Seasons tab (data-driven budget-cycle calendar for the widget's workflow hints) ──
-  // Seasons are plain data (name · app · months · enabled · hints[]). During an active window the
-  // widget leads its suggestion balloons with that season's hints; each hint's `send` MUST be a
+  // ── Calendar tab (data-driven budget-cycle calendar for the widget's workflow hints) ──
+  // Each entry is plain data (name · app · months · enabled · hints[]). During an active window the
+  // widget leads its suggestion balloons with that entry's hints; each hint's `send` MUST be a
   // phrasing the flow trigger recognises so a tap opens the REAL guided flow.
   var _seasonsFederal = [];
   function seasonsSectionHTML(){
     return '<section class="admin-section" data-tab="__seasons__" role="tabpanel" id="panel-__seasons__" aria-labelledby="tab-__seasons__" tabindex="0">'
-      +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Seasonal calendar <span id="sn-active" class="key"></span></span>'
+      +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Budget-cycle calendar <span id="sn-active" class="key"></span></span>'
       +'<span class="btns">'
       +'<button id="sn-reload" class="btn" style="padding:5px 11px">Reload</button>'
       +'<button id="sn-federal" class="btn" style="padding:5px 11px">Load federal seed</button>'
       +'<button id="sn-reset" class="btn" style="padding:5px 11px">Reset to seed</button>'
       +'<button id="sn-save" class="btn primary">Save</button></span></div>'
-      +'<div class="desc" style="margin-top:4px">During a season’s active months the widget leads its suggestion balloons with that season’s workflow hints. '
+      +'<div class="desc" style="margin-top:4px">During an entry’s active months the widget leads its suggestion balloons with that entry’s workflow hints. '
       +'Each hint’s <span class="mono">send</span> must be a phrasing the flow trigger recognises (e.g. <span class="mono">generate a formulation baseline</span>) so a tap opens the real guided flow. '
-      +'Turn the whole feature on/off under <b>Seasonal hints</b> in Settings.</div>'
-      +'<div class="def" style="margin-top:6px">A season = <span class="mono">{"name","app"(code or null=any),"months"("3-10"/"11-2"/"3,4,5"),"enabled",hints:[{"label","send"}]}</span></div>'
+      +'Turn the whole feature on/off under <b>Calendar hints</b> in Settings.</div>'
+      +'<div class="def" style="margin-top:6px">A calendar entry = <span class="mono">{"name","app"(code or null=any),"months"("3-10"/"11-2"/"3,4,5"),"enabled",hints:[{"label","send"}]}</span></div>'
       +'<textarea id="sn-json" spellcheck="false" style="width:100%;min-height:340px;margin-top:10px;font-family:var(--mono,monospace);font-size:13px;line-height:1.5;padding:12px;border:1px solid var(--line);border-radius:10px;background:var(--bg,#fff);color:var(--fg,#111);resize:vertical">loading…</textarea>'
       +'<div style="display:flex;gap:10px;align-items:center;margin-top:8px"><span id="sn-status" role="status" aria-live="polite" style="font-size:13px"></span></div></div>'
       +'<div class="card"><div class="top"><span class="lbl">Federal-calendar seed</span></div>'
@@ -1253,13 +1253,13 @@
     var parsed;
     try { parsed=JSON.parse(ta.value); }
     catch(e){ _snSetStatus("Invalid JSON: "+e.message,false); return; }
-    if(!Array.isArray(parsed)){ _snSetStatus("Expected a JSON array of seasons.",false); return; }
+    if(!Array.isArray(parsed)){ _snSetStatus("Expected a JSON array of calendar entries.",false); return; }
     _snSetStatus("saving…");
     fetch(API+"/seasons",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({seasons:parsed})})
       .then(function(r){return r.json();}).then(function(d){
         var n=(d.seasons||[]).length;
         var ta2=document.getElementById("sn-json"); if(ta2) ta2.value=JSON.stringify(d.seasons||[],null,2);
-        _snSetStatus("Saved "+n+" season"+(n===1?"":"s")+".",true);
+        _snSetStatus("Saved "+n+" calendar entr"+(n===1?"y":"ies")+".",true);
       }).catch(function(e){ _snSetStatus("Save failed: "+e.message,false); });
   }
   function initSeasons(){
@@ -1269,7 +1269,7 @@
       var ta=document.getElementById("sn-json"); if(ta){ ta.value=JSON.stringify(_seasonsFederal,null,2); _snSetStatus("Federal seed loaded into editor — press Save to apply."); }
     });
     var rs=document.getElementById("sn-reset"); if(rs) rs.addEventListener("click",function(){
-      if(!confirm("Discard all season overrides and revert to the built-in federal calendar?")) return;
+      if(!confirm("Discard all calendar overrides and revert to the built-in federal calendar?")) return;
       _snSetStatus("resetting…");
       fetch(API+"/seasons",{method:"DELETE"}).then(function(r){return r.json();}).then(function(d){
         var ta=document.getElementById("sn-json"); if(ta) ta.value=JSON.stringify(d.seasons||[],null,2);
