@@ -1311,8 +1311,9 @@ BASELINE_LABELS: dict[str, str] = {
     "fundGroupId": "Fund group",
     "orgIds": "Program office(s)", "requestTypes": "Request type(s)",
     "acquisitionVehicles": "Acquisition vehicle(s)", "quarter": "Quarter",
-    "isTargetApplicable": "Target applicable", "isRecommended": "Include recommended",
-    "isDeferred": "Include deferred", "isWithdrawn": "Include withdrawn",
+    # Short labels so the four Y/N toggles fit neatly 4-up on one row in the review rail.
+    "isTargetApplicable": "Target", "isRecommended": "Recommended",
+    "isDeferred": "Deferred", "isWithdrawn": "Withdrawn",
 }
 
 
@@ -1352,16 +1353,19 @@ def _baseline_progress(flow: dict[str, Any]) -> dict[str, Any]:
         else:
             step["kind"] = "scalar"
             step["value"] = str(val)
-        # Review-rail column span (grid of 6): blocks full width, the compact fields (the two fiscal
-        # years + quarter, and the Y/N flags) pack 3-up (span 2), everything else 2-up (span 3).
+        # Review-rail column span (grid of 12): blocks full width; the Y/N flags pack 4-up (all the
+        # similar Target/Include toggles on ONE row); the two fiscal years + quarter 3-up (row 1);
+        # ordinary scalars 2-up.
         if step["kind"] in ("list", "text"):
-            step["w"] = 6
-        elif st.field in ("sourceFiscalYear", "fiscalYear", "quarter") or set(st.static_options) == {"Y", "N"}:
-            step["w"] = 2
-        else:
+            step["w"] = 12
+        elif set(st.static_options) == {"Y", "N"}:
             step["w"] = 3
+        elif st.field in ("sourceFiscalYear", "fiscalYear", "quarter"):
+            step["w"] = 4
+        else:
+            step["w"] = 6
         steps.append(step)
-    steps.append({"label": "Review & confirm", "value": "", "kind": "scalar", "w": 4,
+    steps.append({"label": "Review & confirm", "value": "", "kind": "scalar", "w": 12,
                   "state": "current" if stage == "confirm" else "todo"})
     done_n = sum(1 for s in steps if s["state"] == "done")
     return {"title": "Generate FORMULATION baseline",
