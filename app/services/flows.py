@@ -1246,6 +1246,10 @@ class PickerStep:
     # Resolve without asking when the fetch yields a single option (auto-pick) or none (skip, leave
     # default) — e.g. the user's sole assigned fund group, or no fund-group access at all.
     auto_if_single: bool = False
+    # Free-text steps only: reject input longer than this many characters (re-prompt), matching the
+    # backend column width, and render as a full-width "text" block in the review rail (not a 1-line
+    # right-aligned value). 0 = no limit / ordinary scalar.
+    maxlen: int = 0
 
 
 # VERIFY against live responses (scratchpad/baseline_probe.py) — source label/value field
@@ -1262,8 +1266,8 @@ BASELINE_STEPS: tuple[PickerStep, ...] = (
     PickerStep("businessRuleGroups", "Choose the **baseline** business rule group(s)",
                "getAllValidationGroups_post", "groupName", "validationGroupId", multi=True,
                source_args={"groupType": "BASELINE", "applicationId": 3}, noun="rule group"),
-    PickerStep("baselineTitle", "Enter a **title** for this baseline"),
-    PickerStep("description", "Enter a short **description**"),
+    PickerStep("baselineTitle", "Enter a **title** for this baseline", maxlen=100, noun="title"),
+    PickerStep("description", "Enter a short **description**", maxlen=255, noun="description"),
     # Fund group scopes which program offices the caller can pick — collect it before offices and
     # feed it into the office fetch (and into the payload, replacing the fundGroupId default).
     PickerStep("fundGroupId", "Choose the **fund group**",
@@ -1326,10 +1330,28 @@ def _baseline_progress(flow: dict[str, Any]) -> dict[str, Any]:
         else:
             state = "todo"
         val = labels.get(st.field, "")
-        if isinstance(val, list):
-            val = ", ".join(str(x) for x in val)
-        steps.append({"label": BASELINE_LABELS.get(st.field, st.field), "value": str(val), "state": state})
-    steps.append({"label": "Review & confirm", "value": "",
+        # Render contract for the widget rail:
+        #  • list  → multi-select: a compact "<n> selected"/"All" count on the row + the picked
+        #            items (chips) in a full-width block, so a long selection never truncates.
+        #  • text  → free-text (description): the full value in a full-width wrapping block.
+        #  • scalar→ a short right-aligned 1-line value (FY, title, fund group, Y/N, …).
+        step: dict[str, Any] = {"label": BASELINE_LABELS.get(st.field, st.field), "state": state}
+        if st.multi:
+            if isinstance(val, list):
+                step["kind"] = "list"
+                step["items"] = [str(x) for x in val]
+                step["value"] = f"{len(val)} selected" if val else ""
+            else:  # "All" / "—" / "" sentinel
+                step["kind"] = "scalar"
+                step["value"] = str(val)
+        elif st.maxlen and st.field == "description":
+            step["kind"] = "text"
+            step["value"] = str(val)
+        else:
+            step["kind"] = "scalar"
+            step["value"] = str(val)
+        steps.append(step)
+    steps.append({"label": "Review & confirm", "value": "", "kind": "scalar",
                   "state": "current" if stage == "confirm" else "todo"})
     done_n = sum(1 for s in steps if s["state"] == "done")
     return {"title": "Generate FORMULATION baseline",
@@ -1549,11 +1571,18 @@ async def _baseline(session: Any, flow: dict[str, Any], msg: str,
 
     step = BASELINE_STEPS[flow["idx"]]
 
-    # ── free-text step ──
+    # ── free-text step (title / description) ──
     if not step.source_tool and not step.static_options:
-        text = msg.strip()
+        # Collapse any newlines/runs of whitespace so the captured title & description stay a clean
+        # single value, then enforce the per-field character limit (backend column width).
+        text = re.sub(r"\s+", " ", msg.replace("\r", " ").replace("\n", " ")).strip()
         if not text:
             return FlowResult(message=step.prompt)
+        if step.maxlen and len(text) > step.maxlen:
+            return await _baseline_prompt(
+                flow, step, headers,
+                prefix=(f"That's **{len(text)}** characters — please keep the "
+                        f"{step.noun or 'text'} to **{step.maxlen}** or fewer and send it again. "))
         flow["data"][step.field] = text
         flow["labels"][step.field] = text
         return await _advance_baseline(flow, headers)

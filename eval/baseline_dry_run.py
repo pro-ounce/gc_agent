@@ -293,6 +293,30 @@ def _trigger_checks() -> list[tuple[str, bool, str]]:
     out.append(("seasonal store: validation drops junk, keeps a valid season",
                 len(cleaned) == 1 and cleaned[0]["name"] == "Audit",
                 f"got {cleaned!r}"))
+
+    # Baseline review-rail render contract (so the widget shows long values without cutting off):
+    #  multi-select → kind=list + items[] + "<n> selected"; description → kind=text; others scalar.
+    from app.services import flows as _fl
+    pf = {"name": "formulation_baseline", "stage": "confirm", "idx": len(_fl.BASELINE_STEPS),
+          "labels": {"sourceFiscalYear": "2025", "businessRuleGroups": ["A", "B", "C"],
+                     "description": "x" * 40}}
+    prog = _fl._baseline_progress(pf)
+    rg = next((s for s in prog["steps"] if str(s["label"]).startswith("Rule group")), {})
+    out.append(("baseline rail: multi-select renders as a list block (count + items)",
+                rg.get("kind") == "list" and rg.get("items") == ["A", "B", "C"]
+                and rg.get("value") == "3 selected", f"got {rg!r}"))
+    desc = next((s for s in prog["steps"] if s["label"] == "Description"), {})
+    out.append(("baseline rail: description renders as a full-width text block",
+                desc.get("kind") == "text" and desc.get("value") == "x" * 40, f"got {desc!r}"))
+    sfy = next((s for s in prog["steps"] if s["label"] == "Source FY"), {})
+    out.append(("baseline rail: a scalar stays a 1-line scalar",
+                sfy.get("kind") == "scalar" and sfy.get("value") == "2025", f"got {sfy!r}"))
+    # Character limits declared on the free-text steps (title / description).
+    ts = next((s for s in _fl.BASELINE_STEPS if s.field == "baselineTitle"), None)
+    ds = next((s for s in _fl.BASELINE_STEPS if s.field == "description"), None)
+    out.append(("baseline: title & description have character limits",
+                bool(ts and ts.maxlen == 100 and ds and ds.maxlen == 255),
+                f"title={getattr(ts,'maxlen',None)} desc={getattr(ds,'maxlen',None)}"))
     return out
 
 
