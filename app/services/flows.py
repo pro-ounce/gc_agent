@@ -494,6 +494,63 @@ def start_onboarding(session: Any, first_name: str | None, user_name: str, user_
     )
 
 
+# "list / show / what baselines" (not "generate a baseline" — no list/show verb there) → a read.
+_LIST_BASELINE_RE = re.compile(
+    r"\b(list|show|view|see|display|get|what|which|any)\b[^.?!]{0,30}\bbaselines?\b"
+    r"|\bbaselines?\b[^.?!]{0,25}\b(list|exist|available|generated|created|there|do i have)\b"
+    r"|\b(my|the current|current|existing|all)\s+baselines?\b", re.I)
+
+
+async def list_baselines(session: Any, headers: dict[str, str] | None) -> FlowResult:
+    """Read-only: the FORMULATION baselines for the caller's fund group(s) in the CURRENT app, via
+    getBaseLineMasterHeaders_post (the same tool the dup-guard uses). The app is the current one
+    (Formulation / id 3) — it never prompts for an application/module."""
+    fgs: list[dict[str, Any]] = []
+    try:
+        res = await tool_registry.execute("getFundGroupsByUser_post", {"applicationId": "3"}, headers)
+        rows = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        for r in (rows or []):
+            if isinstance(r, dict) and r.get("fundGroupId") is not None:
+                fgs.append({"id": r.get("fundGroupId"), "name": str(r.get("name") or r.get("fundGroupId"))})
+    except Exception as exc:  # noqa: BLE001
+        log.bind(func="list_baselines").warning(f"fund groups fetch failed: {exc}")
+    if not fgs:
+        return FlowResult(done=True, message=(
+            "I couldn't resolve your **fund groups** for FORMULATION, so I can't list baselines. "
+            "Check your access, or try again."))
+    sections: list[str] = []
+    total = 0
+    for fg in fgs:
+        rows = None
+        try:
+            r = await tool_registry.execute(
+                "getBaseLineMasterHeaders_post",
+                {"fundGroupId": fg["id"], "applicationId": _BASELINE_APP_ID}, headers)
+            rows = r.output.get("data") if getattr(r, "success", False) and isinstance(r.output, dict) else None
+        except Exception as exc:  # noqa: BLE001
+            log.bind(func="list_baselines", fg=fg["name"]).warning(f"masterHeaders failed: {exc}")
+        items: list[str] = []
+        for row in (rows or []):
+            if not isinstance(row, dict):
+                continue
+            title = str(row.get("title") or "(untitled)").strip()
+            fy = row.get("fiscalYear")
+            status = str(row.get("statusName") or row.get("status") or "").strip()
+            total += 1
+            bits = [f"**{title}**"]
+            if fy:
+                bits.append(f"FY{fy}")
+            if status:
+                bits.append(f"_{status}_")
+            items.append("- " + " · ".join(bits))
+        if items:
+            sections.append(f"**{fg['name']}**\n" + "\n".join(items))
+    if total == 0:
+        return FlowResult(done=True, message="No **FORMULATION baselines** found for your fund group(s) yet.")
+    head = f"Your **FORMULATION baselines** ({total}):\n\n"
+    return FlowResult(done=True, message=head + "\n\n".join(sections))
+
+
 async def maybe_start(session: Any, message: str, headers: dict[str, str] | None = None,
                       skill: Any = None) -> FlowResult | None:
     """Start a guided flow from a fresh intent (when none is active). A create-user request
@@ -510,6 +567,11 @@ async def maybe_start(session: Any, message: str, headers: dict[str, str] | None
     wf_started = _maybe_start_workflow(session, message or "")
     if wf_started:
         return wf_started
+    # READ: "list my/the/current baselines" → a scoped read (caller's fund groups + the CURRENT
+    # application), answered directly. Checked before the generate flow so a list request never opens
+    # the create flow, and it never asks "which application?" (the app is the current one).
+    if _LIST_BASELINE_RE.search(message or ""):
+        return await list_baselines(session, headers)
     # Skill authoring intent takes precedence ("create a skill" must not read as create-user).
     if _SKILL_INTENT_RE.search(message or "") and not _is_query:
         return start_create_skill(session, message or "")

@@ -327,6 +327,29 @@ async def run(verbose: bool = True) -> list[tuple[str, bool, str]]:
           _fr_fl is not None and getattr(_fr_fl, "pending", None) is not None
           and "already in process" in _fr_fl.message and _sf.metadata.get("flow") is not None, None)
 
+    # ── "list my baselines" read intent: scoped to the current app + fund groups; answered
+    #    directly (no flow armed, never prompts for an application/module). ──
+    check("list-intent matches 'list the current baselines'",
+          bool(flows._LIST_BASELINE_RE.search("list the current baselines")))
+    check("list-intent matches 'show my baselines' / 'what baselines do i have'",
+          bool(flows._LIST_BASELINE_RE.search("show my baselines"))
+          and bool(flows._LIST_BASELINE_RE.search("what baselines do i have")))
+    check("list-intent does NOT match 'generate a formulation baseline' (that's a create)",
+          not flows._LIST_BASELINE_RE.search("generate a formulation baseline"))
+    _BY_TOOL["getBaseLineMasterHeaders_post"] = [
+        {"title": "FY26 Baseline A", "fiscalYear": 2026, "statusName": "Published"},
+        {"title": "FY25 Baseline B", "fiscalYear": 2025, "statusName": "In Review"},
+    ]
+    _s_list = _Session()
+    _fr_list = await flows.maybe_start(_s_list, "list the current baselines", {})
+    check("maybe_start routes 'list baselines' to the read (no flow armed, lists titles)",
+          _fr_list is not None and getattr(_fr_list, "done", False) is True
+          and _s_list.metadata.get("flow") is None
+          and "FY26 Baseline A" in (_fr_list.message or "")
+          and "FORMULATION baselines" in (_fr_list.message or ""),
+          (_fr_list.message or "")[:70] if _fr_list else None)
+    _BY_TOOL.pop("getBaseLineMasterHeaders_post", None)
+
     return r
 
 
