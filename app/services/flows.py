@@ -1263,6 +1263,10 @@ BASELINE_STEPS: tuple[PickerStep, ...] = (
                "getAllFiscalYears_post", "fiscalYear", "fiscalYear", noun="fiscal year"),
     PickerStep("fiscalYear", "Choose the **target** fiscal year",
                "getAllFiscalYears_post", "fiscalYear", "fiscalYear", noun="fiscal year"),
+    # Quarter sits right after the fiscal years — gathered with the fiscal context and, in the review
+    # rail, it rides the first row beside the two years (3-up). Optional.
+    PickerStep("quarter", "Choose a quarter (optional)",
+               static_options=("Q1", "Q2", "Q3", "Q4"), optional=True),
     PickerStep("businessRuleGroups", "Choose the **baseline** business rule group(s)",
                "getAllValidationGroups_post", "groupName", "validationGroupId", multi=True,
                source_args={"groupType": "BASELINE", "applicationId": 3}, noun="rule group"),
@@ -1284,8 +1288,6 @@ BASELINE_STEPS: tuple[PickerStep, ...] = (
                "getActiveAcquisitionVehicleMappingsIds_post",
                "acquisitionVehicleName", "acquisitionVehicleId", multi=True, optional=True,
                noun="acquisition vehicle"),
-    PickerStep("quarter", "Choose a quarter (optional)",
-               static_options=("Q1", "Q2", "Q3", "Q4"), optional=True),
     PickerStep("isTargetApplicable", "Is **target** applicable?", static_options=("Y", "N")),
     PickerStep("isRecommended", "Include **recommended** requests?", static_options=("Y", "N")),
     PickerStep("isDeferred", "Include **deferred** requests?", static_options=("Y", "N")),
@@ -1350,8 +1352,16 @@ def _baseline_progress(flow: dict[str, Any]) -> dict[str, Any]:
         else:
             step["kind"] = "scalar"
             step["value"] = str(val)
+        # Review-rail column span (grid of 6): blocks full width, the compact fields (the two fiscal
+        # years + quarter, and the Y/N flags) pack 3-up (span 2), everything else 2-up (span 3).
+        if step["kind"] in ("list", "text"):
+            step["w"] = 6
+        elif st.field in ("sourceFiscalYear", "fiscalYear", "quarter") or set(st.static_options) == {"Y", "N"}:
+            step["w"] = 2
+        else:
+            step["w"] = 3
         steps.append(step)
-    steps.append({"label": "Review & confirm", "value": "", "kind": "scalar",
+    steps.append({"label": "Review & confirm", "value": "", "kind": "scalar", "w": 4,
                   "state": "current" if stage == "confirm" else "todo"})
     done_n = sum(1 for s in steps if s["state"] == "done")
     return {"title": "Generate FORMULATION baseline",
@@ -1491,28 +1501,23 @@ async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
         note = ""
     else:
         chips = [_mk(o) for o in options[:MAX_CHIPS]]
-        note = f"\n\n*Showing {MAX_CHIPS} of {len(options)} — or type a name.*" if len(options) > MAX_CHIPS else ""
-    # A hint that this step takes several — only on the first prompt (before anything is buffered),
-    # so it introduces the multi-select without nagging on every added pick.
-    if step.multi and not prefix and not flow.get("buf"):
-        note = "\n\n*You can pick one or more — tap each, then Continue.*" + note
+        # ONE compact hint line (parts side by side, middot-separated) instead of stacking two: the
+        # multi-select cue (first prompt only) + the "showing N of M" overflow note.
+        bits: list[str] = []
+        if step.multi and not prefix and not flow.get("buf"):
+            bits.append("pick one or more")
+        if len(options) > MAX_CHIPS:
+            bits.append(f"showing {MAX_CHIPS} of {len(options)}")
+        note = f"\n\n*{' · '.join(bits)} — or type a name.*" if bits else ""
     return FlowResult(message=f"{prefix}{step.prompt}{note}",
                       suggestions=chips + _baseline_control_chips(step, bool(flow.get("buf"))))
 
 
 def _baseline_summary(flow: dict[str, Any]) -> str:
-    labels = flow.get("labels", {})
-    lines = []
-    for f in BASELINE_CONFIRM_FIELDS:
-        val = labels.get(f)
-        if val in (None, "", [], {}):
-            val = "(all)" if f in ("orgIds", "requestTypes", "acquisitionVehicles") else "—"
-        elif isinstance(val, list):
-            val = ", ".join(str(x) for x in val) or "(all)"
-        lines.append(f"- **{BASELINE_LABELS.get(f, f)}:** {val}")
-    body = "\n".join(lines)
-    return ("Ready to generate this **FORMULATION baseline**:\n"
-            f"{body}\n\nShall I go ahead?")
+    # The review rail above already lists every field, so the confirm prompt stays short rather than
+    # repeating the whole summary as a bullet list (which was redundant and overflowed the card).
+    return ("Everything's filled in — **review the details above**, then **Confirm** to generate the "
+            "FORMULATION baseline (or keep typing to adjust).")
 
 
 BASELINE_CONFIRM_FIELDS = tuple(s.field for s in BASELINE_STEPS)
