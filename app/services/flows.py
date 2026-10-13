@@ -1259,6 +1259,9 @@ BASELINE_STEPS: tuple[PickerStep, ...] = (
     # sourceFiscalYear/fiscalYear are the year value — confirmed by the formulation FE
     # (generate-baseline.jsx sends `Number(fiscalYear - 1)` and every FY dropdown binds
     # `value: item.fiscalYear`) and by the service querying findByFiscalYear(<year>).
+    # Title FIRST — it names the baseline (shown live in the FlowWindow header), so the window gets a
+    # name up front before any details are gathered.
+    PickerStep("baselineTitle", "Enter a **title** for this baseline", maxlen=100, noun="title"),
     PickerStep("sourceFiscalYear", "Choose the **source** fiscal year (BFY)",
                "getAllFiscalYears_post", "fiscalYear", "fiscalYear", noun="fiscal year"),
     PickerStep("fiscalYear", "Choose the **target** fiscal year",
@@ -1267,10 +1270,6 @@ BASELINE_STEPS: tuple[PickerStep, ...] = (
     # rail, it rides the first row beside the two years (3-up). Optional.
     PickerStep("quarter", "Choose a quarter (optional)",
                static_options=("Q1", "Q2", "Q3", "Q4"), optional=True),
-    # Title + description are asked right after the fiscal years (before the pickers) so the baseline
-    # is named up front, while the fiscal context is fresh.
-    PickerStep("baselineTitle", "Enter a **title** for this baseline", maxlen=100, noun="title"),
-    PickerStep("description", "Enter a short **description**", maxlen=255, noun="description"),
     PickerStep("businessRuleGroups", "Choose the **baseline** business rule group(s)",
                "getAllValidationGroups_post", "groupName", "validationGroupId", multi=True,
                source_args={"groupType": "BASELINE", "applicationId": 3}, noun="rule group"),
@@ -1290,6 +1289,9 @@ BASELINE_STEPS: tuple[PickerStep, ...] = (
                "getActiveAcquisitionVehicleMappingsIds_post",
                "acquisitionVehicleName", "acquisitionVehicleId", multi=True, optional=True,
                noun="acquisition vehicle"),
+    # Description is gathered later (once the scope is defined) and shown as the header SUBTITLE,
+    # not as a rail row — so the rail stays focused on the actual data/values.
+    PickerStep("description", "Enter a short **description**", maxlen=255, noun="description"),
     PickerStep("isTargetApplicable", "Is **target** applicable?", static_options=("Y", "N")),
     PickerStep("isRecommended", "Include **recommended** requests?", static_options=("Y", "N")),
     PickerStep("isDeferred", "Include **deferred** requests?", static_options=("Y", "N")),
@@ -1328,6 +1330,8 @@ def _baseline_progress(flow: dict[str, Any]) -> dict[str, Any]:
     collecting = stage in ("intro", "collect")   # intro: the rail opens with step 1 next
     steps: list[dict[str, Any]] = []
     for i, st in enumerate(BASELINE_STEPS):
+        if st.field in ("baselineTitle", "description"):
+            continue   # shown in the header (name / small subtitle), not as a rail row
         if st.field in labels:
             state = "done"
         elif collecting and i == idx:
@@ -1371,11 +1375,24 @@ def _baseline_progress(flow: dict[str, Any]) -> dict[str, Any]:
         if st.field == "isTargetApplicable":
             step["rowbreak"] = True
         steps.append(step)
-    steps.append({"label": "Review & confirm", "value": "", "kind": "scalar", "w": 12,
-                  "state": "current" if stage == "confirm" else "todo"})
-    done_n = sum(1 for s in steps if s["state"] == "done")
-    return {"title": "Generate FORMULATION baseline",
-            "current": min(done_n + 1, len(steps)), "total": len(steps), "steps": steps}
+    # Header meta (not rail rows): the baseline Title as the name and the Description as a small
+    # subtitle; each is "active" while it's the step being typed, so the header slot can pulse. The
+    # Review step is no longer a rail row — `confirming` lets the header show the review state instead.
+    title_idx = next((i for i, st in enumerate(BASELINE_STEPS) if st.field == "baselineTitle"), -1)
+    desc_idx = next((i for i, st in enumerate(BASELINE_STEPS) if st.field == "description"), -1)
+    total = len(BASELINE_STEPS)
+    done_n = sum(1 for st in BASELINE_STEPS if st.field in labels)
+    return {
+        "title": "Generate FORMULATION baseline",
+        "primary": labels.get("baselineTitle", "") or "",
+        "primaryActive": bool(collecting and idx == title_idx and not labels.get("baselineTitle")),
+        "subtitle": labels.get("description", "") or "",
+        "subtitleActive": bool(collecting and idx == desc_idx and not labels.get("description")),
+        "confirming": stage == "confirm",
+        "current": total if stage == "confirm" else min(done_n + 1, total),
+        "total": total,
+        "steps": steps,
+    }
 
 
 def _bp(fr: "FlowResult | None", flow: dict[str, Any] | None) -> "FlowResult | None":

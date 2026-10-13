@@ -94,19 +94,20 @@ def _chips(fr) -> str:
     return ("   [chips] " + " · ".join(labels)) if labels else ""
 
 
-# Scripted user turns through the whole intake (intro 'start' first).
+# Scripted user turns through the whole intake. Title is the FIRST step (→ header name); description
+# is a LATER step (→ header subtitle).
 _SCRIPT = [
+    ("FY26 Program Baseline", "baseline title (free text) — step 1, header name"),
     ("2025", "source fiscal year"),
     ("2026", "target fiscal year"),
     ("Q1", "quarter"),
-    ("FY26 Program Baseline", "baseline title (free text)"),
-    ("Baseline for FY26 planning", "description (free text)"),
     ("Baseline Core", "rule group — pick one (multi)"),
     ("done", "finish rule-group selection"),
     ("General Fund", "fund group — single pick (auto-advances)"),
     ("select all", "program offices — all"),
     ("all", "request types — all"),
     ("all", "acquisition vehicles — all"),
+    ("Baseline for FY26 planning", "description (free text) — header subtitle"),
     ("yes", "target applicable?"),
     ("yes", "include recommended?"),
     ("no", "include deferred?"),
@@ -128,19 +129,22 @@ async def run(verbose: bool = True) -> list[tuple[str, bool, str]]:
     # Must carry the progress rail from the INTRO so the widget opens a FlowWindow (not loose
     # chat bubbles) — the title is what the window header shows.
     rail_ok = fr.progress is not None and fr.progress.get("title") == "Generate FORMULATION baseline"
-    # The flow now opens straight on the first question (Source FY) — no 'Start' intro — so the very
-    # first result already carries the fiscal-year picker chips (with the field noun for the popover).
-    first_fy_chips = [c.get("label") for c in (fr.suggestions or []) if isinstance(c, dict)]
-    first_fy_noun = next((c.get("noun") for c in (fr.suggestions or [])
-                          if isinstance(c, dict) and c.get("noun")), None)
+    # The flow opens on the FIRST question — now the Title (→ header name). The fiscal-year picker chips
+    # arrive on the NEXT result (after the title is answered), so capture them at i == 0 in the loop.
     if verbose:
         print("\nAGENT:", (fr.message or "").replace("\n", " "))
         print(_chips(fr))
 
+    first_fy_chips: list = []
+    first_fy_noun = None
     pending = None
     for i, (msg, note) in enumerate(_SCRIPT):
         fr = await flows.handle(s, msg, {})
         rail_ok = rail_ok and fr.progress is not None   # every step stays in the FlowWindow
+        if i == 0:  # title answer → the source-FY prompt (fiscal-year picker chips)
+            first_fy_chips = [c.get("label") for c in (fr.suggestions or []) if isinstance(c, dict)]
+            first_fy_noun = next((c.get("noun") for c in (fr.suggestions or [])
+                                  if isinstance(c, dict) and c.get("noun")), None)
         if verbose:
             print(f"\nUSER:  {msg!r}   ({note})")
             print("AGENT:", (fr.message or "").replace("\n", " "))
@@ -294,16 +298,21 @@ def _trigger_checks() -> list[tuple[str, bool, str]]:
     #  multi-select → kind=list + items[] + "<n> selected"; description → kind=text; others scalar.
     from app.services import flows as _fl
     pf = {"name": "formulation_baseline", "stage": "confirm", "idx": len(_fl.BASELINE_STEPS),
-          "labels": {"sourceFiscalYear": "2025", "businessRuleGroups": ["A", "B", "C"],
-                     "description": "x" * 40}}
+          "labels": {"baselineTitle": "FY26 Baseline", "sourceFiscalYear": "2025",
+                     "businessRuleGroups": ["A", "B", "C"], "description": "x" * 40}}
     prog = _fl._baseline_progress(pf)
     rg = next((s for s in prog["steps"] if str(s["label"]).startswith("Rule group")), {})
     out.append(("baseline rail: multi-select renders as a list block (count + items)",
                 rg.get("kind") == "list" and rg.get("items") == ["A", "B", "C"]
                 and rg.get("value") == "3 selected", f"got {rg!r}"))
-    desc = next((s for s in prog["steps"] if s["label"] == "Description"), {})
-    out.append(("baseline rail: description renders as a full-width text block",
-                desc.get("kind") == "text" and desc.get("value") == "x" * 40, f"got {desc!r}"))
+    # Title → header name, Description → header subtitle; neither is a rail row, and there is no Review row.
+    _labels = {str(s.get("label")) for s in prog["steps"]}
+    out.append(("baseline header: title is the name/primary (not a rail row)",
+                prog.get("primary") == "FY26 Baseline" and "Title" not in _labels, f"primary={prog.get('primary')!r}"))
+    out.append(("baseline header: description is the subtitle (not a rail row)",
+                prog.get("subtitle") == "x" * 40 and "Description" not in _labels, f"subtitle={prog.get('subtitle')!r}"))
+    out.append(("baseline rail: no 'Review & confirm' row (header confirm state)",
+                "Review & confirm" not in _labels and prog.get("confirming") is True, f"labels={_labels}"))
     sfy = next((s for s in prog["steps"] if s["label"] == "Source FY"), {})
     out.append(("baseline rail: a scalar stays a 1-line scalar",
                 sfy.get("kind") == "scalar" and sfy.get("value") == "2025", f"got {sfy!r}"))
