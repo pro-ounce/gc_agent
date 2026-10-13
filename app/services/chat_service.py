@@ -532,14 +532,9 @@ class ChatService:
             fr = flows.dc_after_reminder(session)
             if fr is not None:
                 return _fr(fr)
-        # ── Formulation baseline generation (single confirmed mutation) ──
-        if flows.is_active(session) and tool_name == "bobBaseLineGenerate_put":
-            # Terminal rail (before the flow is popped) so the widget collapses the whole run into
-            # one "completed" card instead of leaving the answered steps as loose bubbles.
-            session.metadata["_flow_complete"] = flows.terminal_progress(session.metadata.get("flow"))
-            fr = flows.baseline_after_generate(session)
-            if fr is not None:
-                return _fr(fr)
+        # NB: baseline generate (bobBaseLineGenerate_put) is handled earlier in confirm_stream —
+        # it needs the raw envelope (success vs business-error) + a retry re-arm, which the
+        # tuple-returning chain here can't express.
         # ── Remove a role definition: single confirmed delete → end the flow ──
         if flows.is_active(session) and tool_name == "deleteApplicationRoleById_delete":
             session.metadata["_flow_complete"] = flows.terminal_progress(session.metadata.get("flow"))
@@ -778,6 +773,40 @@ class ChatService:
         turn.tool(tool_name)
         output = str(result.output) if result.success else f"Error: {result.error}"
         session.add_tool_result(tc_id, tool_name, output)
+
+        # ── Baseline generate: mirror the FE (wait for the response → show the backend's OWN
+        #    message). A guard rejection (IOP / already-in-process / conflict) comes back as a
+        #    business-error ENVELOPE ({success:false}) even on HTTP 200, so success alone isn't
+        #    enough — detect the envelope and route to the retry path instead of claiming success.
+        if tool_name == "bobBaseLineGenerate_put" and flows.is_active(session):
+            from .ui_blocks import _coerce, _envelope_error
+            env = _coerce(result.output) if result.success else None
+            out_dict = env if isinstance(env, dict) else {}
+            accepted = result.success and not _envelope_error(env)
+            if accepted:
+                session.metadata["_flow_complete"] = flows.terminal_progress(session.metadata.get("flow"))
+                fr = flows.baseline_after_generate(session, out_dict)
+                session.add_assistant(fr.message)
+                session_service.save(session)
+                if turn:
+                    turn.finish("stop")
+                yield StreamChunk(type="done", session_id=session_id, content=fr.message,
+                                  suggestions=[Suggestion(**s) for s in fr.suggestions],
+                                  progress=session.metadata.pop("_flow_complete", None),
+                                  finish_reason="stop")
+                return
+            fr = await flows.baseline_after_failed_generate(session, out_dict, result.error)
+            if fr is not None and getattr(fr, "pending", None):
+                pending = self._arm_flow_pending(session, fr)   # re-arms + records the message
+                session_service.save(session)
+                if turn:
+                    turn.finish("stop")
+                yield StreamChunk(type="confirm_required", session_id=session_id, content=fr.message,
+                                  pending_action=pending,
+                                  progress=flows._baseline_progress(session.metadata["flow"]),
+                                  finish_reason="confirm_required")
+                return
+
         # Run the skill's dependency chain (if any), then render the outcome as a block +
         # one-line lead-in — no re-run LLM synthesis (which garbles on a bare result turn).
         render_out, render_name = result.output, tool_name

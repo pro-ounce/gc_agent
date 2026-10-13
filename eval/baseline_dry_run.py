@@ -269,6 +269,49 @@ async def run(verbose: bool = True) -> list[tuple[str, bool, str]]:
           and f2b.get("idx", 0) >= 1,
           (f2b.get("labels") or {}).get("baselineTitle"))
 
+    # ── Duplicate-title guard (read via the getBaseLineMasterHeaders_post MCP tool, scoped to the
+    #    fund group): a taken title is BLOCKED at finalize and re-opens the title step to rename. ──
+    _ti = next(i for i, s in enumerate(flows.BASELINE_STEPS) if s.field == "baselineTitle")
+    _BY_TOOL["getBaseLineMasterHeaders_post"] = [{"title": "Dup Title"}, {"title": "Other"}]
+    _dupf = {"name": "formulation_baseline", "stage": "confirm", "buf": [],
+             "data": {"baselineTitle": "Dup Title", "fundGroupId": 1},
+             "labels": {"baselineTitle": "Dup Title", "fundGroupId": "General Fund"}}
+    _fr_dup = await flows._baseline_finalize(_dupf, {})
+    check("dup-title guard: a taken title is BLOCKED (no pending) + re-opens the title step",
+          getattr(_fr_dup, "pending", None) is None and _dupf.get("editing") is True
+          and _dupf.get("idx") == _ti and _dupf.get("stage") == "collect",
+          f"pending={getattr(_fr_dup,'pending',None)} editing={_dupf.get('editing')} idx={_dupf.get('idx')}")
+    check("dup-title guard: case-insensitive match",
+          "dup title" in await flows._existing_baseline_titles({"data": {"fundGroupId": 1}}, {}))
+    _BY_TOOL["getBaseLineMasterHeaders_post"] = [{"title": "Something Else"}]
+    _uf = {"name": "formulation_baseline", "stage": "confirm", "buf": [],
+           "data": {"baselineTitle": "Unique FY27 Baseline", "fundGroupId": 1},
+           "labels": {"baselineTitle": "Unique FY27 Baseline"}}
+    _fr_uq = await flows._baseline_finalize(_uf, {})
+    check("dup-title guard: a unique title proceeds (pending armed)",
+          getattr(_fr_uq, "pending", None) is not None
+          and _fr_uq.pending.get("tool_name") == "bobBaseLineGenerate_put", None)
+    _BY_TOOL.pop("getBaseLineMasterHeaders_post", None)   # restore: no list → fail-open
+    check("dup-title guard: fail-open (list unavailable) still proceeds",
+          getattr(await flows._baseline_finalize(dict(_uf), {}), "pending", None) is not None)
+
+    # ── Completion message mirrors the FE: shows the backend's OWN message + the title ──
+    _sc = _Session(); _sc.metadata["flow"] = {"name": "formulation_baseline",
+                                              "data": {"baselineTitle": "FY27 Ops Baseline"}, "labels": {}}
+    _fr_ok = flows.baseline_after_generate(_sc, {"message": "Baseline generation is in process", "data": 123})
+    check("completion: shows the backend message + title (FE toast.success(res.message))",
+          _fr_ok is not None and "FY27 Ops Baseline" in _fr_ok.message
+          and "in process" in _fr_ok.message and getattr(_fr_ok, "done", False) is True, None)
+
+    # ── Failure re-arm: a rejected generate keeps the flow + re-arms the confirm for retry ──
+    _sf = _Session(); _sf.metadata["flow"] = {"name": "formulation_baseline", "stage": "confirm",
+                                              "data": {"baselineTitle": "X", "fundGroupId": 1}, "labels": {}}
+    _fr_fl = await flows.baseline_after_failed_generate(
+        _sf, {"success": False, "message": "Baseline generation is already in process"}, None)
+    check("failure: re-arms the confirm with the backend error, flow kept for retry",
+          _fr_fl is not None and getattr(_fr_fl, "pending", None) is not None
+          and "already in process" in _fr_fl.message and _sf.metadata.get("flow") is not None, None)
+
     return r
 
 

@@ -1561,8 +1561,49 @@ def _baseline_summary(flow: dict[str, Any]) -> str:
 BASELINE_CONFIRM_FIELDS = tuple(s.field for s in BASELINE_STEPS)
 
 
-def _baseline_finalize(flow: dict[str, Any]) -> FlowResult:
-    """Build the payload from collected values + defaults and hand off the single mutation."""
+_BASELINE_APP_ID = 3   # Formulation application id (matches the picker tools' applicationId)
+
+
+async def _existing_baseline_titles(flow: dict[str, Any],
+                                    headers: dict[str, str] | None) -> set[str]:
+    """Lower-cased titles of baselines that already exist for the picked fund group + application
+    (read via the `getBaseLineMasterHeaders_post` MCP tool). Used for the duplicate-title guard.
+    Fail-OPEN (empty) if the list can't be read, so a transient MCP hiccup never blocks a generate."""
+    fg = (flow.get("data") or {}).get("fundGroupId")
+    if fg in (None, "", 0):
+        return set()
+    try:
+        res = await tool_registry.execute(
+            "getBaseLineMasterHeaders_post",
+            {"fundGroupId": fg, "applicationId": _BASELINE_APP_ID}, headers)
+        rows = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        titles: set[str] = set()
+        for r in (rows or []):
+            if isinstance(r, dict):
+                t = r.get("title") or r.get("baselineTitle")
+                if t and str(t).strip():
+                    titles.add(str(t).strip().lower())
+        return titles
+    except Exception as exc:  # noqa: BLE001 — the guard must never crash the turn
+        log.bind(func="baseline_dup_title").warning(f"title list failed: {exc}")
+        return set()
+
+
+async def _baseline_finalize(flow: dict[str, Any],
+                             headers: dict[str, str] | None = None) -> FlowResult:
+    """Build the payload from collected values + defaults and hand off the single mutation —
+    AFTER a duplicate-title guard (the backend dedupes by FY+fund group, not by title, so we
+    enforce unique titles here, scoped to the fund group)."""
+    title = str((flow.get("data") or {}).get("baselineTitle", "")).strip()
+    if title and title.lower() in await _existing_baseline_titles(flow, headers):
+        # Re-open the title step so the user renames it (reuses the review-edit path).
+        ti = next((i for i, s in enumerate(BASELINE_STEPS) if s.field == "baselineTitle"), 0)
+        flow["stage"] = "collect"; flow["idx"] = ti; flow["buf"] = []; flow["editing"] = True
+        fg_label = (flow.get("labels") or {}).get("fundGroupId") or "this fund group"
+        return await _baseline_prompt(
+            flow, BASELINE_STEPS[ti], headers,
+            prefix=(f"A baseline titled **“{title}”** already exists for **{fg_label}** — "
+                    f"please choose a different title. "))
     args: dict[str, Any] = {**BASELINE_DEFAULTS, **flow.get("data", {})}
     summary = _baseline_summary(flow)
     return FlowResult(message=summary,
@@ -1616,7 +1657,7 @@ async def _advance_baseline(flow: dict[str, Any], headers: dict[str, str] | None
     if flow.pop("editing", False):
         flow["buf"] = []
         flow["stage"] = "confirm"
-        return _baseline_finalize(flow)
+        return await _baseline_finalize(flow, headers)
     flow["idx"] += 1
     flow["buf"] = []
     # Auto-resolve steps that shouldn't be asked when they have a single option (pick it) or none
@@ -1639,7 +1680,7 @@ async def _advance_baseline(flow: dict[str, Any], headers: dict[str, str] | None
             break                                   # several → ask
     if flow["idx"] >= len(BASELINE_STEPS):
         flow["stage"] = "confirm"
-        return _baseline_finalize(flow)
+        return await _baseline_finalize(flow, headers)
     return await _baseline_prompt(flow, BASELINE_STEPS[flow["idx"]], headers, prefix=prefix)
 
 
@@ -1766,18 +1807,41 @@ async def _baseline(session: Any, flow: dict[str, Any], msg: str,
     return await _advance_baseline(flow, headers)
 
 
-def baseline_after_generate(session: Any) -> FlowResult | None:
-    """Baseline mutation confirmed & run → finish the flow with a friendly result."""
+def baseline_after_generate(session: Any, result_output: Any = None) -> FlowResult | None:
+    """Baseline generate ACCEPTED by the backend → finish the flow. Mirrors the FE
+    (`toast.success(res.message)`): show the backend's OWN message and point to the baselines
+    screen. Generation runs async server-side; the API's 200 confirms it was accepted (+ masterId)."""
     if not is_active(session):
         return None
     flow = session.metadata["flow"]
     title = (flow.get("data", {}) or {}).get("baselineTitle") or "the baseline"
     session.metadata.pop("flow", None)
+    be_msg = str(result_output.get("message")).strip() if isinstance(result_output, dict) and result_output.get("message") else ""
+    head = f"✅ **{title}** — {be_msg}" if be_msg else f"✅ **{title}** has been submitted for generation."
     return FlowResult(
-        message=(f"🎉 **{title}** has been submitted for generation. "
-                 "Baseline runs process in the background — check the FORMULATION baselines "
-                 "screen for status."),
+        message=f"{head}\n\nIt processes in the background — track it on the **FORMULATION baselines** screen.",
         done=True)
+
+
+async def baseline_after_failed_generate(session: Any, result_output: Any = None,
+                                         error: Any = None) -> FlowResult | None:
+    """The backend REJECTED the generate (already-in-process / IOP approved / conflict / invalid).
+    Mirror the FE staying on the form with an error toast: keep the flow at review and RE-ARM the
+    confirm so the user can adjust a detail (tap a field) and retry, instead of the run getting
+    stuck with no way forward."""
+    if not is_active(session):
+        return None
+    flow = session.metadata["flow"]
+    flow["stage"] = "confirm"
+    flow.pop("editing", None)
+    be_msg = str(result_output.get("message")).strip() if isinstance(result_output, dict) and result_output.get("message") else ""
+    be_msg = be_msg or str(error or "the platform rejected the request")
+    args: dict[str, Any] = {**BASELINE_DEFAULTS, **flow.get("data", {})}
+    return FlowResult(
+        message=(f"⚠️ Couldn't generate the baseline — {be_msg}. "
+                 f"Adjust a detail above (tap it) and try **Confirm** again, or **Cancel**."),
+        pending={"tool_name": "bobBaseLineGenerate_put", "tool_args": args,
+                 "summary": "Generate a FORMULATION budget baseline"})
 
 
 # ── confirm-step callbacks (called by chat_service after the assign confirm) ────
