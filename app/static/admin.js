@@ -76,6 +76,7 @@
       + tabBtn("Health","__health__",false)
       + tabBtn("Metrics","__metrics__",false)
       + tabBtn("Activity","__activity__",false)
+      + tabBtn("History","__history__",false)
       + SH("Build")
       + tabBtn("Skills","__workflows__",false)
       + tabBtn("Calendar","__seasons__",false)
@@ -84,13 +85,14 @@
       + tabBtn("Docs","__docs__",false)
       + SH("Operations")
       + tabBtn("Audit","__audit__",false)
+      + tabBtn("Storage","__storage__",false)
       + tabBtn("Backups","__backups__",false)
       + tabBtn("Logs","__logs__",false);
     elSections.innerHTML = groups.map(function(g,i){
       var cards = params.filter(function(p){return p.group===g;}).map(cardFor).join("");
       return '<section class="admin-section'+(i===0?" active":"")+'" data-tab="'+esc(g)+'" role="tabpanel"'
         +' id="panel-'+sid(g)+'" aria-labelledby="tab-'+sid(g)+'" tabindex="0"><div class="cards">'+cards+'</div></section>';
-    }).join("") + healthSectionHTML() + metricsSectionHTML() + activitySectionHTML() + workflowsSectionHTML() + seasonsSectionHTML() + guideSectionHTML() + apiSectionHTML() + docsSectionHTML() + auditSectionHTML() + backupsSectionHTML() + logsSectionHTML();
+    }).join("") + healthSectionHTML() + metricsSectionHTML() + activitySectionHTML() + historySectionHTML() + workflowsSectionHTML() + seasonsSectionHTML() + guideSectionHTML() + apiSectionHTML() + docsSectionHTML() + auditSectionHTML() + storageSectionHTML() + backupsSectionHTML() + logsSectionHTML();
     // tab switching — WAI-ARIA tabs: roving tabindex, arrow/Home/End keys, aria-selected.
     // (only the .admin-tab buttons are tabs; the .side-group dividers are skipped)
     var tabEls = Array.prototype.slice.call(elTabs.querySelectorAll(".admin-tab"));
@@ -148,6 +150,8 @@
     initApi();
     initDocs();
     initAudit();
+    initStorage();
+    initHistory();
     initLogs();
   }
 
@@ -274,6 +278,126 @@
     document.getElementById("bk-refresh").addEventListener("click", loadBackups);
     loadBackups();
   }
+
+  // ── Storage & Durability tab (data stores · sinks · retention · durability) ──
+  function storageSectionHTML(){
+    return '<section class="admin-section" data-tab="__storage__" role="tabpanel" id="panel-__storage__" aria-labelledby="tab-__storage__" tabindex="0">'
+      +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Durability</span><span id="st-dura-badge"></span></div>'
+      +'<div class="desc">Always-preserved streams live on a durable store and in the snapshot set — they survive restarts with ~no loss.</div>'
+      +'<div id="st-dura" class="cards" style="margin-top:8px"></div></div>'
+      +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Data stores</span>'
+      +'<button id="st-refresh" class="btn" style="padding:5px 11px">Refresh</button></div>'
+      +'<div id="st-stores" class="desc" style="margin-top:10px">loading…</div></div>'
+      +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Sinks</span></div>'
+      +'<div id="st-sinks" class="desc" style="margin-top:10px"></div></div>'
+      +'<div class="card"><div class="top"><span class="lbl">Retention</span></div>'
+      +'<div id="st-ret" class="desc" style="margin-top:10px"></div></div></section>';
+  }
+  function _okBadge(up){ return up?badge("UP","var(--good)","var(--good-wash)"):badge("DOWN","#b91c1c","#fdeaea"); }
+  function _tile(label,val){ return '<div class="card" style="min-width:150px"><div style="font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:var(--ink-2)">'+esc(label)+'</div><div style="font-size:17px;font-weight:700;margin-top:4px">'+val+'</div></div>'; }
+  function _tbl(headers, rows){
+    return '<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">'
+      +'<thead><tr style="text-align:left;color:var(--ink-2);font-size:11.5px;text-transform:uppercase;letter-spacing:.04em">'
+      + headers.map(function(h){return '<th scope="col" style="padding:0 6px 6px">'+esc(h)+'</th>';}).join("")
+      +'</tr></thead><tbody>'+rows+'</tbody></table></div>';
+  }
+  function renderStorage(d){
+    var du=d.durability||{}; var up=String(du.backend_status||"").toUpperCase()==="UP";
+    var db=document.getElementById("st-dura-badge"); if(db) db.innerHTML=_okBadge(up);
+    var age=du.last_snapshot_age_hours, ageTxt=age==null?"—":(age<1?"<1h ago":Math.round(age)+"h ago");
+    document.getElementById("st-dura").innerHTML =
+        _tile("Backend",'<span class="mono">'+esc(du.backend||"—")+'</span>')
+      + _tile("Store status",_okBadge(up))
+      + _tile("Snapshot repo",'<span class="mono">'+esc(du.snapshot_repo||"—")+'</span>')
+      + _tile("Last snapshot",esc(ageTxt))
+      + _tile("Active sessions",esc(du.sessions_active==null?"—":du.sessions_active));
+    document.getElementById("st-stores").innerHTML=_tbl(["Index","Role","Backend","Status","Snapshot"],
+      (d.data_stores||[]).map(function(s){
+        return '<tr style="border-top:1px solid var(--line)"><td style="padding:8px 6px" class="mono">'+esc(s.name)+'</td>'
+          +'<td style="padding:8px 6px">'+esc(s.role)+'</td><td style="padding:8px 6px" class="mono">'+esc(s.backend)+'</td>'
+          +'<td style="padding:8px 6px">'+_okBadge(String(s.status||"").toUpperCase()==="UP")+'</td>'
+          +'<td style="padding:8px 6px">'+(s.snapshotted?badge("snapshotted","var(--good)","var(--good-wash)"):badge("not in snapshot","var(--amber)","var(--amber-wash)"))+'</td></tr>';
+      }).join(""));
+    document.getElementById("st-sinks").innerHTML=_tbl(["Stream","Primary sink","Secondary","Writes"],
+      (d.sinks||[]).map(function(s){
+        return '<tr style="border-top:1px solid var(--line)"><td style="padding:8px 6px"><b>'+esc(s.stream)+'</b></td>'
+          +'<td style="padding:8px 6px" class="mono">'+esc(s.primary)+'</td>'
+          +'<td style="padding:8px 6px;color:var(--ink-2)" class="mono">'+esc(s.secondary)+'</td>'
+          +'<td style="padding:8px 6px">'+esc(s.writes)+'</td></tr>';
+      }).join(""));
+    document.getElementById("st-ret").innerHTML=_tbl(["Stream","Policy"],
+      (d.retention||[]).map(function(s){
+        var k=s.kind, col=k==="indefinite"?["var(--good)","var(--good-wash)"]:(k==="ttl"?["var(--amber)","var(--amber-wash)"]:["var(--ink-2)","#f3f4f6"]);
+        return '<tr style="border-top:1px solid var(--line)"><td style="padding:8px 6px"><b>'+esc(s.stream)+'</b></td>'
+          +'<td style="padding:8px 6px">'+badge(s.policy,col[0],col[1])+'</td></tr>';
+      }).join(""));
+  }
+  function loadStorage(){ var el=document.getElementById("st-stores"); if(el) el.textContent="loading…";
+    fetch(API+"/storage",{cache:"no-store"}).then(function(r){return r.json();}).then(renderStorage)
+      .catch(function(e){ if(el) el.innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; }); }
+  function initStorage(){ var b=document.getElementById("st-refresh"); if(!b) return; b.addEventListener("click",loadStorage); loadStorage(); }
+
+  // ── History tab (durable conversation archive: category filter + drill-down transcript) ──
+  var _hiData=[], _hiCat="", _hiQ="";
+  var _CATCOL={Baseline:["#6d28d9","#efe9ff"],Access:["#1d4ed8","#e8effd"],"Data call":["#0f766e","#e3f5f2"],Reporting:["#b45309","var(--amber-wash)"],General:["var(--ink-2)","#f3f4f6"]};
+  function catBadge(c){ var col=_CATCOL[c]||_CATCOL.General; return badge(c,col[0],col[1]); }
+  function historySectionHTML(){
+    return '<section class="admin-section" data-tab="__history__" role="tabpanel" id="panel-__history__" aria-labelledby="tab-__history__" tabindex="0">'
+      +'<div class="card" style="margin-bottom:14px"><div class="top"><span class="lbl">Conversation history</span>'
+      +'<button id="hi-refresh" class="btn" style="padding:5px 11px">Refresh</button></div>'
+      +'<div class="desc">Durable archive — preserved indefinitely, independent of the live-session TTL.</div>'
+      +'<div id="hi-cats" style="margin-top:10px;display:flex;gap:7px;flex-wrap:wrap"></div>'
+      +'<input id="hi-search" type="text" placeholder="Filter by text…" aria-label="Filter conversations" style="margin-top:10px;width:100%;max-width:360px;font:inherit;font-size:14px;padding:9px 11px;border:1px solid var(--line);border-radius:9px"></div>'
+      +'<div style="display:flex;gap:14px;flex-wrap:wrap;align-items:flex-start">'
+      +'<div class="card" style="flex:1;min-width:300px"><div class="top"><span class="lbl">Conversations <span id="hi-count" style="color:var(--ink-2);font-weight:500"></span></span></div>'
+      +'<div id="hi-list" style="margin-top:6px">loading…</div></div>'
+      +'<div class="card" style="flex:1.25;min-width:320px"><div class="top"><span class="lbl">Transcript</span><span id="hi-meta" style="color:var(--ink-2);font-size:12px"></span></div>'
+      +'<div id="hi-detail" class="desc" style="margin-top:10px">Select a conversation to view its transcript.</div></div></div></section>';
+  }
+  function renderHistory(){
+    var cats={}; _hiData.forEach(function(it){ var c=it.category||"General"; cats[c]=(cats[c]||0)+1; });
+    var pills='<button class="btn hi-pill'+(_hiCat===""?" primary":"")+'" data-cat="" style="padding:4px 11px;font-size:12.5px">All ('+_hiData.length+')</button>';
+    Object.keys(cats).sort().forEach(function(c){ pills+='<button class="btn hi-pill'+(_hiCat===c?" primary":"")+'" data-cat="'+esc(c)+'" style="padding:4px 11px;font-size:12.5px">'+esc(c)+' ('+cats[c]+')</button>'; });
+    var pc=document.getElementById("hi-cats"); if(pc){ pc.innerHTML=pills; Array.prototype.forEach.call(pc.querySelectorAll(".hi-pill"),function(b){ b.addEventListener("click",function(){ _hiCat=b.getAttribute("data-cat"); renderHistory(); }); }); }
+    var q=_hiQ.toLowerCase();
+    var items=_hiData.filter(function(it){
+      if(_hiCat && (it.category||"General")!==_hiCat) return false;
+      if(q){ var t=((it.last_question||"")+" "+(it.session_id||"")).toLowerCase(); if(t.indexOf(q)<0) return false; }
+      return true;
+    });
+    var cnt=document.getElementById("hi-count"); if(cnt) cnt.textContent="· "+items.length;
+    var el=document.getElementById("hi-list"); if(!el) return;
+    if(!items.length){ el.innerHTML='<span style="color:var(--ink-2)">No conversations.</span>'; return; }
+    el.innerHTML=items.map(function(it){
+      var title=it.last_question||"(no question)"; if(title.length>72) title=title.slice(0,72)+"…";
+      var when=String(it.updated_at||"").replace("T"," ").slice(0,16);
+      return '<button class="hi-row" data-key="'+esc(it.key)+'" style="display:block;width:100%;text-align:left;border:0;border-top:1px solid var(--line);background:none;cursor:pointer;padding:9px 6px;font:inherit">'
+        +'<div style="display:flex;gap:8px;align-items:center;justify-content:space-between">'
+        +'<span style="font-weight:600;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">'+esc(title)+'</span>'+catBadge(it.category||"General")+'</div>'
+        +'<div class="def" style="margin-top:3px;font-size:11.5px">'+(it.archived?badge("archived","var(--ink-2)","#f3f4f6"):badge("live","var(--good)","var(--good-wash)"))+' &nbsp;'+esc(it.message_count||0)+' turns &nbsp; <span class="mono">'+esc(when)+'</span></div></button>';
+    }).join("");
+    Array.prototype.forEach.call(el.querySelectorAll(".hi-row"),function(b){ b.addEventListener("click",function(){ Array.prototype.forEach.call(el.querySelectorAll(".hi-row"),function(x){x.style.background=x===b?"var(--good-wash)":"none";}); loadHistoryDetail(b.getAttribute("data-key")); }); });
+  }
+  function loadHistoryDetail(key){
+    var el=document.getElementById("hi-detail"); if(!el) return; el.textContent="loading…";
+    fetch(API+"/history/detail?key="+encodeURIComponent(key),{cache:"no-store"}).then(function(r){return r.json();}).then(function(d){
+      var meta=document.getElementById("hi-meta"); var msgs=d.messages||[];
+      if(meta) meta.textContent=(d.session_id||"")+" · "+msgs.length+" messages";
+      if(!msgs.length){ el.innerHTML="Empty."; return; }
+      el.innerHTML=msgs.map(function(m){
+        var role=m.role||""; if(role==="tool") return "";
+        var isU=role==="user", who=isU?"You":(role==="assistant"?"Agent":esc(role));
+        return '<div style="margin:0 0 11px"><div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:'+(isU?"#6d28d9":"var(--ink-2)")+'">'+who+'</div>'
+          +'<div style="margin-top:2px;white-space:pre-wrap;word-break:break-word">'+mdI(m.content||"")+'</div></div>';
+      }).join("");
+    }).catch(function(e){ el.innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; });
+  }
+  function loadHistory(){ var el=document.getElementById("hi-list"); if(el) el.textContent="loading…";
+    fetch(API+"/history",{cache:"no-store"}).then(function(r){return r.json();}).then(function(d){ _hiData=(d&&d.conversations)||[]; renderHistory(); })
+      .catch(function(e){ if(el) el.innerHTML='<span style="color:#b91c1c">Failed: '+esc(e.message)+'</span>'; }); }
+  function initHistory(){ var b=document.getElementById("hi-refresh"); if(!b) return; b.addEventListener("click",loadHistory);
+    var s=document.getElementById("hi-search"); if(s) s.addEventListener("input",function(){ _hiQ=s.value||""; renderHistory(); });
+    loadHistory(); }
 
   function ms(v){ if(v==null) return "—"; return v>=1000?(v/1000).toFixed(2)+"s":Math.round(v)+"ms"; }
   function num(v){ return v==null?"—":Number(v).toLocaleString("en-US"); }
