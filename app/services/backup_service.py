@@ -252,14 +252,43 @@ def backup_health() -> dict[str, Any]:
     }
 
 
+def _latest_success_age(snaps: list[dict]) -> tuple[str | None, float | None]:
+    """Newest SUCCESS snapshot's name + age in hours — counts MANUAL snapshots too (not just
+    the scheduled SM ones). `snaps` is the shaped, newest-first list from list_snapshots. The
+    Durability/Storage card reads these as `latest` + `age_hours`. Never raises."""
+    import datetime as _dt
+    for s in snaps:  # already newest-first
+        if s.get("state") != "SUCCESS":
+            continue
+        name = s.get("snapshot")
+        ts = s.get("end_time") or s.get("start_time")
+        if not ts:
+            return name, None
+        try:
+            dt = _dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=_dt.timezone.utc)
+            age = (_dt.datetime.now(_dt.timezone.utc) - dt).total_seconds() / 3600.0
+            return name, round(max(0.0, age), 1)
+        except Exception:  # noqa: BLE001
+            return name, None
+    return None, None
+
+
 def overview() -> dict[str, Any]:
-    """Everything the /admin Backups tab needs in one call — repo, schedule, snapshots, stats."""
+    """Everything the /admin Backups tab needs in one call — repo, schedule, snapshots, stats.
+    Also surfaces the newest SUCCESS snapshot (`latest` + `age_hours`, manual or scheduled) so the
+    Storage/Durability card can show a real last-snapshot age instead of '—'."""
     snaps = list_snapshots(limit=15)
+    items = snaps.get("snapshots", [])
+    latest, age_hours = _latest_success_age(items)
     return {
         "repository": {"name": cfg.OPENSEARCH_SNAPSHOT_REPO, "verified": verify_repo()},
         "indices": cfg.OPENSEARCH_SNAPSHOT_INDICES,
         "schedule": get_schedule(),
-        "snapshots": snaps.get("snapshots", []),
+        "snapshots": items,
         "error": snaps.get("error"),
-        "stats": _stats(snaps.get("snapshots", [])),
+        "stats": _stats(items),
+        "latest": latest,
+        "age_hours": age_hours,
     }
