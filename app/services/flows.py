@@ -516,7 +516,7 @@ async def maybe_start(session: Any, message: str, headers: dict[str, str] | None
         _BASELINE_INTENT_RE.search(message or "")
         or getattr(skill, "tool", None) in _FLOW_OPENER_TOOLS
     ):
-        return start_formulation_baseline(session)
+        return await start_formulation_baseline(session, headers)
     # Remove a role definition → guided, dependency-previewed, confirm-gated delete. Detected
     # before the create front door; un-assigning a role from a user is NOT caught here.
     if _detect_remove_role(message or "") and not _is_query:
@@ -550,7 +550,7 @@ async def maybe_start(session: Any, message: str, headers: dict[str, str] | None
     if tool is not None and not _is_query:
         has_email = bool(re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", message or ""))
         if tool == "bobBaseLineGenerate_put":
-            return start_formulation_baseline(session)
+            return await start_formulation_baseline(session, headers)
         if tool == "addUser_post" and not has_email:
             return start_create(session)
         _ent = _ENTITY_BY_TOOL.get(tool)
@@ -1456,18 +1456,15 @@ def _match_opt(msg: str, options: list[dict[str, Any]]) -> dict[str, Any] | None
     return hits[0] if len(hits) == 1 else None
 
 
-def start_formulation_baseline(session: Any) -> FlowResult:
-    """Begin the guided baseline-generation intake (sync: no fetch until the user starts)."""
-    session.metadata["flow"] = {
-        "name": "formulation_baseline", "stage": "intro", "idx": 0,
+async def start_formulation_baseline(session: Any, headers: dict[str, str] | None = None) -> FlowResult:
+    """Begin the guided baseline-generation intake — open straight on the FIRST question (no 'Start'
+    intro step); the FlowWindow shows the rail with step 1 already active."""
+    flow = {
+        "name": "formulation_baseline", "stage": "collect", "idx": 0,
         "data": {}, "labels": {}, "buf": [],
     }
-    return FlowResult(
-        message=("Let's generate a **FORMULATION** budget baseline. I'll ask a few questions "
-                 "one at a time, then show everything for your confirmation before anything runs."),
-        suggestions=[_chip("Start", "start", icon="check"), _chip("Cancel", "cancel", icon="skip")],
-        progress=_baseline_progress(session.metadata["flow"]),   # open the FlowWindow from the intro
-    )
+    session.metadata["flow"] = flow
+    return _bp(await _baseline_prompt(flow, BASELINE_STEPS[0], headers), flow)
 
 
 def _baseline_control_chips(step: PickerStep, has_buf: bool) -> list[dict[str, Any]]:

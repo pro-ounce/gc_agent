@@ -96,7 +96,6 @@ def _chips(fr) -> str:
 
 # Scripted user turns through the whole intake (intro 'start' first).
 _SCRIPT = [
-    ("start", "user starts the flow"),
     ("2025", "source fiscal year"),
     ("2026", "target fiscal year"),
     ("Q1", "quarter"),
@@ -129,22 +128,19 @@ async def run(verbose: bool = True) -> list[tuple[str, bool, str]]:
     # Must carry the progress rail from the INTRO so the widget opens a FlowWindow (not loose
     # chat bubbles) — the title is what the window header shows.
     rail_ok = fr.progress is not None and fr.progress.get("title") == "Generate FORMULATION baseline"
+    # The flow now opens straight on the first question (Source FY) — no 'Start' intro — so the very
+    # first result already carries the fiscal-year picker chips (with the field noun for the popover).
+    first_fy_chips = [c.get("label") for c in (fr.suggestions or []) if isinstance(c, dict)]
+    first_fy_noun = next((c.get("noun") for c in (fr.suggestions or [])
+                          if isinstance(c, dict) and c.get("noun")), None)
     if verbose:
         print("\nAGENT:", (fr.message or "").replace("\n", " "))
         print(_chips(fr))
 
-    first_fy_chips: list[str] = []
-    first_fy_noun = None
     pending = None
     for i, (msg, note) in enumerate(_SCRIPT):
         fr = await flows.handle(s, msg, {})
         rail_ok = rail_ok and fr.progress is not None   # every step stays in the FlowWindow
-        if i == 0:  # the source-FY prompt right after 'start'
-            first_fy_chips = [c.get("label") for c in (fr.suggestions or []) if isinstance(c, dict)]
-            # Picker chips carry the field noun so the widget labels the popover "fiscal years",
-            # not the generic entity ("applications") the icon glyph would otherwise imply.
-            first_fy_noun = next((c.get("noun") for c in (fr.suggestions or [])
-                                  if isinstance(c, dict) and c.get("noun")), None)
         if verbose:
             print(f"\nUSER:  {msg!r}   ({note})")
             print("AGENT:", (fr.message or "").replace("\n", " "))
