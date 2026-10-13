@@ -228,6 +228,24 @@ async def run(verbose: bool = True) -> list[tuple[str, bool, str]]:
           bool(tp) and tp.get("complete") is True and tp.get("cancelled") is True
           and all(st.get("state") == "done" for st in tp.get("steps", [])),
           None)
+    # Completion collapses the SAME way (one card), just cancelled=False → the GREEN "completed"
+    # card. This is exactly what chat_service stashes as `_flow_complete` before the flow is popped.
+    _title = (s.metadata.get("flow", {}).get("labels") or {}).get("baselineTitle")
+    tp_done = flows.terminal_progress(s.metadata.get("flow"))   # default cancelled=False
+    check("completion rail: complete=True, cancelled=False, steps done, display name + title carried",
+          bool(tp_done) and tp_done.get("complete") is True and tp_done.get("cancelled") is False
+          and all(st.get("state") == "done" for st in tp_done.get("steps", []))
+          and tp_done.get("title") == "Baseline Generation" and tp_done.get("primary") == _title,
+          f"primary={tp_done.get('primary') if tp_done else None} title={_title}")
+    # The completion callback finishes the flow with a friendly, title-bearing result (run on a
+    # clone so the decline checks below still have the walked flow at confirm).
+    _s_done = _Session()
+    _s_done.metadata["flow"] = dict(s.metadata["flow"])
+    fr_done = flows.baseline_after_generate(_s_done)
+    check("completion: baseline_after_generate finishes (done, flow cleared, title in message)",
+          fr_done is not None and getattr(fr_done, "done", False) is True
+          and _s_done.metadata.get("flow") is None and (_title or "") in (fr_done.message or ""),
+          None)
     fr_dec = flows.on_decline(s)
     check("decline at review returns a terminal (complete+cancelled) rail + done",
           fr_dec is not None and getattr(fr_dec, "progress", None) is not None
