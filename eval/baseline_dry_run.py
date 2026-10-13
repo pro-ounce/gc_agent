@@ -57,12 +57,13 @@ _ORGS = [
     {"organizationId": 102, "organizationName": "Program Office Bravo"},
 ]
 _REQUEST_TYPES = [
-    {"requestTypeCode": "NEW", "requestTypeName": "New Request"},
-    {"requestTypeCode": "MOD", "requestTypeName": "Modification"},
+    {"requestTypeId": 21, "requestTypeCode": "NEW", "requestTypeName": "New Request"},
+    {"requestTypeId": 22, "requestTypeCode": "MOD", "requestTypeName": "Modification"},
 ]
+# Response field is `acquisitionVehicle` (no "Name"); scoped by requestTypeIds.
 _ACQ_VEHICLES = [
-    {"acquisitionVehicleId": 7, "acquisitionVehicleName": "Contract Vehicle X"},
-    {"acquisitionVehicleId": 8, "acquisitionVehicleName": "Contract Vehicle Y"},
+    {"acquisitionVehicleId": 7, "acquisitionVehicle": "Contract Vehicle X"},
+    {"acquisitionVehicleId": 8, "acquisitionVehicle": "Contract Vehicle Y"},
 ]
 # Field names mirror the live getFundGroupsByUser_post response: id=fundGroupId, label=name.
 _FUND_GROUPS = [
@@ -105,8 +106,7 @@ _SCRIPT = [
     ("done", "finish rule-group selection"),
     ("General Fund", "fund group — single pick (auto-advances)"),
     ("select all", "program offices — all"),
-    ("all", "request types — all"),
-    ("all", "acquisition vehicles — all"),
+    ("all", "request types — all (→ acquisition vehicles auto-skipped to All, FE parity)"),
     ("Baseline for FY26 planning", "description (free text) — header subtitle"),
     ("yes", "target applicable?"),
     ("yes", "include recommended?"),
@@ -180,8 +180,20 @@ async def run(verbose: bool = True) -> list[tuple[str, bool, str]]:
     check("orgIds 'All' expands to explicit office ids (not [])",
           sorted(args.get("orgIds") or []) == [101, 102], args.get("orgIds"))
     check("requestTypes [] == all", args.get("requestTypes") == [], args.get("requestTypes"))
-    check("acquisitionVehicles [] == all", args.get("acquisitionVehicles") == [],
-          args.get("acquisitionVehicles"))
+    check("acquisitionVehicles [] == all (auto-skipped when request types = All)",
+          args.get("acquisitionVehicles") == [], args.get("acquisitionVehicles"))
+    # Acquisition-vehicles picker config (the bug fix): request types carry the numeric id; acq
+    # vehicles are scoped by requestTypeIds, display `acquisitionVehicle`, and skip when types=All.
+    _rt = next(s for s in flows.BASELINE_STEPS if s.field == "requestTypes")
+    _av = next(s for s in flows.BASELINE_STEPS if s.field == "acquisitionVehicles")
+    check("request types picker sends the numeric requestTypeId (not a code)",
+          _rt.value_field == "requestTypeId", _rt.value_field)
+    check("acq-vehicles picker is scoped by requestTypeIds ← requestTypes",
+          _av.source_args_from.get("requestTypeIds") == "requestTypes", _av.source_args_from)
+    check("acq-vehicles picker uses the real display field 'acquisitionVehicle'",
+          _av.label_field == "acquisitionVehicle", _av.label_field)
+    check("acq-vehicles picker skips when request types = All",
+          _av.skip_if_all == "requestTypes", _av.skip_if_all)
     check("Y/N answers captured", args.get("isTargetApplicable") == "Y"
           and args.get("isRecommended") == "Y" and args.get("isDeferred") == "N"
           and args.get("isWithdrawn") == "N")

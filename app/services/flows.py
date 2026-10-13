@@ -1263,6 +1263,10 @@ class PickerStep:
     # orgIds "All" is expanded to every office id (mirrors the FE's allOrgs.map(organizationId)).
     # requestTypes/acquisitionVehicles leave this False: their "All" is an empty list (FE parity).
     expand_all: bool = False
+    # Skip this step (auto-set to "All"/[]) when the named earlier field resolved to "All" — a
+    # DEPENDENT picker with nothing to scope by. Mirrors the FE disabling acquisition vehicles when
+    # request types = All (there are no specific request-type ids to fetch vehicles for).
+    skip_if_all: str = ""
     # Free-text steps only: reject input longer than this many characters (re-prompt), matching the
     # backend column width, and render as a full-width "text" block in the review rail (not a 1-line
     # right-aligned value). 0 = no limit / ordinary scalar.
@@ -1300,13 +1304,19 @@ BASELINE_STEPS: tuple[PickerStep, ...] = (
                multi=True, optional=True, source_args={"applicationId": "3"},
                source_args_from={"fundGroupId": "fundGroupId"}, noun="program office",
                expand_all=True),
+    # requestTypeId (not requestTypeCode): the baseline payload + the acquisition-vehicle fetch both
+    # key off the numeric request-type id (the FE sends String(item.id)); a code would be rejected.
     PickerStep("requestTypes", "Choose request type(s) — or select all",
-               "getActiveRequestTypeMappings_post", "requestTypeName", "requestTypeCode",
+               "getActiveRequestTypeMappings_post", "requestTypeName", "requestTypeId",
                multi=True, optional=True, noun="request type"),
+    # Acquisition vehicles are SCOPED to the chosen request types (the admin tool fetches
+    # getActiveDetailsByRequestTypeIds), and the display field is `acquisitionVehicle` (no "Name").
+    # When request types = All there's nothing to scope by, so the step is skipped (All) — FE parity.
     PickerStep("acquisitionVehicles", "Choose acquisition vehicle(s) — or select all",
                "getActiveAcquisitionVehicleMappingsIds_post",
-               "acquisitionVehicleName", "acquisitionVehicleId", multi=True, optional=True,
-               noun="acquisition vehicle"),
+               "acquisitionVehicle", "acquisitionVehicleId", multi=True, optional=True,
+               noun="acquisition vehicle",
+               source_args_from={"requestTypeIds": "requestTypes"}, skip_if_all="requestTypes"),
     # Description is gathered later (once the scope is defined) and shown as the header SUBTITLE,
     # not as a rail row — so the rail stays focused on the actual data/values.
     PickerStep("description", "Enter a short **description**", maxlen=255, noun="description"),
@@ -1666,10 +1676,23 @@ async def _advance_baseline(flow: dict[str, Any], headers: dict[str, str] | None
         return await _baseline_finalize(flow, headers)
     flow["idx"] += 1
     flow["buf"] = []
-    # Auto-resolve steps that shouldn't be asked when they have a single option (pick it) or none
-    # (skip, leave default) — e.g. the user's sole assigned fund group, or no fund-group access.
-    while flow["idx"] < len(BASELINE_STEPS) and BASELINE_STEPS[flow["idx"]].auto_if_single:
+    # Auto-resolve steps that shouldn't be asked: a dependent step whose scoping field is "All"
+    # (skip → "All"), or a fetched step with a single option (pick it) or none (stop).
+    while flow["idx"] < len(BASELINE_STEPS) and (
+            BASELINE_STEPS[flow["idx"]].auto_if_single or BASELINE_STEPS[flow["idx"]].skip_if_all):
         st = BASELINE_STEPS[flow["idx"]]
+        # Dependent picker with nothing to scope by (e.g. acquisition vehicles when request types =
+        # All) → set "All" and move on, exactly as the FE disables it.
+        if st.skip_if_all and (
+                (flow.get("labels", {}) or {}).get(st.skip_if_all) == "All"
+                or not (flow.get("data", {}) or {}).get(st.skip_if_all)):
+            flow.setdefault("data", {})[st.field] = []
+            flow.setdefault("labels", {})[st.field] = "All"
+            flow["idx"] += 1
+            flow["buf"] = []
+            continue
+        if not st.auto_if_single:        # skip_if_all step, but the dep is NOT "All" → ask it
+            break
         opts = await _fetch_options(st, headers, flow)
         if len(opts) == 1:                          # sole option → pick it
             flow.setdefault("data", {})[st.field] = opts[0]["value"]
