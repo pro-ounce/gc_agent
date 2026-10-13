@@ -271,6 +271,28 @@ def _trigger_checks() -> list[tuple[str, bool, str]]:
     out.append(("seasonal: empty for a different app in-season",
                 seasonal.seasonal_hints("ADMINISTRATION", _dt.datetime(2026, 4, 1)) == [],
                 "fired for wrong app"))
+
+    # Data-driven store: the federal seed is non-empty and well-formed, validation drops junk and
+    # keeps a good season, and every seed hint's `send` arms its flow (data-driven = still real flows).
+    from app.services import seasonal_store
+    seed = seasonal_store.federal_calendar()
+    out.append(("seasonal store: federal seed non-empty + well-formed",
+                bool(seed) and all({"name", "app", "months", "enabled", "hints"} <= set(s) for s in seed),
+                "seed malformed"))
+    # The baseline hint opens a maybe_start guided flow, so it must arm. ("set up a data call" is an
+    # LLM-driven data-call action, not a maybe_start flow — see gc-agent-seasonal-hints — so it won't.)
+    out.append(("seasonal store: seed baseline hint arms its flow",
+                any(arms(h["send"]) for s in seed for h in s["hints"] if "baseline" in h["send"].lower()),
+                "seed baseline hint does not arm"))
+    cleaned = seasonal_store._clean_list([
+        {"name": "Junk"},                                        # no months/hints → dropped
+        "not-a-dict",                                             # wrong type → dropped
+        {"name": "Audit", "months": "1-2", "enabled": True,
+         "hints": [{"label": "Review baselines", "send": "generate a baseline"}]},
+    ])
+    out.append(("seasonal store: validation drops junk, keeps a valid season",
+                len(cleaned) == 1 and cleaned[0]["name"] == "Audit",
+                f"got {cleaned!r}"))
     return out
 
 

@@ -7,39 +7,20 @@ suggestion balloons in the widget. Each hint's `send` is the exact TAUGHT phrasi
 recognises (see flows._BASELINE_INTENT_RE / maybe_start), so tapping a seasonal hint opens the REAL
 guided flow rather than a fake intro.
 
-The season windows are ADMIN-TUNABLE from /admin (runtime_config): a master toggle plus a per-season
-"active months" string that an admin can edit WITHOUT a restart. The code values here are the
-fallback defaults. The current month + current application decide which hints fire. Returns ready
-balloon dicts ({"label","send"}).
+Seasons are DATA, not code: the list (name / app / active months / hints / enabled) lives in
+services/seasonal_store.py and is fully editable from /admin — adding or removing a season, or
+loading the federal-calendar seed, needs no deploy. A master on/off toggle (SEASONAL_HINTS_ENABLED)
+lives in runtime_config. The current month + current application decide which hints fire. Returns
+ready balloon dicts ({"label","send"}).
 """
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
 
-# Master on/off + one "active months" tunable per season, surfaced in /admin via tunable_specs().
+from . import seasonal_store
+
 ENABLED_KEY = "SEASONAL_HINTS_ENABLED"
-
-
-def _months_key(name: str) -> str:
-    return f"SEASON_{name.strip().upper().replace(' ', '_')}_MONTHS"
-
-
-# Each season: a default "active months" string (TUNABLE per season), the application code it applies
-# to (None = any app), and the workflow hints to promote (label, send). `send` MUST be a phrasing the
-# flow trigger recognises. Months accept "3-10" (range), "11-2" (wraps year-end), or "3,4,5" (list).
-_SEASONS: list[dict[str, Any]] = [
-    {
-        "name": "Formulation",
-        "months": "3-10",                       # Mar–Oct: agencies build next-year baselines + data calls
-        "app": "FORMULATION",
-        "hints": [
-            ("🗓️ Generate a formulation baseline", "generate a formulation baseline"),
-            ("📣 Set up a data call", "set up a data call"),
-        ],
-    },
-    # Add more seasons/apps here — each gets its own admin "active months" tunable automatically.
-]
 
 
 def _parse_months(spec: str) -> set[int]:
@@ -69,33 +50,24 @@ def _enabled() -> bool:
         return True
 
 
-def _active_months(season: dict[str, Any]) -> set[int]:
-    """The season's active months — the admin override if set, else the code default."""
-    raw = season.get("months", "")
-    try:
-        from . import runtime_config
-        raw = runtime_config.get_str(_months_key(season["name"])) or raw
-    except Exception:  # noqa: BLE001
-        pass
-    return _parse_months(raw)
+def _matches(season: dict[str, Any], app_code: str, month: int) -> bool:
+    if not season.get("enabled", True):
+        return False
+    app = season.get("app")
+    if app is not None and str(app).strip().upper() != app_code:
+        return False
+    return month in _parse_months(season.get("months", ""))
 
 
 def tunable_specs() -> list[dict[str, Any]]:
-    """Admin-tunable specs for runtime_config: a master toggle + a per-season 'active months'
-    string. Surfaced in the /admin UI; defaults are the code values above."""
-    specs: list[dict[str, Any]] = [{
+    """The one scalar tunable for runtime_config/admin: the master on/off. The season DEFINITIONS
+    (add/remove/edit) are data-driven via seasonal_store + the /admin/seasons endpoints."""
+    return [{
         "key": ENABLED_KEY, "label": "Seasonal hints", "group": "Seasonal hints", "type": "bool",
         "default": True,
-        "description": "Lead the widget suggestions with season-relevant workflows during the budget cycle.",
+        "description": "Lead the widget suggestions with season-relevant workflows during the "
+                       "budget cycle. Edit the seasons themselves under the Seasons tab.",
     }]
-    for s in _SEASONS:
-        specs.append({
-            "key": _months_key(s["name"]), "label": f"{s['name']} — active months",
-            "group": "Seasonal hints", "type": "string", "default": s["months"],
-            "description": (f"Months (1-12) when the {s['name']} hints show for "
-                            f"{s['app'] or 'any app'}. e.g. '3-10', '11-2' (wraps), or '3,4,5'."),
-        })
-    return specs
 
 
 def current_season(app_code: str | None, when: datetime | None = None) -> str | None:
@@ -104,9 +76,9 @@ def current_season(app_code: str | None, when: datetime | None = None) -> str | 
         return None
     code = (app_code or "").strip().upper()
     month = (when or datetime.now(timezone.utc)).month
-    for s in _SEASONS:
-        if (s["app"] is None or s["app"] == code) and month in _active_months(s):
-            return s["name"]
+    for s in seasonal_store.get_seasons():
+        if _matches(s, code, month):
+            return s.get("name")
     return None
 
 
@@ -120,7 +92,7 @@ def seasonal_hints(app_code: str | None, when: datetime | None = None) -> list[d
     code = (app_code or "").strip().upper()
     month = (when or datetime.now(timezone.utc)).month
     out: list[dict[str, str]] = []
-    for s in _SEASONS:
-        if (s["app"] is None or s["app"] == code) and month in _active_months(s):
-            out.extend({"label": lbl, "send": send} for lbl, send in s["hints"])
+    for s in seasonal_store.get_seasons():
+        if _matches(s, code, month):
+            out.extend({"label": h["label"], "send": h["send"]} for h in s.get("hints", []))
     return out

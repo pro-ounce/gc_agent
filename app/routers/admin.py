@@ -151,6 +151,43 @@ async def admin_delete_balloons(request: Request, app: str):
     return {"app": app.upper(), "overrides": balloon_store.all_overrides()}
 
 
+# ── seasonal workflow hints (data-driven budget-cycle calendar) ─────────────────
+@router.get("/admin/seasons", summary="Seasonal workflow-hint calendar (+ the federal seed)")
+async def admin_get_seasons(request: Request):
+    _guard(request)
+    from ..services import seasonal, seasonal_store
+    return {
+        "seasons": seasonal_store.get_seasons(),
+        "federal_calendar": seasonal_store.federal_calendar(),
+        "active": seasonal.current_season(None),  # active season regardless of app (None = any)
+    }
+
+
+@router.put("/admin/seasons", summary="Replace the full seasonal calendar")
+async def admin_set_seasons(request: Request):
+    _guard(request)
+    from ..services import seasonal_store
+    body = await request.json()
+    raw = body.get("seasons") if isinstance(body, dict) else body
+    saved = seasonal_store.set_seasons(raw)
+    return {"seasons": saved}
+
+
+@router.post("/admin/seasons/seed-federal", summary="Load the built-in federal-calendar seed")
+async def admin_seed_federal_seasons(request: Request):
+    _guard(request)
+    from ..services import seasonal_store
+    saved = seasonal_store.set_seasons(seasonal_store.federal_calendar())
+    return {"seasons": saved}
+
+
+@router.delete("/admin/seasons", summary="Reset the calendar to the federal seed")
+async def admin_reset_seasons(request: Request):
+    _guard(request)
+    from ..services import seasonal_store
+    return {"seasons": seasonal_store.reset()}
+
+
 # ── workflows (author/edit the node-graph workflows that the chat engine runs) ──────
 # The node vocabulary the authoring UI offers — mirrors workflows/README.md so the console is
 # self-documenting and a manager/developer can build a flow without reading the source.
