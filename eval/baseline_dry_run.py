@@ -128,7 +128,7 @@ async def run(verbose: bool = True) -> list[tuple[str, bool, str]]:
           (s.metadata.get("flow") or {}).get("name") == "formulation_baseline")
     # Must carry the progress rail from the INTRO so the widget opens a FlowWindow (not loose
     # chat bubbles) — the title is what the window header shows.
-    rail_ok = fr.progress is not None and fr.progress.get("title") == "Generate FORMULATION baseline"
+    rail_ok = fr.progress is not None and fr.progress.get("title") == "Baseline Generation"
     # The flow opens on the FIRST question — now the Title (→ header name). The fiscal-year picker chips
     # arrive on the NEXT result (after the title is answered), so capture them at i == 0 in the loop.
     if verbose:

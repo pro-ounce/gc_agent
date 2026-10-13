@@ -1396,7 +1396,7 @@ def _baseline_progress(flow: dict[str, Any]) -> dict[str, Any]:
     total = len(BASELINE_STEPS)
     done_n = sum(1 for st in BASELINE_STEPS if st.field in labels)
     return {
-        "title": "Generate FORMULATION baseline",
+        "title": "Baseline Generation",   # client-facing display name (not the raw tool/flow name)
         "primary": labels.get("baselineTitle", "") or "",
         "primaryActive": bool(collecting and idx == title_idx and not labels.get("baselineTitle")),
         "subtitle": labels.get("description", "") or "",
