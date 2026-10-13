@@ -175,7 +175,10 @@ async def run(verbose: bool = True) -> list[tuple[str, bool, str]]:
           args.get("fiscalYear"))
     check("businessRuleGroups sends ids [11]", args.get("businessRuleGroups") == [11],
           args.get("businessRuleGroups"))
-    check("orgIds [] == all", args.get("orgIds") == [], args.get("orgIds"))
+    # orgIds "All" EXPANDS to every office id (backend rejects an empty list: "Invalid org ids");
+    # requestTypes/acquisitionVehicles "All" stay empty (FE parity).
+    check("orgIds 'All' expands to explicit office ids (not [])",
+          sorted(args.get("orgIds") or []) == [101, 102], args.get("orgIds"))
     check("requestTypes [] == all", args.get("requestTypes") == [], args.get("requestTypes"))
     check("acquisitionVehicles [] == all", args.get("acquisitionVehicles") == [],
           args.get("acquisitionVehicles"))

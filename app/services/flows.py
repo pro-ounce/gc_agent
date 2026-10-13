@@ -1258,6 +1258,11 @@ class PickerStep:
     # Resolve without asking when the fetch yields a single option (auto-pick) or none (skip, leave
     # default) — e.g. the user's sole assigned fund group, or no fund-group access at all.
     auto_if_single: bool = False
+    # "All" must be sent as the EXPLICIT list of every option value (not an empty list) — the
+    # backend's normalizeOrgIds requires a numeric CSV and rejects empty as "Invalid org ids", so
+    # orgIds "All" is expanded to every office id (mirrors the FE's allOrgs.map(organizationId)).
+    # requestTypes/acquisitionVehicles leave this False: their "All" is an empty list (FE parity).
+    expand_all: bool = False
     # Free-text steps only: reject input longer than this many characters (re-prompt), matching the
     # backend column width, and render as a full-width "text" block in the review rail (not a 1-line
     # right-aligned value). 0 = no limit / ordinary scalar.
@@ -1293,7 +1298,8 @@ BASELINE_STEPS: tuple[PickerStep, ...] = (
     PickerStep("orgIds", "Choose program office(s) — or select all",
                "getOrganizationsByUser_post", "organizationName", "organizationId",
                multi=True, optional=True, source_args={"applicationId": "3"},
-               source_args_from={"fundGroupId": "fundGroupId"}, noun="program office"),
+               source_args_from={"fundGroupId": "fundGroupId"}, noun="program office",
+               expand_all=True),
     PickerStep("requestTypes", "Choose request type(s) — or select all",
                "getActiveRequestTypeMappings_post", "requestTypeName", "requestTypeCode",
                multi=True, optional=True, noun="request type"),
@@ -1766,13 +1772,13 @@ async def _baseline(session: Any, flow: dict[str, Any], msg: str,
         # marks these steps as multi (distinct colour + hint) so the extra step reads clearly.
         buf: list[dict[str, Any]] = flow.setdefault("buf", [])
         if step.optional and _ALL_RE.search(msg) and not _match_opt(msg, options):
-            flow["data"][step.field] = []               # empty == all
+            flow["data"][step.field] = [o["value"] for o in options] if step.expand_all else []
             flow["labels"][step.field] = "All"
             return await _advance_baseline(flow, headers)
         if _DONE_RE.search(msg) or (step.optional and _SKIP_RE.search(msg)):
             if not buf:
                 if step.optional:
-                    flow["data"][step.field] = []
+                    flow["data"][step.field] = [o["value"] for o in options] if step.expand_all else []
                     flow["labels"][step.field] = "All"
                     return await _advance_baseline(flow, headers)
                 return await _baseline_prompt(flow, step, headers,
