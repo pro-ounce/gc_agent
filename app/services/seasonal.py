@@ -82,6 +82,16 @@ def current_season(app_code: str | None, when: datetime | None = None) -> str | 
     return None
 
 
+def active_seasons(when: datetime | None = None) -> list[str]:
+    """Names of every season whose window is open at `when` (default: now, UTC), IGNORING which
+    application is in context — for the /admin indicator ('what's in season right now')."""
+    if not _enabled():
+        return []
+    month = (when or datetime.now(timezone.utc)).month
+    return [s.get("name") for s in seasonal_store.get_seasons()
+            if s.get("enabled", True) and month in _parse_months(s.get("months", ""))]
+
+
 def seasonal_hints(app_code: str | None, when: datetime | None = None) -> list[dict[str, str]]:
     """High-priority balloons for the current season + application, or [] when out of season / off.
 

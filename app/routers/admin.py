@@ -156,10 +156,11 @@ async def admin_delete_balloons(request: Request, app: str):
 async def admin_get_seasons(request: Request):
     _guard(request)
     from ..services import seasonal, seasonal_store
+    active = seasonal.active_seasons()  # in-window right now, regardless of which app is in context
     return {
         "seasons": seasonal_store.get_seasons(),
         "federal_calendar": seasonal_store.federal_calendar(),
-        "active": seasonal.current_season(None),  # active season regardless of app (None = any)
+        "active": ", ".join(active) if active else None,
     }
 
 
