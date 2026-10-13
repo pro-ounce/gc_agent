@@ -35,6 +35,30 @@ def _hkey_archived(session_id: str, ms: int) -> str:
     return f"{_HISTORY_PREFIX}{session_id}:{ms}"
 
 
+def _category(data: dict) -> str:
+    """A coarse CATEGORY for a conversation (for the admin history filters) — from the active
+    flow if known, else a keyword scan of the turns."""
+    md = data.get("metadata") or {}
+    flow = md.get("flow") if isinstance(md.get("flow"), dict) else {}
+    name = (flow or {}).get("name") or ""
+    if name == "formulation_baseline":
+        return "Baseline"
+    if name in ("create_user", "entity_create", "remove_role", "onboard"):
+        return "Access"
+    if name == "data_call":
+        return "Data call"
+    txt = " ".join(str(m.get("content") or "") for m in (data.get("messages") or [])).lower()
+    if "baseline" in txt:
+        return "Baseline"
+    if any(w in txt for w in ("role", "application", "user", "onboard", "access")):
+        return "Access"
+    if "data call" in txt:
+        return "Data call"
+    if "report" in txt:
+        return "Reporting"
+    return "General"
+
+
 def count_sessions() -> int:
     """Approximate active-session count (for metrics)."""
     from ..connections import redis_client
@@ -116,8 +140,10 @@ class SessionService:
                 continue
             msgs = data.get("messages") or []
             out.append({
+                "key": key,                                      # drill-down handle (get_history_detail)
                 "session_id": data.get("session_id"),
                 "archived": ":" in key[len(_HISTORY_PREFIX):],   # True → immutable, cleared convo
+                "category": _category(data),                     # Baseline / Access / Data call / …
                 "message_count": len(msgs),
                 "created_at": data.get("created_at", ""),
                 "updated_at": data.get("updated_at", ""),
@@ -126,6 +152,13 @@ class SessionService:
                     (m.get("content") for m in reversed(msgs) if m.get("role") == "user"), None),
             })
         return sorted(out, key=lambda s: s.get("updated_at") or "", reverse=True)
+
+    def get_history_detail(self, key: str) -> dict | None:
+        """One preserved conversation's full record (messages), by its `history:*` archive key."""
+        if not key or not key.startswith(_HISTORY_PREFIX):
+            return None
+        data = redis_get_json(key)
+        return data if isinstance(data, dict) else None
 
     def list_sessions(self, user_id: str | None = None) -> list[dict]:
         """List all active sessions (optionally filtered by user_id)."""

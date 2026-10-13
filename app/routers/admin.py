@@ -744,6 +744,89 @@ def _recent_turns(limit: int = 40) -> list[dict]:
     return out[:limit]
 
 
+@router.get("/admin/storage", summary="Storage & durability — data stores, sinks, retention, snapshots")
+async def admin_storage(request: Request):
+    """One consolidated view for the Administration 'Storage & Durability' console: where each
+    stream is stored (DATA STORES), what writes where (SINKS), how long it's kept (RETENTION),
+    and how it's protected (DURABILITY + SNAPSHOTS)."""
+    _guard(request)
+    from ..connections import store_health
+    from ..commons.config import cfg
+    from ..commons import logger as _L
+    from ..services import session_service as _ss
+
+    sh = store_health()
+    backend, status = sh.get("backend"), sh.get("status")
+    snap = [s.strip() for s in (cfg.OPENSEARCH_SNAPSHOT_INDICES or "").split(",") if s.strip()]
+    try:
+        bk = backup_service.overview()
+    except Exception:  # noqa: BLE001
+        bk = {}
+    kv, audit = cfg.OPENSEARCH_INDEX, cfg.OPENSEARCH_AUDIT_INDEX
+    ttl_h = max(1, int(cfg.SESSION_TTL_SECONDS) // 3600)
+    data_stores = [
+        {"name": kv, "role": "Sessions + history archive", "backend": backend,
+         "status": status, "snapshotted": kv in snap},
+        {"name": audit, "role": "Audit trail", "backend": backend,
+         "status": status, "snapshotted": audit in snap},
+        {"name": "agent-tools", "role": "Tool catalogue", "backend": backend,
+         "status": status, "snapshotted": "agent-tools" in snap},
+        {"name": "admin_configs", "role": "Admin tunables", "backend": backend,
+         "status": status, "snapshotted": "admin_configs" in snap},
+    ]
+    sinks = [
+        {"stream": "History", "primary": f"{kv} · history:*",
+         "secondary": "—", "writes": "every turn + an immutable archive on new-chat"},
+        {"stream": "Audit", "primary": audit,
+         "secondary": f"{_L._METRICS_FILE} (rotating · last {_L._METRICS_ROTATIONS}) · "
+                      f"in-memory ring ({len(_L._LOG_RING)})",
+         "writes": "metric-relevant records, drained off the hot-path"},
+    ]
+    retention = [
+        {"stream": "Live session", "policy": f"{ttl_h}h TTL", "kind": "ttl"},
+        {"stream": "History archive", "policy": "Indefinite (no TTL)", "kind": "indefinite"},
+        {"stream": "Audit — OpenSearch", "policy": "Indefinite", "kind": "indefinite"},
+        {"stream": "Audit — local file", "policy": f"Rotating · last {_L._METRICS_ROTATIONS}", "kind": "rotate"},
+    ]
+    durability = {
+        "backend": backend, "backend_status": status,
+        "snapshot_repo": cfg.OPENSEARCH_SNAPSHOT_REPO, "snapshot_indices": snap,
+        "backup_status": (bk or {}).get("status"),
+        "last_snapshot": (bk or {}).get("latest"),
+        "last_snapshot_age_hours": (bk or {}).get("age_hours"),
+        "sessions_active": _ss.count_sessions(),
+    }
+    return {"data_stores": data_stores, "sinks": sinks, "retention": retention,
+            "durability": durability, "snapshots": bk}
+
+
+@router.get("/admin/history", summary="Conversation history (durable archive) — filterable")
+async def admin_history(request: Request):
+    """The durable conversation history (current + immutable archived), newest first, with a coarse
+    category for filtering. Independent of the live-session TTL. Drill down via /admin/history/detail."""
+    _guard(request)
+    from ..services import session_service as _ss
+    user = request.query_params.get("user") or None
+    items = _ss.session_service.list_history(user_id=user)
+    cats: dict[str, int] = {}
+    for it in items:
+        cats[it.get("category", "General")] = cats.get(it.get("category", "General"), 0) + 1
+    return {"conversations": items, "count": len(items), "categories": cats}
+
+
+@router.get("/admin/history/detail", summary="One preserved conversation's full transcript")
+async def admin_history_detail(request: Request):
+    _guard(request)
+    from ..services import session_service as _ss
+    key = request.query_params.get("key") or ""
+    data = _ss.session_service.get_history_detail(key)
+    if data is None:
+        return JSONResponse({"detail": "not found"}, status_code=404)
+    return {"session_id": data.get("session_id"), "user_id": data.get("user_id"),
+            "created_at": data.get("created_at"), "updated_at": data.get("updated_at"),
+            "messages": data.get("messages") or []}
+
+
 @router.get("/admin/backup", summary="Backup overview — repo, schedule, snapshots, stats")
 async def admin_backup_overview(request: Request):
     _guard(request)
