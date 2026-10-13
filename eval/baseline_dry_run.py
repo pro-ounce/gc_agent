@@ -189,6 +189,38 @@ async def run(verbose: bool = True) -> list[tuple[str, bool, str]]:
     check("applicationCode FORMULATION", args.get("applicationCode") == "FORMULATION",
           args.get("applicationCode"))
 
+    # ── Review-stage "adjust" (allow the changes back): a tapped row / "change the X" re-opens
+    #    ONE field, then drops straight back to review with the new value (no re-walk). ──
+    q_idx = next(i for i, st in enumerate(flows.BASELINE_STEPS) if st.field == "quarter")
+    fy_idx = next(i for i, st in enumerate(flows.BASELINE_STEPS) if st.field == "fiscalYear")
+    check("adjust: 'change the quarter' resolves to the quarter step",
+          flows._match_baseline_field("change the quarter") == q_idx)
+    check("adjust: 'target FY' beats the 'target' Y/N flag (longest alias wins)",
+          flows._match_baseline_field("edit the target fy") == fy_idx)
+    check("adjust: structured 'edit:quarter' resolves to the quarter step",
+          flows._match_baseline_field("edit:quarter") == q_idx)
+    _rail_steps = (flows._baseline_progress(s.metadata["flow"]).get("steps") or [])
+    check("adjust: every review rail row carries a 'field' key (for the tappable edit)",
+          bool(_rail_steps) and all("field" in st for st in _rail_steps),
+          [st.get("label") for st in _rail_steps if "field" not in st])
+    fr_edit = await flows.handle(s, "edit:quarter", {})
+    flow_now = s.metadata.get("flow") or {}
+    check("adjust: a tapped review row re-opens that step (confirm → collect)",
+          flow_now.get("stage") == "collect" and flow_now.get("idx") == q_idx
+          and flow_now.get("editing") is True,
+          f"stage={flow_now.get('stage')} idx={flow_now.get('idx')} editing={flow_now.get('editing')}")
+    check("adjust: the re-opened step leaves the review/confirm state",
+          fr_edit.progress is not None and fr_edit.progress.get("confirming") is False)
+    fr_back = await flows.handle(s, "Q3", {})
+    flow_back = s.metadata.get("flow") or {}
+    check("adjust: answering returns to review (pending re-armed, editing cleared)",
+          getattr(fr_back, "pending", None) is not None
+          and flow_back.get("stage") == "confirm" and not flow_back.get("editing"),
+          f"stage={flow_back.get('stage')} pending={bool(getattr(fr_back,'pending',None))}")
+    check("adjust: the edited value took (quarter → Q3, not the original Q1)",
+          (getattr(fr_back, "pending", {}) or {}).get("tool_args", {}).get("quarter") == "Q3",
+          (getattr(fr_back, "pending", {}) or {}).get("tool_args", {}).get("quarter"))
+
     return r
 
 

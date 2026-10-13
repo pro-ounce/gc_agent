@@ -610,6 +610,13 @@ async def handle(session: Any, message: str, headers: dict[str, str] | None) -> 
     if _is_cancel(msg):
         return _cancel_flow(session, flow)
 
+    # Baseline review "adjust": a tapped review row (sends `edit:<field>`) or a "change the <field>"
+    # phrase re-opens just that one step. Route it to the flow even when phrased as a question, so
+    # the break-out guard below doesn't mistake it for a new intent and discard the whole flow.
+    if name == "formulation_baseline" and flow.get("stage") == "confirm" \
+            and not _BASELINE_INTENT_RE.search(msg) and _match_baseline_field(msg) is not None:
+        return _bp(await _baseline(session, flow, msg, headers), session.metadata.get("flow"))
+
     # SELF-HEALING: a clear new flow-intent that isn't this flow's continuation breaks out —
     # abandon the stale flow and re-route the message fresh (maybe_start picks it up). This stops
     # an abandoned flow in a long-lived session from eating "remove a role" / "create a role".
@@ -1344,7 +1351,8 @@ def _baseline_progress(flow: dict[str, Any]) -> dict[str, Any]:
         #            items (chips) in a full-width block, so a long selection never truncates.
         #  • text  → free-text (description): the full value in a full-width wrapping block.
         #  • scalar→ a short right-aligned 1-line value (FY, title, fund group, Y/N, …).
-        step: dict[str, Any] = {"label": BASELINE_LABELS.get(st.field, st.field), "state": state}
+        step: dict[str, Any] = {"label": BASELINE_LABELS.get(st.field, st.field), "state": state,
+                                "field": st.field}
         if st.multi:
             if isinstance(val, list):
                 step["kind"] = "list"
@@ -1540,8 +1548,8 @@ async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
 def _baseline_summary(flow: dict[str, Any]) -> str:
     # The review rail above already lists every field, so the confirm prompt stays short rather than
     # repeating the whole summary as a bullet list (which was redundant and overflowed the card).
-    return ("Everything's filled in — **review the details above**, then **Confirm** to generate the "
-            "FORMULATION baseline (or keep typing to adjust).")
+    return ("Everything's filled in — **review the details above** (tap any detail, or type e.g. "
+            "*“change the quarter”*, to adjust), then **Confirm** to generate the FORMULATION baseline.")
 
 
 BASELINE_CONFIRM_FIELDS = tuple(s.field for s in BASELINE_STEPS)
@@ -1556,9 +1564,53 @@ def _baseline_finalize(flow: dict[str, Any]) -> FlowResult:
                                "summary": "Generate a FORMULATION budget baseline"})
 
 
+# Review-stage "adjust": map a free-text "change the <field>" — or the widget's structured
+# `edit:<field>` command from a tapped review row — to the BASELINE_STEPS index to re-open.
+_BASELINE_FIELD_ALIASES: dict[str, tuple[str, ...]] = {
+    "baselineTitle": ("title", "name"),
+    "sourceFiscalYear": ("source fiscal year", "source fy", "source year", "bfy"),
+    "fiscalYear": ("target fiscal year", "target fy", "target year", "fiscal year"),
+    "quarter": ("quarter", "qtr"),
+    "businessRuleGroups": ("business rule group", "business rule", "rule groups", "rule group"),
+    "fundGroupId": ("fund group",),
+    "orgIds": ("program offices", "program office", "offices", "office", "org"),
+    "requestTypes": ("request types", "request type"),
+    "acquisitionVehicles": ("acquisition vehicles", "acquisition vehicle", "vehicles", "vehicle"),
+    "description": ("description", "desc", "summary"),
+    "isTargetApplicable": ("target applicable", "target"),
+    "isRecommended": ("recommended", "recommend"),
+    "isDeferred": ("deferred", "defer"),
+    "isWithdrawn": ("withdrawn", "withdraw"),
+}
+
+
+def _match_baseline_field(msg: str) -> int | None:
+    """Which baseline step the user wants to re-open at the review stage (or None)."""
+    low = (msg or "").strip().lower()
+    if not low:
+        return None
+    m = re.match(r"edit:([a-z_]+)$", low, re.I)          # structured command from a tapped row
+    if m:
+        key = m.group(1).lower()
+        return next((i for i, st in enumerate(BASELINE_STEPS) if st.field.lower() == key), None)
+    # Natural phrasing: the LONGEST matching alias wins, so "target FY" beats the "target" Y/N flag.
+    best_i, best_len = None, 0
+    for i, st in enumerate(BASELINE_STEPS):
+        for a in _BASELINE_FIELD_ALIASES.get(st.field, ()):
+            if a in low and len(a) > best_len:
+                best_i, best_len = i, len(a)
+    return best_i
+
+
 async def _advance_baseline(flow: dict[str, Any], headers: dict[str, str] | None,
                             prefix: str = "") -> FlowResult:
     """Move to the next step and prompt it; finalize (confirm hand-off) when past the last."""
+    # Editing one field from the review step: the caller just stored the new value — jump straight
+    # back to the review/confirm instead of walking all the remaining steps again.
+    if flow.pop("editing", False):
+        flow["buf"] = []
+        flow["stage"] = "confirm"
+        return _baseline_finalize(flow)
     flow["idx"] += 1
     flow["buf"] = []
     # Auto-resolve steps that shouldn't be asked when they have a single option (pick it) or none
@@ -1595,8 +1647,24 @@ async def _baseline(session: Any, flow: dict[str, Any], msg: str,
         return await _baseline_prompt(flow, BASELINE_STEPS[0], headers)
 
     if flow.get("stage") != "collect":
-        # awaiting Confirm/Cancel buttons
-        return FlowResult(message="Please use **Confirm** or **Cancel** above to finish.")
+        # Confirm/review stage. Besides the Confirm/Cancel buttons, honour "keep typing to adjust":
+        # name a detail (or tap a review row, which sends `edit:<field>`) to re-open JUST that step
+        # and drop straight back to the review once it's answered.
+        if re.search(r"\bcancel\b", msg, re.I) and not _YES.search(msg):
+            return _cancel_flow(session, flow)
+        tgt = _match_baseline_field(msg)
+        if tgt is None:
+            return FlowResult(message=(
+                "Tell me which detail to change — e.g. *“change the quarter”*, or tap a row above — "
+                "or use **Confirm** / **Cancel** to finish."))
+        flow["stage"] = "collect"
+        flow["idx"] = tgt
+        flow["buf"] = []
+        flow["editing"] = True
+        st = BASELINE_STEPS[tgt]
+        noun = st.noun or BASELINE_LABELS.get(st.field, "value").lower()
+        return await _baseline_prompt(flow, st, headers,
+                                      prefix=f"Sure — let's update the **{noun}**. ")
 
     step = BASELINE_STEPS[flow["idx"]]
 
