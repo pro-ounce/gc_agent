@@ -1366,6 +1366,10 @@ def _baseline_progress(flow: dict[str, Any]) -> dict[str, Any]:
             step["w"] = 4
         else:
             step["w"] = 6
+        # The Y/N group always starts its own row (4-up) so the flags never backfill leftover space
+        # and read as a clean, separate block — regardless of how the pickers above happen to pack.
+        if st.field == "isTargetApplicable":
+            step["rowbreak"] = True
         steps.append(step)
     steps.append({"label": "Review & confirm", "value": "", "kind": "scalar", "w": 12,
                   "state": "current" if stage == "confirm" else "todo"})
