@@ -141,7 +141,8 @@ class FlowResult:
 
 def _chip(label: str, send: str | None = None, icon: str | None = None,
           selectable: bool = True, noun: str | None = None,
-          selected: bool = False, multi: bool = False) -> dict[str, Any]:
+          selected: bool = False, multi: bool = False,
+          count: int | None = None) -> dict[str, Any]:
     c = {"label": label, "send": send if send is not None else label, "icon": icon,
          "selectable": selectable}
     # Field-picker chips carry the singular noun of what they pick ("fiscal year", "program
@@ -157,6 +158,10 @@ def _chip(label: str, send: str | None = None, icon: str | None = None,
     # or more" hint — making the extra Continue step read as deliberate, not a surprise.
     if multi:
         c["multi"] = True
+    # The multi-select "Done" control chip carries how many are picked so far → the widget labels
+    # the finish button "Done · N".
+    if count is not None:
+        c["count"] = count
     return c
 
 
@@ -1492,13 +1497,14 @@ async def start_formulation_baseline(session: Any, headers: dict[str, str] | Non
     return _bp(await _baseline_prompt(flow, BASELINE_STEPS[0], headers), flow)
 
 
-def _baseline_control_chips(step: PickerStep, has_buf: bool) -> list[dict[str, Any]]:
+def _baseline_control_chips(step: PickerStep, buf_count: int = 0) -> list[dict[str, Any]]:
     tail: list[dict[str, Any]] = []
     if step.multi:
         # Only offer "Done" once something is picked — a bare "Done" before any selection is
-        # just confusing (there's nothing to be done yet).
-        if has_buf:
-            tail.append(_chip("Done selecting", "done", icon="check"))
+        # just confusing (there's nothing to be done yet). Carry the running count so the widget
+        # can label the finish control "Done · N".
+        if buf_count:
+            tail.append(_chip("Done selecting", "done", icon="check", count=buf_count))
         if step.optional:
             tail.append(_chip("Select all", "select all", icon="app"))
     if step.optional and not step.multi:
@@ -1516,7 +1522,7 @@ async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
     flow.setdefault("opts", {})[step.field] = options          # cache for matching/summary
     if not options:
         return FlowResult(message=f"{prefix}{step.prompt} (type a value)",
-                          suggestions=_baseline_control_chips(step, bool(flow.get("buf"))))
+                          suggestions=_baseline_control_chips(step, len(flow.get("buf") or [])))
     icon = "role" if step.multi else "app"
     # Values already picked this step, so their chips render as selected (check + filled).
     picked = {str(b.get("value")) for b in (flow.get("buf") or [])}
@@ -1542,7 +1548,7 @@ async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
             bits.append(f"showing {MAX_CHIPS} of {len(options)}")
         note = f"\n\n*{' · '.join(bits)} — or type a name.*" if bits else ""
     return FlowResult(message=f"{prefix}{step.prompt}{note}",
-                      suggestions=chips + _baseline_control_chips(step, bool(flow.get("buf"))))
+                      suggestions=chips + _baseline_control_chips(step, len(flow.get("buf") or [])))
 
 
 def _baseline_summary(flow: dict[str, Any]) -> str:
@@ -1675,6 +1681,13 @@ async def _baseline(session: Any, flow: dict[str, Any], msg: str,
         text = re.sub(r"\s+", " ", msg.replace("\r", " ").replace("\n", " ")).strip()
         if not text:
             return FlowResult(message=step.prompt)
+        # Don't let the START phrase become the title. A leftover flow (e.g. after a reload — the
+        # session is server-side) can route a repeated "generate a formulation baseline" into the
+        # title step; no one names a baseline that, so re-ask instead of storing the trigger.
+        if step.field == "baselineTitle" and _BASELINE_INTENT_RE.search(text):
+            return await _baseline_prompt(
+                flow, step, headers,
+                prefix="Let's name it first — give the baseline a short, descriptive title. ")
         if step.maxlen and len(text) > step.maxlen:
             return await _baseline_prompt(
                 flow, step, headers,
@@ -1789,9 +1802,13 @@ def on_decline(session: Any) -> FlowResult | None:
         return None
     flow = session.metadata["flow"]
     if flow.get("name") == "formulation_baseline":
-        # The single mutation is the whole point — declining it cancels the run cleanly.
+        # The single mutation is the whole point — declining it cancels the run cleanly. Carry a
+        # terminal rail so the widget collapses the whole run into one card instead of leaving the
+        # answered steps as loose bubbles.
+        rail = terminal_progress(flow, cancelled=True)
         session.metadata.pop("flow", None)
-        return FlowResult(message="Okay — I won't generate the baseline. Nothing was saved.", done=True)
+        return FlowResult(message="Okay — I won't generate the baseline. Nothing was saved.",
+                          done=True, progress=rail)
     if flow.get("name") == "data_call":
         flow.pop("currentGroup", None); flow.pop("currentDays", None)
         # declining an attendee → still offer a reminder; declining a reminder → finish
@@ -1800,8 +1817,10 @@ def on_decline(session: Any) -> FlowResult | None:
     if flow.get("name") == "entity_create":
         # the single create is the whole point — declining cancels the run cleanly
         label = _ENTITY_CREATE.get(flow.get("entity", ""), {}).get("label", "item")
+        rail = terminal_progress(flow, cancelled=True)
         session.metadata.pop("flow", None)
-        return FlowResult(message=f"Okay — I won't create the {label}. Nothing was saved.", done=True)
+        return FlowResult(message=f"Okay — I won't create the {label}. Nothing was saved.",
+                          done=True, progress=rail)
     flow["currentAppId"] = flow["currentAppName"] = flow["currentRoleName"] = None
     flow["stage"] = "offer_apps"
     return _offer_another(flow, prefix="Okay, skipped that one. ")
@@ -2357,9 +2376,10 @@ def _remove_progress(flow: dict[str, Any]) -> dict[str, Any]:
     return {"title": "Remove application role", "current": cur_i + 1, "total": len(order), "steps": steps}
 
 
-def terminal_progress(flow: dict[str, Any] | None) -> dict[str, Any] | None:
+def terminal_progress(flow: dict[str, Any] | None, cancelled: bool = False) -> dict[str, Any] | None:
     """A completed rail for a just-finished flow: every step done + complete=True, so the widget
-    can lock the workflow window as DONE and prompt for the next request instead of it vanishing."""
+    can collapse the whole run into ONE card (instead of leaving the raw step bubbles in the
+    thread) and label it completed or — when `cancelled` — cancelled."""
     if not flow:
         return None
     name = flow.get("name")
@@ -2377,6 +2397,7 @@ def terminal_progress(flow: dict[str, Any] | None) -> dict[str, Any] | None:
         s["state"] = "done"
     rail["current"] = rail["total"]
     rail["complete"] = True
+    rail["cancelled"] = bool(cancelled)
     return rail
 
 

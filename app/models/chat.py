@@ -76,6 +76,8 @@ class Suggestion(BaseModel):
     # it (check + filled) so the running selection shows in the one-line chip row.
     multi: bool = False       # an option of a multi-select step — the widget gives these a distinct
     # colour + a "pick one or more" hint so the extra Continue step reads as deliberate.
+    count: int | None = None  # the multi-select "Done" control chip: how many picked so far, so the
+    # widget can label the finish button "Done · N" (a clear completion affordance + running count).
 
 
 class ChatResponse(BaseModel):

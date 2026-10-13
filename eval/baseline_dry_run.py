@@ -221,6 +221,36 @@ async def run(verbose: bool = True) -> list[tuple[str, bool, str]]:
           (getattr(fr_back, "pending", {}) or {}).get("tool_args", {}).get("quarter") == "Q3",
           (getattr(fr_back, "pending", {}) or {}).get("tool_args", {}).get("quarter"))
 
+    # ── Terminal collapse: declining at review carries a cancelled rail so the widget folds the
+    #    whole run into ONE card instead of leaving the answered steps as loose bubbles. ──
+    tp = flows.terminal_progress(s.metadata.get("flow"), cancelled=True)
+    check("terminal rail: complete + cancelled flags set, every step done",
+          bool(tp) and tp.get("complete") is True and tp.get("cancelled") is True
+          and all(st.get("state") == "done" for st in tp.get("steps", [])),
+          None)
+    fr_dec = flows.on_decline(s)
+    check("decline at review returns a terminal (complete+cancelled) rail + done",
+          fr_dec is not None and getattr(fr_dec, "progress", None) is not None
+          and fr_dec.progress.get("complete") is True and fr_dec.progress.get("cancelled") is True
+          and getattr(fr_dec, "done", False) is True,
+          None)
+    check("decline clears the flow", s.metadata.get("flow") is None)
+
+    # ── Title guard: the start phrase can't become the title (leftover-flow safety). ──
+    s2 = _Session()
+    await flows.maybe_start(s2, "generate a formulation baseline", {})
+    await flows.handle(s2, "generate a formulation baseline", {})   # re-fired trigger
+    f2 = s2.metadata.get("flow") or {}
+    check("title guard: the trigger phrase is NOT stored as the title (step holds at title)",
+          (f2.get("labels") or {}).get("baselineTitle") in (None, "") and f2.get("idx") == 0,
+          (f2.get("labels") or {}).get("baselineTitle"))
+    await flows.handle(s2, "FY27 Planning Baseline", {})
+    f2b = s2.metadata.get("flow") or {}
+    check("title guard: a real title IS accepted and advances past the title step",
+          (f2b.get("labels") or {}).get("baselineTitle") == "FY27 Planning Baseline"
+          and f2b.get("idx", 0) >= 1,
+          (f2b.get("labels") or {}).get("baselineTitle"))
+
     return r
 
 

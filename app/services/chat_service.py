@@ -534,6 +534,9 @@ class ChatService:
                 return _fr(fr)
         # ── Formulation baseline generation (single confirmed mutation) ──
         if flows.is_active(session) and tool_name == "bobBaseLineGenerate_put":
+            # Terminal rail (before the flow is popped) so the widget collapses the whole run into
+            # one "completed" card instead of leaving the answered steps as loose bubbles.
+            session.metadata["_flow_complete"] = flows.terminal_progress(session.metadata.get("flow"))
             fr = flows.baseline_after_generate(session)
             if fr is not None:
                 return _fr(fr)
