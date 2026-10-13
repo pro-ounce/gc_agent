@@ -266,8 +266,8 @@ def _trigger_checks() -> list[tuple[str, bool, str]]:
                 any(arms(h["send"]) for h in in_season if "baseline" in h["send"].lower()),
                 "baseline hint does not arm"))
     out.append(("seasonal: empty out-of-season",
-                seasonal.seasonal_hints("FORMULATION", _dt.datetime(2026, 12, 1)) == [],
-                "fired off-season"))
+                seasonal.seasonal_hints("FORMULATION", _dt.datetime(2026, 7, 1)) == [],
+                "fired off-season"))  # Formulation window is Oct-May (10-5); Jul is outside it
     out.append(("seasonal: empty for a different app in-season",
                 seasonal.seasonal_hints("ADMINISTRATION", _dt.datetime(2026, 4, 1)) == [],
                 "fired for wrong app"))

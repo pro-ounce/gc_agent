@@ -30,14 +30,50 @@ _MAX_SEASONS = 24
 _MAX_HINTS = 6
 _TTL = 20.0
 
-# Built-in seed: the federal budget-cycle season(s) mapped to the COMPASS workflows. Used when the
-# store is empty; an admin replaces/extends this from /admin. `months` are TUNABLE windows.
+# Built-in seed: the gc360 Ecosystem Module Activation Calendar — the federal budget lifecycle mapped
+# to the platform's applications (Antideficiency Act / OMB Circular A-11 framing). Source: the gc360
+# federal budget lifecycle PPTX (swimlane Gantt + month×module matrix). Fiscal year runs Oct 1 – Sep 30.
+# `months` are the window (calendar-month numbers, wrap-aware) when each module's workflow is the
+# priority, so a hint surfaces at the right time; windows are TUNABLE from /admin. Each hint's `send`
+# is either a real guided action (Formulation baseline, Reporting user-access report) or a natural ask
+# the agent answers conversationally. Used when the store is empty; an admin replaces/extends it.
+# Only the 6 modules backed by a live application are seeded (CPIC + Acquisition have no app yet).
 _FEDERAL_CALENDAR: list[dict[str, Any]] = [
-    {
-        "name": "Formulation", "app": "FORMULATION", "months": "3-10", "enabled": True,
+    {   # Budget development · CJ · Congressional liaison — budget call → OMB → President's Budget
+        "name": "Formulation", "app": "FORMULATION", "months": "10-5", "enabled": True,
         "hints": [
             {"label": "🗓️ Generate a formulation baseline", "send": "generate a formulation baseline"},
             {"label": "📣 Set up a data call", "send": "set up a data call"},
+        ],
+    },
+    {   # Obligations · Expenditures · Apportionment — full-FY execution, ADA compliance monitoring
+        "name": "Execution", "app": "EXECUTION", "months": "1-12", "enabled": True,
+        "hints": [
+            {"label": "📊 Check obligations & expenditures", "send": "what is the obligation and expenditure status this quarter?"},
+        ],
+    },
+    {   # Fund allocation · Sub-allotments · Mid-year realignment
+        "name": "Allocation Planner", "app": "CRP", "months": "10-6", "enabled": True,
+        "hints": [
+            {"label": "💰 Review fund allocations", "send": "show current fund allocations and any mid-year realignment"},
+        ],
+    },
+    {   # WCF rate development · IAA pricing · Customer negotiations
+        "name": "Cost Model", "app": "COST_MODEL", "months": "10-6", "enabled": True,
+        "hints": [
+            {"label": "📐 Review WCF rates & IAA pricing", "send": "show the WCF rate model and IAA pricing status"},
+        ],
+    },
+    {   # Dashboards · KPIs · Transparency & audit reporting — continuous
+        "name": "Analytics & Reporting", "app": "REPORTING", "months": "1-12", "enabled": True,
+        "hints": [
+            {"label": "📈 Generate a user access report", "send": "generate a user access report"},
+        ],
+    },
+    {   # Positions · Hiring plans · Onboarding — annual workforce cycle
+        "name": "Workforce Planning", "app": "PEOPLE_PLANNER", "months": "1-12", "enabled": True,
+        "hints": [
+            {"label": "👥 Review workforce & hiring plan", "send": "show the workforce planning and hiring status"},
         ],
     },
 ]
