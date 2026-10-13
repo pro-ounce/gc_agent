@@ -139,10 +139,16 @@ class SessionService:
             if user_id and str(data.get("user_id")) != str(user_id):
                 continue
             msgs = data.get("messages") or []
+            # archived = the key carries a `:<ms>` suffix BEYOND `history:<session_id>` (an
+            # immutable, cleared-convo record). NB the stable session id is itself `agent:<userId>`
+            # (contains a colon), so a naive ":" scan would misflag every CURRENT convo as archived —
+            # derive it from the record's own session_id instead.
+            sid = data.get("session_id") or ""
+            archived = key.startswith(f"{_HISTORY_PREFIX}{sid}:")
             out.append({
                 "key": key,                                      # drill-down handle (get_history_detail)
                 "session_id": data.get("session_id"),
-                "archived": ":" in key[len(_HISTORY_PREFIX):],   # True → immutable, cleared convo
+                "archived": archived,                            # True → immutable, cleared convo
                 "category": _category(data),                     # Baseline / Access / Data call / …
                 "message_count": len(msgs),
                 "created_at": data.get("created_at", ""),

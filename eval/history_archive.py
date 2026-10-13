@@ -54,9 +54,16 @@ def run() -> list[tuple[str, bool, str]]:
           [h.get("last_question") for h in hist])
     check("current conversation is present too",
           any(h.get("last_question") == "list the current baselines" for h in hist))
-    # Archived records are IMMUTABLE — not overwritten by later saves.
-    arch_keys = [k for k in redis_client._store
-                 if k.startswith(_HISTORY_PREFIX) and ":" in k[len(_HISTORY_PREFIX):]]
+    # The CURRENT conversation must be flagged LIVE, not archived — the stable session id is
+    # `agent:<userId>` (contains a colon), so the archived flag must key off the session id, not a
+    # naive ":" scan of the key suffix (which would misflag every live convo as archived).
+    cur = next(h for h in hist if h.get("last_question") == "list the current baselines")
+    check("the CURRENT conversation is flagged live (not archived), despite the colon in agent:user1",
+          cur["archived"] is False, cur["archived"])
+    # Archived records are IMMUTABLE — not overwritten by later saves. A real archived record is
+    # `history:<session_id>:<ms>` (a `:<ms>` suffix BEYOND the session base), not just "has a colon".
+    base = _hkey("agent:user1")
+    arch_keys = [k for k in redis_client._store if k.startswith(f"{base}:")]
     check("archived conversation stored under its own immutable key", len(arch_keys) >= 1, arch_keys)
     check("archived key has NO expiry (kept indefinitely)",
           all(redis_client._store[k][1] is None for k in arch_keys))
