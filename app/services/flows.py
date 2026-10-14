@@ -503,7 +503,7 @@ _LIST_BASELINE_RE = re.compile(
 
 async def list_baselines(session: Any, headers: dict[str, str] | None) -> FlowResult:
     """Read-only: the FORMULATION baselines for the caller's fund group(s) in the CURRENT app, via
-    getBaseLineMasterHeaders_post (the same tool the dup-guard uses). The app is the current one
+    getBaseLineMasterHeaders_1_post (the same tool the dup-guard uses). The app is the current one
     (Formulation / id 3) — it never prompts for an application/module."""
     fgs: list[dict[str, Any]] = []
     try:
@@ -524,7 +524,7 @@ async def list_baselines(session: Any, headers: dict[str, str] | None) -> FlowRe
         rows = None
         try:
             r = await tool_registry.execute(
-                "getBaseLineMasterHeaders_post",
+                "getBaseLineMasterHeaders_1_post",
                 {"fundGroupId": fg["id"], "applicationId": _BASELINE_APP_ID}, headers)
             rows = r.output.get("data") if getattr(r, "success", False) and isinstance(r.output, dict) else None
         except Exception as exc:  # noqa: BLE001
@@ -1645,14 +1645,14 @@ _BASELINE_APP_ID = 3   # Formulation application id (matches the picker tools' a
 async def _existing_baseline_titles(flow: dict[str, Any],
                                     headers: dict[str, str] | None) -> set[str]:
     """Lower-cased titles of baselines that already exist for the picked fund group + application
-    (read via the `getBaseLineMasterHeaders_post` MCP tool). Used for the duplicate-title guard.
+    (read via the `getBaseLineMasterHeaders_1_post` MCP tool). Used for the duplicate-title guard.
     Fail-OPEN (empty) if the list can't be read, so a transient MCP hiccup never blocks a generate."""
     fg = (flow.get("data") or {}).get("fundGroupId")
     if fg in (None, "", 0):
         return set()
     try:
         res = await tool_registry.execute(
-            "getBaseLineMasterHeaders_post",
+            "getBaseLineMasterHeaders_1_post",
             {"fundGroupId": fg, "applicationId": _BASELINE_APP_ID}, headers)
         rows = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
         titles: set[str] = set()
