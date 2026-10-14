@@ -533,7 +533,10 @@ async def list_baselines(session: Any, headers: dict[str, str] | None) -> FlowRe
         for row in (rows or []):
             if not isinstance(row, dict):
                 continue
-            title = str(row.get("title") or "(untitled)").strip()
+            # The masterHeaders payload names the title `baselineTitle` (not `title`) — read that
+            # first (BaselineRequestMasterVPayload.baselineTitle ← BlMaster.title). Keep `title` as
+            # a defensive fallback.
+            title = str(row.get("baselineTitle") or row.get("title") or "(untitled)").strip()
             fy = row.get("fiscalYear")
             status = str(row.get("statusName") or row.get("status") or "").strip()
             total += 1
