@@ -500,6 +500,14 @@ _LIST_BASELINE_RE = re.compile(
     r"|\bbaselines?\b[^.?!]{0,25}\b(list|exist|available|generated|created|there|do i have)\b"
     r"|\b(my|the current|current|existing|all)\s+baselines?\b", re.I)
 
+# Line-item DRILL-DOWN for ONE baseline: "details / breakdown / line items / open / drill into … a
+# baseline". Checked BEFORE the list intent (more specific). Matched by a detail word near "baseline".
+_BASELINE_DETAILS_RE = re.compile(
+    r"\b(detail|details|breakdown|line\s*items?|drill\s*(?:in|into|down)?|inside)\b[^.?!]{0,32}\bbaseline\b"
+    r"|\bbaseline\b[^.?!]{0,32}\b(detail|details|breakdown|line\s*items?)\b"
+    r"|\bopen\b[^.?!]{0,20}\bbaseline\b", re.I)
+_BASELINE_FY_RE = re.compile(r"(?:fy|fiscal\s*year)\s*'?(\d{2,4})", re.I)
+
 
 async def list_baselines(session: Any, headers: dict[str, str] | None) -> FlowResult:
     """Read-only: the FORMULATION baselines for the caller's fund group(s) in the CURRENT app, via
@@ -554,6 +562,126 @@ async def list_baselines(session: Any, headers: dict[str, str] | None) -> FlowRe
     return FlowResult(done=True, message=head + "\n\n".join(sections))
 
 
+def _parse_baseline_target(message: str) -> tuple[int | None, str | None]:
+    """From a details request, pull a target fiscal year and/or a quoted title fragment."""
+    msg = message or ""
+    fy: int | None = None
+    m = _BASELINE_FY_RE.search(msg)
+    if m:
+        y = m.group(1)
+        fy = int(y if len(y) == 4 else "20" + y[-2:])
+    tm = re.search(r"[\"'“‘]([^\"'”’]{2,})[\"'”’]", msg)
+    title = tm.group(1).strip().lower() if tm else None
+    return fy, title
+
+
+def _fmt_amt(v: Any) -> str:
+    try:
+        return "${:,.2f}".format(float(v or 0))
+    except (TypeError, ValueError):
+        return "$0.00"
+
+
+async def baseline_details(session: Any, message: str, headers: dict[str, str] | None) -> FlowResult:
+    """Read-only LINE-ITEM drill-down for ONE baseline. Resolve the master (by fiscal year and/or a
+    quoted title) via getBaseLineMasterHeaders_1_post, then pull its per-program-office breakdown via
+    baseLineDetails_1_post and render a table. Scoped to the caller's fund groups + the CURRENT app
+    (Formulation / id 3). Fail-soft at every step."""
+    from ..models.chat import UIBlock
+    want_fy, want_title = _parse_baseline_target(message)
+    fgs: list[dict[str, Any]] = []
+    try:
+        res = await tool_registry.execute("getFundGroupsByUser_post", {"applicationId": "3"}, headers)
+        rows = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        for r in (rows or []):
+            if isinstance(r, dict) and r.get("fundGroupId") is not None:
+                fgs.append({"id": r.get("fundGroupId"), "name": str(r.get("name") or r.get("fundGroupId"))})
+    except Exception as exc:  # noqa: BLE001
+        log.bind(func="baseline_details").warning(f"fund groups fetch failed: {exc}")
+    if not fgs:
+        return FlowResult(done=True, message=(
+            "I couldn't resolve your **fund groups** for FORMULATION, so I can't open a baseline."))
+    # Gather every master across the caller's fund groups (masterId + title/FY/status).
+    masters: list[dict[str, Any]] = []
+    for fg in fgs:
+        rows = None
+        try:
+            r = await tool_registry.execute(
+                "getBaseLineMasterHeaders_1_post",
+                {"fundGroupId": fg["id"], "applicationId": _BASELINE_APP_ID}, headers)
+            rows = r.output.get("data") if getattr(r, "success", False) and isinstance(r.output, dict) else None
+        except Exception as exc:  # noqa: BLE001
+            log.bind(func="baseline_details", fg=fg["name"]).warning(f"masterHeaders failed: {exc}")
+        for row in (rows or []):
+            if not isinstance(row, dict) or row.get("masterId") in (None, "", 0):
+                continue
+            masters.append({
+                "masterId": row.get("masterId"),
+                "title": str(row.get("baselineTitle") or row.get("title") or "(untitled)").strip(),
+                "fiscalYear": row.get("fiscalYear"),
+                "status": str(row.get("statusName") or row.get("status") or "").strip(),
+                "fgName": fg["name"],
+            })
+    if not masters:
+        return FlowResult(done=True, message="No **FORMULATION baselines** found for your fund group(s).")
+
+    def _matches(m: dict[str, Any]) -> bool:
+        if want_fy is not None and str(m.get("fiscalYear")) != str(want_fy):
+            return False
+        if want_title and want_title not in m["title"].lower():
+            return False
+        return True
+
+    cands = [m for m in masters if _matches(m)] if (want_fy is not None or want_title) else masters
+    if not cands:
+        return FlowResult(done=True, message=(
+            "I couldn't find a baseline matching that. Say **list my baselines** to see them, then ask "
+            "for the details of one by its **fiscal year** or a quoted **“title”**."))
+    if len(cands) > 1:
+        lines = "\n".join(
+            f"- **{m['title']}** · FY{m['fiscalYear']} · _{m['status'] or 'Draft'}_" for m in cands[:8])
+        return FlowResult(done=True, message=(
+            "A few baselines match — which one? Ask by **fiscal year** or a quoted **title**:\n\n" + lines))
+    target = cands[0]
+    header = (f"**{target['title']}** · FY{target['fiscalYear']} · "
+              f"_{target['status'] or 'Draft'}_  ({target['fgName']})")
+    # Line items: per-program-office breakdown for this master header.
+    rows = None
+    try:
+        r = await tool_registry.execute(
+            "baseLineDetails_1_post",
+            {"masterId": target["masterId"], "applicationId": _BASELINE_APP_ID}, headers)
+        rows = r.output.get("data") if getattr(r, "success", False) and isinstance(r.output, dict) else None
+    except Exception as exc:  # noqa: BLE001
+        log.bind(func="baseline_details", master=target["masterId"]).warning(f"baseLineDetails failed: {exc}")
+    if not rows:
+        return FlowResult(done=True, message=(
+            header + "\n\nNo program-office line items yet for this baseline (it may be freshly generated "
+            "with nothing carried forward)."))
+    table_rows: list[list[str]] = []
+    total = 0.0
+    for d in rows:
+        if not isinstance(d, dict):
+            continue
+        po = str(d.get("orgAcronym") or d.get("orgName") or d.get("orgCode") or "—").strip()
+        amt = d.get("requestsAmount")
+        try:
+            total += float(amt or 0)
+        except (TypeError, ValueError):
+            pass
+        rc = d.get("requestsCount")
+        table_rows.append([
+            po,
+            str(rc) if rc is not None else "—",
+            _fmt_amt(amt),
+            str(d.get("statusName") or d.get("status") or "").strip(),
+        ])
+    block = UIBlock(type="table", title="Program-office breakdown",
+                    columns=["Program Office", "Requests", "Amount", "Status"], rows=table_rows)
+    msg = header + f"\n\n**{len(table_rows)}** program office(s) · total **{_fmt_amt(total)}**."
+    return FlowResult(done=True, message=msg, blocks=[block])
+
+
 async def maybe_start(session: Any, message: str, headers: dict[str, str] | None = None,
                       skill: Any = None) -> FlowResult | None:
     """Start a guided flow from a fresh intent (when none is active). A create-user request
@@ -573,6 +701,10 @@ async def maybe_start(session: Any, message: str, headers: dict[str, str] | None
     # READ: "list my/the/current baselines" → a scoped read (caller's fund groups + the CURRENT
     # application), answered directly. Checked before the generate flow so a list request never opens
     # the create flow, and it never asks "which application?" (the app is the current one).
+    # DRILL-DOWN: "details / line items for the <FY/title> baseline" → one baseline's program-office
+    # breakdown. Checked before the list (more specific) so "baseline details" never just re-lists.
+    if _BASELINE_DETAILS_RE.search(message or ""):
+        return await baseline_details(session, message or "", headers)
     if _LIST_BASELINE_RE.search(message or ""):
         return await list_baselines(session, headers)
     # Skill authoring intent takes precedence ("create a skill" must not read as create-user).
