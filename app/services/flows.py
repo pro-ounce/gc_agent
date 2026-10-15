@@ -658,28 +658,52 @@ async def baseline_details(session: Any, message: str, headers: dict[str, str] |
         return FlowResult(done=True, message=(
             header + "\n\nNo program-office line items yet for this baseline (it may be freshly generated "
             "with nothing carried forward)."))
-    table_rows: list[list[str]] = []
-    total = 0.0
+    # Shape per-office rows, then lay the UX out to MATCH THE DATA: a freshly-generated baseline
+    # carries nothing forward (every line $0) — a 33-row zero table is noise, so summarise it; a
+    # baseline with real requests gets a focused, amount-sorted table of just the offices that have
+    # any, with the totals up front.
+    parsed: list[dict[str, Any]] = []
     for d in rows:
         if not isinstance(d, dict):
             continue
-        po = str(d.get("orgAcronym") or d.get("orgName") or d.get("orgCode") or "—").strip()
-        amt = d.get("requestsAmount")
         try:
-            total += float(amt or 0)
+            amt = float(d.get("requestsAmount") or 0)
         except (TypeError, ValueError):
-            pass
-        rc = d.get("requestsCount")
-        table_rows.append([
-            po,
-            str(rc) if rc is not None else "—",
-            _fmt_amt(amt),
-            str(d.get("statusName") or d.get("status") or "").strip(),
-        ])
-    block = UIBlock(type="table", title="Program-office breakdown",
-                    columns=["Program Office", "Requests", "Amount", "Status"], rows=table_rows)
-    msg = header + f"\n\n**{len(table_rows)}** program office(s) · total **{_fmt_amt(total)}**."
-    return FlowResult(done=True, message=msg, blocks=[block])
+            amt = 0.0
+        try:
+            req = int(d.get("requestsCount") or 0)
+        except (TypeError, ValueError):
+            req = 0
+        parsed.append({
+            "po": str(d.get("orgAcronym") or d.get("orgName") or d.get("orgCode") or "—").strip(),
+            "req": req, "amt": amt,
+            "status": str(d.get("statusName") or d.get("status") or "").strip(),
+        })
+    n = len(parsed)
+    total_amt = sum(p["amt"] for p in parsed)
+    total_req = sum(p["req"] for p in parsed)
+    with_data = sorted((p for p in parsed if p["req"] or p["amt"]),
+                       key=lambda p: p["amt"], reverse=True)
+
+    if not with_data:
+        # Empty baseline → one clean line, not a wall of zero rows.
+        return FlowResult(done=True, message=(
+            header + f"\n\nSpans **{n}** program office(s), but **no requests have been carried "
+            f"forward yet** — every line is **$0**. (Generated from a source year with no "
+            f"requests; they'll populate here once requests exist.)"))
+
+    # Populated → an amount-sorted table of the offices that actually have requests.
+    cap = 25
+    table_rows = [[p["po"], f"{p['req']:,}", _fmt_amt(p["amt"]), p["status"] or "—"]
+                  for p in with_data[:cap]]
+    block = UIBlock(type="table", title="Program-office breakdown (by amount)",
+                    columns=["Program Office", "Requests", "Amount", "Status"],
+                    rows=table_rows, view="modern")
+    summ = (header + f"\n\n**{len(with_data)}** of {n} program office(s) have requests · "
+            f"**{total_req:,}** request(s) · total **{_fmt_amt(total_amt)}**.")
+    if len(with_data) > cap:
+        summ += f"\n\n_Showing the top {cap} by amount; {len(with_data) - cap} more have requests._"
+    return FlowResult(done=True, message=summ, blocks=[block])
 
 
 async def maybe_start(session: Any, message: str, headers: dict[str, str] | None = None,

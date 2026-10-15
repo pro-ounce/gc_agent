@@ -53,6 +53,10 @@ class UIBlock(BaseModel):
     rows: list[list[Any]] | None = None           # table rows
     level: str | None = None                      # notice: info|success|warn|error
     language: str | None = None                   # code
+    view: str | None = None                       # table: starting density the widget opens in —
+    # "glance" (title only · default), "dock" (every field per row) or "modern" (full grid). Set it
+    # when the extra columns ARE the answer (counts, amounts) so they show without a click and the
+    # panel widens to fit; omit for a plain name list where the glance already says enough.
     source_tool: str | None = None                # provenance
 
 
