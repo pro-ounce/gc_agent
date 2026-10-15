@@ -201,6 +201,38 @@ def _ungrounded_suffix(text: str, skill: Any, grounded: bool) -> str:
             if pinned else "")
 
 
+# ── Hard guard: hallucinated baseline NUMBERS ──────────────────────────────────
+# Baseline figures (amounts, request/office/line-item counts) only ever come from the deterministic
+# baseline flows (list_baselines / baseline_details → FlowResult blocks, fetched live). This LLM
+# exit path is reached ONLY when no flow handled the turn, so any baseline numbers in model prose
+# here are ungrounded — i.e. invented. We REPLACE such an answer (not merely caveat it) so fabricated
+# figures never reach the user; a caveat is not enough when the content is numbers.
+_BASELINE_WORD_RE = re.compile(r"\bbaselines?\b", re.I)
+_BASELINE_NUMBER_RE = re.compile(
+    r"\$\s?\d"                                                       # a dollar amount
+    r"|\b\d[\d,]*\s*(?:requests?|program\s+offices?|offices?|line[\s-]*items?)\b"  # "10 requests", "33 offices"
+    r"|\b(?:requests?|program\s+offices?|offices?|line[\s-]*items?)\b[^.?!\n]{0,20}?[:=]?\s*\$?\d",
+    re.I)
+_BASELINE_GUARD_MSG = (
+    "I can only show baseline figures I've actually pulled from the system, and I didn't retrieve "
+    "any for that — so I won't guess at the numbers. To see the real values, ask for a specific "
+    "baseline's line items, e.g. **show the line-item details for the \"<baseline title>\"**, or say "
+    "**list all baselines** first."
+)
+
+
+def _guard_baseline_numbers(text: str, grounded: bool) -> str | None:
+    """Return the safe replacement when an UNGROUNDED answer states baseline figures, else None.
+    Hard stop: the only trustworthy source of baseline numbers is a tool fetch, which routes through
+    the baseline flows — never model prose on this exit path."""
+    if grounded:
+        return None
+    t = text or ""
+    if _BASELINE_WORD_RE.search(t) and _BASELINE_NUMBER_RE.search(t):
+        return _BASELINE_GUARD_MSG
+    return None
+
+
 class ChatService:
     """Stateless orchestrator — all state lives in the Session object (Redis)."""
 
@@ -402,9 +434,15 @@ class ChatService:
         # successful tool call. Log the TRUTHFUL grounded flag, and caveat a pinned-skill answer
         # that wasn't backed by live data (the "response is never wrong" bar).
         _grounded = _answer_grounded(tool_outputs)
-        _cav = _ungrounded_suffix(final_text, skill, _grounded)
-        if _cav:
-            final_text = final_text.rstrip() + "\n\n" + _cav
+        _bguard = _guard_baseline_numbers(final_text, _grounded)
+        if _bguard is not None:
+            log.bind(event="baseline_number_guard", session_id=session_id, path="chat").warning(
+                "blocked ungrounded baseline numbers in model prose")
+            final_text = _bguard
+        else:
+            _cav = _ungrounded_suffix(final_text, skill, _grounded)
+            if _cav:
+                final_text = final_text.rstrip() + "\n\n" + _cav
         session.add_assistant(final_text)
         self._log_answer(session_id, final_text, blocks)
         _log_turn_source(session_id, "inference",
@@ -923,20 +961,28 @@ class ChatService:
                     )
                     session_service.save(session)
                     continue  # drop the tail — it's a false-start, not the answer
-                if tail:
-                    yield StreamChunk(type="delta", session_id=session_id, content=tail)
                 sblocks = blocks_from_outputs(tool_outputs)
-                text = (text or "").strip() or ("" if sblocks else _EMPTY_FALLBACK)
-                # Grounding guard: this exit is the model's prose with no successful tool call.
-                # Record the truthful grounded flag; caveat a pinned-skill answer that wasn't
-                # backed by live data — streamed as a trailing delta so the chunk matches `text`.
                 _grounded = _answer_grounded(tool_outputs)
                 if turn:
                     turn.grounded = _grounded
-                _cav = _ungrounded_suffix(text, skill, _grounded)
-                if _cav:
-                    text = text.rstrip() + "\n\n" + _cav
-                    yield StreamChunk(type="delta", session_id=session_id, content="\n\n" + _cav)
+                # Hard guard FIRST — before the held text is revealed — so fabricated baseline
+                # numbers are never streamed. In the default hold_all mode `tail` is the whole
+                # answer, so replacing it fully suppresses the invented figures.
+                _bguard = _guard_baseline_numbers(text, _grounded)
+                if _bguard is not None:
+                    log.bind(event="baseline_number_guard", session_id=session_id,
+                             path="stream").warning("blocked ungrounded baseline numbers in model prose")
+                    text, tail = _bguard, _bguard
+                if tail:
+                    yield StreamChunk(type="delta", session_id=session_id, content=tail)
+                text = (text or "").strip() or ("" if sblocks else _EMPTY_FALLBACK)
+                # Caveat a pinned-skill prose answer that wasn't backed by live data — but only when
+                # the hard guard didn't already replace the answer.
+                if _bguard is None:
+                    _cav = _ungrounded_suffix(text, skill, _grounded)
+                    if _cav:
+                        text = text.rstrip() + "\n\n" + _cav
+                        yield StreamChunk(type="delta", session_id=session_id, content="\n\n" + _cav)
                 session.add_assistant(text)
                 self._log_answer(session_id, text, sblocks)
                 session_service.save(session)
