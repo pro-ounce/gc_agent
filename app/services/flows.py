@@ -1836,22 +1836,36 @@ def _baseline_control_chips(step: PickerStep, buf_count: int = 0) -> list[dict[s
     return tail
 
 
-async def _published_baseline_years(headers: dict[str, str] | None) -> set[str]:
-    """Fiscal years that have a PUBLISHED baseline (status='P') in ANY fund group. getPublishedYears
-    with no fund group returns all of them (backend SQL: `?1 IS NULL OR fund_groups = ?1`). Used to
-    flag which SOURCE years actually have data to carry forward into the target. Fail-soft → empty."""
+async def _published_baseline_years(headers: dict[str, str] | None,
+                                    flow: dict[str, Any] | None = None) -> set[str]:
+    """Fiscal years that have a PUBLISHED baseline (status='P') in the caller's fund group(s) — the
+    set a generate can actually carry data forward from (the fund-group picker is user-scoped too).
+    getPublishedYears needs a REAL fundGroupId (an empty body reaches the backend as a null payload
+    and returns nothing), so iterate the caller's groups and union. Cached on the flow. Fail-soft."""
+    if flow is not None and "_pub_years" in flow:
+        return set(flow["_pub_years"])
+    years: set[str] = set()
+    fg_ids: list[Any] = []
     try:
-        res = await tool_registry.execute("getPublishedYears_post", {}, headers)
+        res = await tool_registry.execute("getFundGroupsByUser_post", {"applicationId": "3"}, headers)
         rows = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
-        out: set[str] = set()
-        for r in (rows or []):
-            y = r.get("fiscalYear") if isinstance(r, dict) else r
-            if y not in (None, ""):
-                out.add(str(y).strip())
-        return out
-    except Exception as exc:  # noqa: BLE001 — a flag must never crash the picker
-        log.bind(func="_published_baseline_years").warning(f"getPublishedYears failed: {exc}")
-        return set()
+        fg_ids = [r.get("fundGroupId") for r in (rows or [])
+                  if isinstance(r, dict) and r.get("fundGroupId") is not None]
+    except Exception as exc:  # noqa: BLE001
+        log.bind(func="_published_baseline_years").warning(f"fund groups fetch failed: {exc}")
+    for fg in fg_ids:
+        try:
+            res = await tool_registry.execute("getPublishedYears_post", {"fundGroupId": fg}, headers)
+            rows = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+            for r in (rows or []):
+                y = r.get("fiscalYear") if isinstance(r, dict) else r
+                if y not in (None, ""):
+                    years.add(str(y).strip())
+        except Exception as exc:  # noqa: BLE001 — a flag must never crash the picker
+            log.bind(func="_published_baseline_years", fg=fg).warning(f"getPublishedYears failed: {exc}")
+    if flow is not None:
+        flow["_pub_years"] = sorted(years)   # JSON-safe cache (list, not set)
+    return years
 
 
 async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
@@ -1882,14 +1896,18 @@ async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
         # SOURCE fiscal year: flag which years have a PUBLISHED baseline — only those carry real data
         # forward into the target; picking a year with no published baseline starts the target empty.
         if step.field == "sourceFiscalYear":
-            published = await _published_baseline_years(headers)
+            published = await _published_baseline_years(headers, flow)
             here = [str(o["label"]) for o in opts_sorted if str(o["label"]) in published]
             if here:
-                note = ("\n\n*Years with a **published** baseline (real data to carry forward): "
-                        f"**{', '.join(here)}**. Picking any other year starts the target empty.*")
+                note = (f"\n\n**Published** source years (real data to carry forward): {', '.join(here)}. "
+                        "_Picking any other year starts the target empty._")
+            elif published:
+                # Published years exist but none are in the option list shown — still inform.
+                note = (f"\n\nSource years with a **published** baseline: {', '.join(sorted(published))}. "
+                        "_Other years start the target empty._")
             else:
-                note = ("\n\n*⚠️ No source year has a **published** baseline yet — whichever you pick, "
-                        "the target would start empty (nothing to carry forward).*")
+                note = ("\n\n_No source year has a published baseline yet — whichever you pick, the "
+                        "target would start empty (nothing to carry forward)._")
     else:
         chips = [_mk(o) for o in options[:MAX_CHIPS]]
         # ONE compact hint line (parts side by side, middot-separated) instead of stacking two: the
