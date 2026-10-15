@@ -503,9 +503,13 @@ _LIST_BASELINE_RE = re.compile(
 # Line-item DRILL-DOWN for ONE baseline: "details / breakdown / line items / open / drill into … a
 # baseline". Checked BEFORE the list intent (more specific). Matched by a detail word near "baseline".
 _BASELINE_DETAILS_RE = re.compile(
-    r"\b(detail|details|breakdown|line\s*items?|drill\s*(?:in|into|down)?|inside)\b[^.?!]{0,32}\bbaseline\b"
-    r"|\bbaseline\b[^.?!]{0,32}\b(detail|details|breakdown|line\s*items?)\b"
-    r"|\bopen\b[^.?!]{0,20}\bbaseline\b", re.I)
+    # The gap window must clear a long QUOTED TITLE sitting between the detail word and "baseline"
+    # (e.g. 'details for the "FY 2027 Appropriated Testing Baseline"' ≈ 39 chars) — too tight a
+    # window silently misses the intent and the LLM then fabricates line items. "line-item" is
+    # hyphenated as often as spaced, so allow both.
+    r"\b(detail|details|breakdown|line[\s-]*items?|drill\s*(?:in|into|down)?|inside)\b[^.?!]{0,72}\bbaseline\b"
+    r"|\bbaseline\b[^.?!]{0,72}\b(detail|details|breakdown|line[\s-]*items?)\b"
+    r"|\bopen\b[^.?!]{0,40}\bbaseline\b", re.I)
 _BASELINE_FY_RE = re.compile(r"(?:fy|fiscal\s*year)\s*'?(\d{2,4})", re.I)
 
 
