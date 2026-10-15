@@ -1596,18 +1596,17 @@ BASELINE_STEPS: tuple[PickerStep, ...] = (
                "getAllFiscalYears_post", "fiscalYear", "fiscalYear", noun="fiscal year"),
     PickerStep("fiscalYear", "Choose the **target** fiscal year",
                "getAllFiscalYears_post", "fiscalYear", "fiscalYear", noun="fiscal year"),
-    # Quarter sits right after the fiscal years — gathered with the fiscal context and, in the review
-    # rail, it rides the first row beside the two years (3-up). Optional.
-    PickerStep("quarter", "Choose a quarter (optional)",
+    # Fund group comes right AFTER the fiscal years: it scopes which program offices the caller can
+    # pick (collected before offices) and the payload needs it (replacing the fundGroupId default).
+    PickerStep("fundGroupId", "Choose the **fund group**",
+               "getFundGroupsByUser_post", "name", "fundGroupId",
+               source_args={"applicationId": "3"}, noun="fund group", auto_if_single=True),
+    # Quarter is OPTIONAL — pick one or skip. Rides the fiscal row in the review rail (3-up).
+    PickerStep("quarter", "Choose a quarter — *optional, you can skip this*",
                static_options=("Q1", "Q2", "Q3", "Q4"), optional=True),
     PickerStep("businessRuleGroups", "Choose the **baseline** business rule group(s)",
                "getAllValidationGroups_post", "groupName", "validationGroupId", multi=True,
                source_args={"groupType": "BASELINE", "applicationId": 3}, noun="rule group"),
-    # Fund group scopes which program offices the caller can pick — collect it before offices and
-    # feed it into the office fetch (and into the payload, replacing the fundGroupId default).
-    PickerStep("fundGroupId", "Choose the **fund group**",
-               "getFundGroupsByUser_post", "name", "fundGroupId",
-               source_args={"applicationId": "3"}, noun="fund group", auto_if_single=True),
     PickerStep("orgIds", "Choose program office(s) — or select all",
                "getOrganizationsByUser_post", "organizationName", "organizationId",
                multi=True, optional=True, source_args={"applicationId": "3"},
@@ -1837,6 +1836,24 @@ def _baseline_control_chips(step: PickerStep, buf_count: int = 0) -> list[dict[s
     return tail
 
 
+async def _published_baseline_years(headers: dict[str, str] | None) -> set[str]:
+    """Fiscal years that have a PUBLISHED baseline (status='P') in ANY fund group. getPublishedYears
+    with no fund group returns all of them (backend SQL: `?1 IS NULL OR fund_groups = ?1`). Used to
+    flag which SOURCE years actually have data to carry forward into the target. Fail-soft → empty."""
+    try:
+        res = await tool_registry.execute("getPublishedYears_post", {}, headers)
+        rows = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        out: set[str] = set()
+        for r in (rows or []):
+            y = r.get("fiscalYear") if isinstance(r, dict) else r
+            if y not in (None, ""):
+                out.add(str(y).strip())
+        return out
+    except Exception as exc:  # noqa: BLE001 — a flag must never crash the picker
+        log.bind(func="_published_baseline_years").warning(f"getPublishedYears failed: {exc}")
+        return set()
+
+
 async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
                            headers: dict[str, str] | None, prefix: str = "",
                            options: list[dict[str, Any]] | None = None) -> FlowResult:
@@ -1862,6 +1879,17 @@ async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
         opts_sorted = sorted(options, key=lambda o: str(o["label"]), reverse=True)
         chips = [_mk(o) for o in opts_sorted]
         note = ""
+        # SOURCE fiscal year: flag which years have a PUBLISHED baseline — only those carry real data
+        # forward into the target; picking a year with no published baseline starts the target empty.
+        if step.field == "sourceFiscalYear":
+            published = await _published_baseline_years(headers)
+            here = [str(o["label"]) for o in opts_sorted if str(o["label"]) in published]
+            if here:
+                note = ("\n\n*Years with a **published** baseline (real data to carry forward): "
+                        f"**{', '.join(here)}**. Picking any other year starts the target empty.*")
+            else:
+                note = ("\n\n*⚠️ No source year has a **published** baseline yet — whichever you pick, "
+                        "the target would start empty (nothing to carry forward).*")
     else:
         chips = [_mk(o) for o in options[:MAX_CHIPS]]
         # ONE compact hint line (parts side by side, middot-separated) instead of stacking two: the
