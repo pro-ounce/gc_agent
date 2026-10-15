@@ -549,7 +549,7 @@ async def list_baselines(session: Any, headers: dict[str, str] | None) -> FlowRe
             collected.append({
                 "title": str(row.get("baselineTitle") or row.get("title") or "(untitled)").strip(),
                 "fy": row.get("fiscalYear"),
-                "status": str(row.get("statusName") or row.get("status") or "").strip(),
+                "status": _status_label(row),
                 "fg": fg["name"],
             })
     if not collected:
@@ -600,6 +600,30 @@ def _fmt_amt(v: Any) -> str:
         return "$0.00"
 
 
+# Baseline status CODE → human label. Authoritative rail labels (see [[gc-baseline-domain-model]] /
+# formulation WorkflowStatus). Used as a FALLBACK when the BL_MASTER_V view's `statusName` is absent,
+# so a bare code (P/D/…) from `/masterHeaders/{fundGroupId}/{applicationId}` never leaks to the user.
+_BASELINE_STATUS_LABELS = {
+    "D": "Draft",
+    "PRC": "Processing",
+    "W": "Generation failed",
+    "BR": "Budget Operations Review In-Progress",
+    "BRC": "Budget Operations Review Completed",
+    "BA": "Budget Operations Approved",
+    "P": "Published",
+}
+
+
+def _status_label(row: dict[str, Any]) -> str:
+    """Human status for a baseline master row: prefer the view's rich `statusName` (e.g. 'Published to
+    Program Office(s)'), else decode the raw `status` code (P→Published, D→Draft, …), else the raw value."""
+    name = str(row.get("statusName") or "").strip()
+    if name:
+        return name
+    raw = str(row.get("status") or "").strip()
+    return _BASELINE_STATUS_LABELS.get(raw.upper(), raw)
+
+
 async def baseline_details(session: Any, message: str, headers: dict[str, str] | None) -> FlowResult:
     """Read-only LINE-ITEM drill-down for ONE baseline. Resolve the master (by fiscal year and/or a
     quoted title) via getBaseLineMasterHeaders_1_post, then pull its per-program-office breakdown via
@@ -637,7 +661,7 @@ async def baseline_details(session: Any, message: str, headers: dict[str, str] |
                 "masterId": row.get("masterId"),
                 "title": str(row.get("baselineTitle") or row.get("title") or "(untitled)").strip(),
                 "fiscalYear": row.get("fiscalYear"),
-                "status": str(row.get("statusName") or row.get("status") or "").strip(),
+                "status": _status_label(row),
                 "fgName": fg["name"],
             })
     if not masters:
