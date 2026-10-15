@@ -1857,6 +1857,8 @@ async def _published_baseline_years(headers: dict[str, str] | None,
         try:
             res = await tool_registry.execute("getPublishedYears_post", {"fundGroupId": fg}, headers)
             rows = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+            if isinstance(rows, dict):          # a single published year comes back as one object
+                rows = [rows]
             for r in (rows or []):
                 y = r.get("fiscalYear") if isinstance(r, dict) else r
                 if y not in (None, ""):
@@ -1899,15 +1901,15 @@ async def _baseline_prompt(flow: dict[str, Any], step: PickerStep,
             published = await _published_baseline_years(headers, flow)
             here = [str(o["label"]) for o in opts_sorted if str(o["label"]) in published]
             if here:
-                note = (f"\n\n**Published** source years (real data to carry forward): {', '.join(here)}. "
-                        "_Picking any other year starts the target empty._")
+                note = (f"\n\n**Published** source years (real data to carry forward): **{', '.join(here)}**. "
+                        "Picking any other year starts the target empty.")
             elif published:
                 # Published years exist but none are in the option list shown — still inform.
-                note = (f"\n\nSource years with a **published** baseline: {', '.join(sorted(published))}. "
-                        "_Other years start the target empty._")
+                note = (f"\n\nSource years with a **published** baseline: **{', '.join(sorted(published))}**. "
+                        "Other years start the target empty.")
             else:
-                note = ("\n\n_No source year has a published baseline yet — whichever you pick, the "
-                        "target would start empty (nothing to carry forward)._")
+                note = ("\n\n⚠️ No source year has a **published** baseline yet — whichever you pick, the "
+                        "target would start empty (nothing to carry forward).")
     else:
         chips = [_mk(o) for o in options[:MAX_CHIPS]]
         # ONE compact hint line (parts side by side, middot-separated) instead of stacking two: the
