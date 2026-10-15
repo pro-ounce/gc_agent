@@ -530,8 +530,7 @@ async def list_baselines(session: Any, headers: dict[str, str] | None) -> FlowRe
         return FlowResult(done=True, message=(
             "I couldn't resolve your **fund groups** for FORMULATION, so I can't list baselines. "
             "Check your access, or try again."))
-    sections: list[str] = []
-    total = 0
+    collected: list[dict[str, Any]] = []
     for fg in fgs:
         rows = None
         try:
@@ -541,29 +540,44 @@ async def list_baselines(session: Any, headers: dict[str, str] | None) -> FlowRe
             rows = r.output.get("data") if getattr(r, "success", False) and isinstance(r.output, dict) else None
         except Exception as exc:  # noqa: BLE001
             log.bind(func="list_baselines", fg=fg["name"]).warning(f"masterHeaders failed: {exc}")
-        items: list[str] = []
         for row in (rows or []):
             if not isinstance(row, dict):
                 continue
             # The masterHeaders payload names the title `baselineTitle` (not `title`) — read that
             # first (BaselineRequestMasterVPayload.baselineTitle ← BlMaster.title). Keep `title` as
             # a defensive fallback.
-            title = str(row.get("baselineTitle") or row.get("title") or "(untitled)").strip()
-            fy = row.get("fiscalYear")
-            status = str(row.get("statusName") or row.get("status") or "").strip()
-            total += 1
-            bits = [f"**{title}**"]
-            if fy:
-                bits.append(f"FY{fy}")
-            if status:
-                bits.append(f"_{status}_")
-            items.append("- " + " · ".join(bits))
-        if items:
-            sections.append(f"**{fg['name']}**\n" + "\n".join(items))
-    if total == 0:
+            collected.append({
+                "title": str(row.get("baselineTitle") or row.get("title") or "(untitled)").strip(),
+                "fy": row.get("fiscalYear"),
+                "status": str(row.get("statusName") or row.get("status") or "").strip(),
+                "fg": fg["name"],
+            })
+    if not collected:
         return FlowResult(done=True, message="No **FORMULATION baselines** found for your fund group(s) yet.")
-    head = f"Your **FORMULATION baselines** ({total}):\n\n"
-    return FlowResult(done=True, message=head + "\n\n".join(sections))
+
+    # Structured table (same treatment as the drill-down), not a markdown bullet list: Baseline /
+    # Fiscal Year / Status, plus Fund Group only when the user spans more than one. Sort by fund
+    # group, then newest fiscal year first, then title. Fiscal year is rendered "FY 2027" (WITH a
+    # space) on purpose — "FY2027" would read as an all-caps machine code and get dropped from the
+    # Modern grid; the space keeps it a plain value that always shows.
+    from ..models.chat import UIBlock
+    def _fy_num(v: Any) -> int:
+        s = str(v or "").strip()
+        return int(s) if s.isdigit() else 0
+    collected.sort(key=lambda c: (c["fg"].lower(), -_fy_num(c["fy"]), c["title"].lower()))
+    multi_fg = len({c["fg"] for c in collected}) > 1
+    columns = ["Baseline", "Fiscal Year", "Status"] + (["Fund Group"] if multi_fg else [])
+    table_rows: list[list[str]] = []
+    for c in collected:
+        r_cells = [c["title"], (f"FY {c['fy']}" if c["fy"] else "—"), c["status"] or "—"]
+        if multi_fg:
+            r_cells.append(c["fg"])
+        table_rows.append(r_cells)
+    block = UIBlock(type="table", title="Baselines", columns=columns, rows=table_rows, view="modern")
+    where = "" if multi_fg else f" in **{collected[0]['fg']}**"
+    n = len(collected)
+    msg = f"Your **{n}** FORMULATION baseline{'s' if n != 1 else ''}{where}:"
+    return FlowResult(done=True, message=msg, blocks=[block])
 
 
 def _parse_baseline_target(message: str) -> tuple[int | None, str | None]:
