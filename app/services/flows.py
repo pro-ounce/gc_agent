@@ -513,11 +513,24 @@ _BASELINE_DETAILS_RE = re.compile(
 _BASELINE_FY_RE = re.compile(r"(?:fy|fiscal\s*year)\s*'?(\d{2,4})", re.I)
 
 
-async def list_baselines(session: Any, headers: dict[str, str] | None) -> FlowResult:
-    """Read-only: the FORMULATION baselines for the caller's fund group(s) in the CURRENT app, via
-    getBaseLineMasterHeaders_1_post (the same tool the dup-guard uses). The app is the current one
-    (Formulation / id 3) — it never prompts for an application/module."""
+async def _baseline_fund_groups(headers: dict[str, str] | None) -> list[dict[str, Any]]:
+    """EVERY fund group (getAllFundGroups_get, ADMINISTRATION/GLOBAL) so baselines span all of them,
+    not just the caller's — "show all" is the baseline list's whole point. Falls back to the caller's
+    groups (getFundGroupsByUser_post) only if the global list is unavailable."""
     fgs: list[dict[str, Any]] = []
+    try:
+        res = await tool_registry.execute("getAllFundGroups_get", {}, headers)
+        rows = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        for r in (rows or []):
+            if (isinstance(r, dict) and r.get("fundGroupId") is not None
+                    and str(r.get("enabled") or "Y").upper() != "N"):
+                fgs.append({"id": r.get("fundGroupId"),
+                            "name": str(r.get("name") or r.get("code") or r.get("fundGroupId"))})
+    except Exception as exc:  # noqa: BLE001
+        log.bind(func="_baseline_fund_groups").warning(f"getAllFundGroups failed: {exc}")
+    if fgs:
+        return fgs
+    # Fallback: the caller's own fund groups.
     try:
         res = await tool_registry.execute("getFundGroupsByUser_post", {"applicationId": "3"}, headers)
         rows = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
@@ -525,7 +538,15 @@ async def list_baselines(session: Any, headers: dict[str, str] | None) -> FlowRe
             if isinstance(r, dict) and r.get("fundGroupId") is not None:
                 fgs.append({"id": r.get("fundGroupId"), "name": str(r.get("name") or r.get("fundGroupId"))})
     except Exception as exc:  # noqa: BLE001
-        log.bind(func="list_baselines").warning(f"fund groups fetch failed: {exc}")
+        log.bind(func="_baseline_fund_groups").warning(f"getFundGroupsByUser fallback failed: {exc}")
+    return fgs
+
+
+async def list_baselines(session: Any, headers: dict[str, str] | None) -> FlowResult:
+    """Read-only: ALL FORMULATION baselines across EVERY fund group in the CURRENT app, via
+    getBaseLineMasterHeaders_1_post per fund group. The app is the current one (Formulation / id 3)
+    — it never prompts for an application/module."""
+    fgs = await _baseline_fund_groups(headers)
     if not fgs:
         return FlowResult(done=True, message=(
             "I couldn't resolve your **fund groups** for FORMULATION, so I can't list baselines. "
@@ -631,15 +652,7 @@ async def baseline_details(session: Any, message: str, headers: dict[str, str] |
     (Formulation / id 3). Fail-soft at every step."""
     from ..models.chat import UIBlock
     want_fy, want_title = _parse_baseline_target(message)
-    fgs: list[dict[str, Any]] = []
-    try:
-        res = await tool_registry.execute("getFundGroupsByUser_post", {"applicationId": "3"}, headers)
-        rows = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
-        for r in (rows or []):
-            if isinstance(r, dict) and r.get("fundGroupId") is not None:
-                fgs.append({"id": r.get("fundGroupId"), "name": str(r.get("name") or r.get("fundGroupId"))})
-    except Exception as exc:  # noqa: BLE001
-        log.bind(func="baseline_details").warning(f"fund groups fetch failed: {exc}")
+    fgs = await _baseline_fund_groups(headers)
     if not fgs:
         return FlowResult(done=True, message=(
             "I couldn't resolve your **fund groups** for FORMULATION, so I can't open a baseline."))
