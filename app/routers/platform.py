@@ -387,6 +387,42 @@ async def agent_task(agent: str, task_id: str, request: Request,
     return ApiResponse.ok(message="ok", data=t.model_dump())
 
 
+@router.get("/{agent}/reply/history", summary="Past conversations (gateway-routed under /reply)")
+@router.get("/{agent}/history", summary="The caller's past conversations (durable), newest first")
+async def agent_history(agent: str, request: Request,
+                        user: User = Depends(get_current_user)) -> ApiResponse:
+    """Durable conversation history for the current user — persists across page reloads and the
+    live-session TTL (reads the history:* archive). Powers the widget's 'Recent history' list, so
+    past chats are no longer lost on reload."""
+    return ApiResponse.ok(message="ok",
+                          data={"conversations": session_service.list_history(user_id=user.id)})
+
+
+@router.get("/{agent}/reply/history/detail", summary="Transcript (gateway-routed under /reply)")
+@router.get("/{agent}/history/detail", summary="One past conversation's full transcript")
+async def agent_history_detail(agent: str, request: Request, key: str = "",
+                               user: User = Depends(get_current_user)) -> ApiResponse:
+    """Full transcript of one of the caller's past conversations, by its history `key` — used when
+    the user reopens a conversation from Recent history. Scoped to the caller."""
+    rec = session_service.get_history_detail(key)
+    if not rec or (rec.get("user_id") is not None and str(rec.get("user_id")) != str(user.id)):
+        return ApiResponse.fail("Conversation not found", status_code=404)
+    return ApiResponse.ok(message="ok", data=rec)
+
+
+@router.post("/{agent}/reply/history/new", summary="New chat (gateway-routed under /reply)")
+@router.post("/{agent}/history/new", summary="Start a new chat (archives the current conversation)")
+async def agent_history_new(agent: str, request: Request, sessionId: str = "",
+                            user: User = Depends(get_current_user)) -> ApiResponse:
+    """New chat: archive the current conversation as an immutable history entry, then clear the live
+    session — so each chat becomes a distinct, reopenable entry going forward. Returns the refreshed
+    history list. `sessionId` empty = nothing to clear (just returns the list)."""
+    if sessionId:
+        session_service.clear_messages(sessionId)
+    return ApiResponse.ok(message="ok",
+                          data={"conversations": session_service.list_history(user_id=user.id)})
+
+
 @router.post("/{agent}/reply", summary="Ask an AI agent and get a reply")
 async def agent_reply(
     agent: str,
