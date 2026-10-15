@@ -643,8 +643,11 @@ async def baseline_details(session: Any, message: str, headers: dict[str, str] |
         return FlowResult(done=True, message=(
             "A few baselines match — which one? Ask by **fiscal year** or a quoted **title**:\n\n" + lines))
     target = cands[0]
-    header = (f"**{target['title']}** · FY{target['fiscalYear']} · "
-              f"_{target['status'] or 'Draft'}_  ({target['fgName']})")
+    title = target["title"]
+    status = target["status"] or "Draft"
+    # Lead with the name; the rest of the facts go in a tidy key/value block below rather than a
+    # run-on sentence, so the reply reads as a scannable summary card.
+    header = f"**{title}**"
     # Line items: per-program-office breakdown for this master header.
     rows = None
     try:
@@ -654,10 +657,24 @@ async def baseline_details(session: Any, message: str, headers: dict[str, str] |
         rows = r.output.get("data") if getattr(r, "success", False) and isinstance(r.output, dict) else None
     except Exception as exc:  # noqa: BLE001
         log.bind(func="baseline_details", master=target["masterId"]).warning(f"baseLineDetails failed: {exc}")
+
+    # Shared summary card: the baseline's identity as label/value rows.
+    def _meta(extra: list[dict[str, str]]) -> UIBlock:
+        base = [
+            {"label": "Fiscal year", "value": f"FY{target['fiscalYear']}"},
+            {"label": "Status", "value": status},
+            {"label": "Fund group", "value": target["fgName"]},
+        ]
+        return UIBlock(type="fields", title="Baseline", items=base + extra)
+
     if not rows:
-        return FlowResult(done=True, message=(
-            header + "\n\nNo program-office line items yet for this baseline (it may be freshly generated "
-            "with nothing carried forward)."))
+        return FlowResult(done=True, message=header, blocks=[
+            _meta([]),
+            UIBlock(type="notice", level="info",
+                    text="No program-office line items yet — this baseline looks freshly generated "
+                         "with nothing carried forward."),
+        ])
+
     # Shape per-office rows, then lay the UX out to MATCH THE DATA: a freshly-generated baseline
     # carries nothing forward (every line $0) — a 33-row zero table is noise, so summarise it; a
     # baseline with real requests gets a focused, amount-sorted table of just the offices that have
@@ -686,24 +703,36 @@ async def baseline_details(session: Any, message: str, headers: dict[str, str] |
                        key=lambda p: p["amt"], reverse=True)
 
     if not with_data:
-        # Empty baseline → one clean line, not a wall of zero rows.
-        return FlowResult(done=True, message=(
-            header + f"\n\nSpans **{n}** program office(s), but **no requests have been carried "
-            f"forward yet** — every line is **$0**. (Generated from a source year with no "
-            f"requests; they'll populate here once requests exist.)"))
+        # Empty baseline → a clean summary card + a plain-language note, not a wall of zero rows.
+        return FlowResult(done=True, message=header, blocks=[
+            _meta([
+                {"label": "Program offices", "value": str(n)},
+                {"label": "Requests carried forward", "value": "0"},
+                {"label": "Total amount", "value": _fmt_amt(0)},
+            ]),
+            UIBlock(type="notice", level="info",
+                    text="Every line is $0 — this baseline was generated from a source year with no "
+                         "requests. Line items will fill in here once the source year has requests."),
+        ])
 
-    # Populated → an amount-sorted table of the offices that actually have requests.
+    # Populated → summary card + an amount-sorted table of the offices that actually have requests.
     cap = 25
     table_rows = [[p["po"], f"{p['req']:,}", _fmt_amt(p["amt"]), p["status"] or "—"]
                   for p in with_data[:cap]]
-    block = UIBlock(type="table", title="Program-office breakdown (by amount)",
+    meta = _meta([
+        {"label": "Program offices with requests", "value": f"{len(with_data)} of {n}"},
+        {"label": "Total requests", "value": f"{total_req:,}"},
+        {"label": "Total amount", "value": _fmt_amt(total_amt)},
+    ])
+    note = (f"Showing the top {cap} program offices by amount; {len(with_data) - cap} more have "
+            "requests.") if len(with_data) > cap else None
+    table = UIBlock(type="table", title="Program-office breakdown (by amount)",
                     columns=["Program Office", "Requests", "Amount", "Status"],
                     rows=table_rows, view="modern")
-    summ = (header + f"\n\n**{len(with_data)}** of {n} program office(s) have requests · "
-            f"**{total_req:,}** request(s) · total **{_fmt_amt(total_amt)}**.")
-    if len(with_data) > cap:
-        summ += f"\n\n_Showing the top {cap} by amount; {len(with_data) - cap} more have requests._"
-    return FlowResult(done=True, message=summ, blocks=[block])
+    blocks = [meta, table]
+    if note:
+        blocks.append(UIBlock(type="notice", level="info", text=note))
+    return FlowResult(done=True, message=header, blocks=blocks)
 
 
 async def maybe_start(session: Any, message: str, headers: dict[str, str] | None = None,
