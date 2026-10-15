@@ -521,11 +521,15 @@ async def _baseline_fund_groups(headers: dict[str, str] | None) -> list[dict[str
     try:
         res = await tool_registry.execute("getAllFundGroups_get", {}, headers)
         rows = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+        seen: set[Any] = set()
         for r in (rows or []):
-            if (isinstance(r, dict) and r.get("fundGroupId") is not None
-                    and str(r.get("enabled") or "Y").upper() != "N"):
+            # Include EVERY fund group — even disabled ones — so a baseline parked under a retired
+            # fund group still surfaces (truly "show all"). Dedup by id.
+            if isinstance(r, dict) and r.get("fundGroupId") is not None and r.get("fundGroupId") not in seen:
+                seen.add(r.get("fundGroupId"))
                 fgs.append({"id": r.get("fundGroupId"),
                             "name": str(r.get("name") or r.get("code") or r.get("fundGroupId"))})
+        log.bind(func="_baseline_fund_groups").info(f"getAllFundGroups → {len(fgs)} fund groups")
     except Exception as exc:  # noqa: BLE001
         log.bind(func="_baseline_fund_groups").warning(f"getAllFundGroups failed: {exc}")
     if fgs:
