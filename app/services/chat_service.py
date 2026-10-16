@@ -93,6 +93,13 @@ def _friendly_status(tool_name: str) -> str:
     return skills.status_label(tool_name)
 
 
+def _blocks_dicts(blocks: Any) -> list[dict] | None:
+    """UIBlocks → plain dicts for durable storage, so a reopened history conversation can restore the
+    rich blocks (tables/cards/notices), not just the text. None when there are none."""
+    out = [b.model_dump() if hasattr(b, "model_dump") else b for b in (blocks or [])]
+    return out or None
+
+
 # Markers that signal the model is emitting a tool call AS TEXT (qwen does this instead of a
 # structured tool_call) — a fenced code block, a <tool_call> tag, or a bare {"name": …}. The
 # _extract_text_tool_calls fallback recovers the real call, but the raw JSON (and any
@@ -443,7 +450,7 @@ class ChatService:
             _cav = _ungrounded_suffix(final_text, skill, _grounded)
             if _cav:
                 final_text = final_text.rstrip() + "\n\n" + _cav
-        session.add_assistant(final_text)
+        session.add_assistant(final_text, blocks=_blocks_dicts(blocks))
         self._log_answer(session_id, final_text, blocks)
         _log_turn_source(session_id, "inference",
                          model=(llm_response.model if llm_response else ""),
@@ -609,7 +616,7 @@ class ChatService:
                 progress=fr.progress, ack=fr.ack,
                 finish_reason="tool_confirmation_required",
             )
-        session.add_assistant(fr.message)
+        session.add_assistant(fr.message, blocks=_blocks_dicts(fr.blocks))
         session_service.save(session)
         return ChatResponse(
             session_id=sid, message_id=str(uuid.uuid4()),
@@ -631,7 +638,7 @@ class ChatService:
                                 content=fr.message, pending_action=pending,
                                 progress=fr.progress, ack=fr.ack,
                                 finish_reason="confirm_required")]
-        session.add_assistant(fr.message)
+        session.add_assistant(fr.message, blocks=_blocks_dicts(fr.blocks))
         session_service.save(session)
         return [
             StreamChunk(type="delta", session_id=sid, content=fr.message),
@@ -983,7 +990,7 @@ class ChatService:
                     if _cav:
                         text = text.rstrip() + "\n\n" + _cav
                         yield StreamChunk(type="delta", session_id=session_id, content="\n\n" + _cav)
-                session.add_assistant(text)
+                session.add_assistant(text, blocks=_blocks_dicts(sblocks))
                 self._log_answer(session_id, text, sblocks)
                 session_service.save(session)
                 if turn:

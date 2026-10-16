@@ -27,6 +27,9 @@ class Message(BaseModel):
     tool_name: str | None = None
     # Serialised JSON list of OpenAI tool_call objects (on assistant messages)
     tool_calls_json: str | None = None
+    # Rendered UIBlocks (tables/cards/notices) that accompanied an assistant reply, as plain dicts —
+    # persisted so a REOPENED history conversation restores the rich blocks, not just the text.
+    blocks: list[Any] | None = None
     timestamp: str = Field(default_factory=_now_iso)
 
 
@@ -46,10 +49,13 @@ class Session(BaseModel):
         self.messages.append(Message(role="user", content=content))
         self.touch()
 
-    def add_assistant(self, content: str, tool_calls: list[dict[str, Any]] | None = None) -> None:
+    def add_assistant(self, content: str, tool_calls: list[dict[str, Any]] | None = None,
+                      blocks: list[Any] | None = None) -> None:
         msg = Message(role="assistant", content=content)
         if tool_calls:
             msg.tool_calls_json = _json.dumps(tool_calls)
+        if blocks:
+            msg.blocks = blocks        # plain dicts (UIBlock.model_dump) → restorable on reopen
         self.messages.append(msg)
         self.touch()
 

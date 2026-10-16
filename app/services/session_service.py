@@ -145,26 +145,51 @@ class SessionService:
             # derive it from the record's own session_id instead.
             sid = data.get("session_id") or ""
             archived = key.startswith(f"{_HISTORY_PREFIX}{sid}:")
-            out.append({
-                "key": key,                                      # drill-down handle (get_history_detail)
-                "session_id": data.get("session_id"),
-                "archived": archived,                            # True → immutable, cleared convo
-                "category": _category(data),                     # Baseline / Access / Data call / …
-                "message_count": len(msgs),
-                "created_at": data.get("created_at", ""),
-                "updated_at": data.get("updated_at", ""),
-                "user_id": data.get("user_id"),
-                "last_question": next(
-                    (m.get("content") for m in reversed(msgs) if m.get("role") == "user"), None),
-            })
+            # PER-DAY SEPARATION: split one conversation record into one entry PER CALENDAR DAY (UTC,
+            # from each message's own timestamp), so a continuous session shows as distinct, reopenable
+            # per-day chats. The detail endpoint re-filters to that day via the `#<day>` key suffix.
+            by_day: dict[str, list] = {}
+            for m in msgs:
+                if not isinstance(m, dict):
+                    continue
+                ts = str(m.get("timestamp") or "")
+                day = ts[:10] if len(ts) >= 10 else (str(data.get("created_at") or "")[:10] or "undated")
+                by_day.setdefault(day, []).append(m)
+            if not by_day:                       # empty conversation — still list it once
+                by_day = {str(data.get("updated_at") or "")[:10] or "undated": []}
+            for day, dmsgs in by_day.items():
+                last_ts = (dmsgs[-1].get("timestamp") if dmsgs else "") or data.get("updated_at", "")
+                out.append({
+                    "key": f"{key}#{day}",                       # drill-down handle (day-scoped)
+                    "session_id": sid,
+                    "day": day,
+                    "archived": archived,                        # True → immutable, cleared convo
+                    "category": _category({"messages": dmsgs, "metadata": data.get("metadata")}),
+                    "message_count": len(dmsgs),
+                    "created_at": (dmsgs[0].get("timestamp") if dmsgs else "") or data.get("created_at", ""),
+                    "updated_at": last_ts,
+                    "user_id": data.get("user_id"),
+                    "last_question": next(
+                        (m.get("content") for m in reversed(dmsgs) if m.get("role") == "user"), None),
+                })
         return sorted(out, key=lambda s: s.get("updated_at") or "", reverse=True)
 
     def get_history_detail(self, key: str) -> dict | None:
-        """One preserved conversation's full record (messages), by its `history:*` archive key."""
-        if not key or not key.startswith(_HISTORY_PREFIX):
+        """One preserved conversation's record (messages), by its `history:*` key. A `#<day>` suffix
+        (from the per-day list) filters the messages to that single calendar day."""
+        if not key:
             return None
-        data = redis_get_json(key)
-        return data if isinstance(data, dict) else None
+        base, _, day = key.partition("#")
+        if not base.startswith(_HISTORY_PREFIX):
+            return None
+        data = redis_get_json(base)
+        if not isinstance(data, dict):
+            return None
+        if day:
+            msgs = [m for m in (data.get("messages") or [])
+                    if isinstance(m, dict) and str(m.get("timestamp") or "")[:10] == day]
+            data = {**data, "messages": msgs}
+        return data
 
     def list_sessions(self, user_id: str | None = None) -> list[dict]:
         """List all active sessions (optionally filtered by user_id)."""
