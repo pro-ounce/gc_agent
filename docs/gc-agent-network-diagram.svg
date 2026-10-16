@@ -1,0 +1,123 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 940" role="img"
+     aria-label="GC Agent network topology: browser to Apache proxy to GC Agent; GC Agent to Ollama and OpenSearch locally and to the MCP service, gateway, Formulation and Administration microservices, and Oracle DB; OpenSearch snapshots to filesystem/S3."
+     font-family="Segoe UI, Helvetica, Arial, sans-serif">
+  <defs>
+    <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <!-- card -->
+  <rect x="6" y="6" width="948" height="928" rx="16" fill="#ffffff" stroke="#e2e8f0"/>
+  <text x="480" y="40" text-anchor="middle" font-size="20" font-weight="700" fill="#0f172a">GC Agent — Network Topology</text>
+  <text x="480" y="60" text-anchor="middle" font-size="12" fill="#64748b">Self-hosted · model-swappable (Qwen→Granite/Mistral) · air-gap ready</text>
+
+  <!-- ============ CLIENT ============ -->
+  <rect x="350" y="80" width="260" height="54" rx="10" fill="#f8fafc" stroke="#334155"/>
+  <text x="480" y="103" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">User browser</text>
+  <text x="480" y="121" text-anchor="middle" font-size="11.5" fill="#475569">COMPASS widget (micro-frontend)</text>
+
+  <!-- arrow U -> Apache -->
+  <line x1="480" y1="134" x2="480" y2="168" stroke="#475569" stroke-width="1.6" marker-end="url(#arw)"/>
+  <text x="492" y="156" font-size="11" fill="#475569">HTTPS 443 · SSE stream</text>
+
+  <!-- ============ EDGE ============ -->
+  <rect x="350" y="170" width="260" height="48" rx="10" fill="#f8fafc" stroke="#334155"/>
+  <text x="480" y="190" text-anchor="middle" font-size="14" font-weight="600" fill="#0f172a">Apache reverse proxy</text>
+  <text x="480" y="207" text-anchor="middle" font-size="11.5" fill="#475569">:443 TLS</text>
+
+  <!-- arrow Apache -> Agent -->
+  <line x1="480" y1="218" x2="480" y2="286" stroke="#475569" stroke-width="1.6" marker-end="url(#arw)"/>
+  <text x="492" y="258" font-size="11" fill="#475569">proxy → :17024</text>
+
+  <!-- ============ AI HOST BAND ============ -->
+  <rect x="40" y="264" width="880" height="118" rx="12" fill="#faf5ff" stroke="#c4b5fd"/>
+  <text x="54" y="283" font-size="11.5" font-weight="600" fill="#7c3aed">AI HOST  ·  GB10 (sandbox) → AWS GPU (g5/g6e)</text>
+
+  <!-- Ollama -->
+  <rect x="70" y="292" width="250" height="74" rx="10" fill="#ffffff" stroke="#7c3aed"/>
+  <text x="195" y="315" text-anchor="middle" font-size="13.5" font-weight="600" fill="#0f172a">Ollama (llama.cpp)</text>
+  <text x="195" y="333" text-anchor="middle" font-size="11" fill="#475569">:11434 · localhost only</text>
+  <text x="195" y="350" text-anchor="middle" font-size="11" fill="#475569">qwen2.5:14b Q4 + nomic-embed</text>
+
+  <!-- GC Agent -->
+  <rect x="356" y="292" width="248" height="74" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.8"/>
+  <text x="480" y="318" text-anchor="middle" font-size="14" font-weight="700" fill="#4c1d95">GC Agent</text>
+  <text x="480" y="337" text-anchor="middle" font-size="11.5" fill="#5b21b6">FastAPI / uvicorn</text>
+  <text x="480" y="353" text-anchor="middle" font-size="11.5" fill="#5b21b6">:17024</text>
+
+  <!-- OpenSearch -->
+  <rect x="640" y="292" width="250" height="74" rx="10" fill="#ffffff" stroke="#7c3aed"/>
+  <text x="765" y="315" text-anchor="middle" font-size="13.5" font-weight="600" fill="#0f172a">OpenSearch</text>
+  <text x="765" y="333" text-anchor="middle" font-size="11" fill="#475569">:17200</text>
+  <text x="765" y="350" text-anchor="middle" font-size="11" fill="#475569">kv · tools · audit · config</text>
+
+  <!-- Agent <-> Ollama -->
+  <line x1="356" y1="325" x2="324" y2="325" stroke="#475569" stroke-width="1.6" marker-end="url(#arw)"/>
+  <text x="340" y="315" text-anchor="middle" font-size="10.5" fill="#475569">inference</text>
+  <!-- Agent <-> OpenSearch -->
+  <line x1="604" y1="325" x2="636" y2="325" stroke="#475569" stroke-width="1.6" marker-end="url(#arw)"/>
+  <text x="620" y="315" text-anchor="middle" font-size="10.5" fill="#475569">state</text>
+
+  <!-- arrow Agent -> MCP -->
+  <line x1="480" y1="366" x2="480" y2="410" stroke="#475569" stroke-width="1.6" marker-end="url(#arw)"/>
+  <text x="492" y="390" font-size="11" fill="#475569">:19170 · tools · X-Selected-App/Role (b64)</text>
+
+  <!-- ============ INTEGRATION ============ -->
+  <rect x="356" y="414" width="248" height="46" rx="10" fill="#f8fafc" stroke="#334155"/>
+  <text x="480" y="434" text-anchor="middle" font-size="13.5" font-weight="600" fill="#0f172a">MCP service</text>
+  <text x="480" y="451" text-anchor="middle" font-size="11" fill="#475569">/mcp-service/mcp</text>
+
+  <line x1="480" y1="460" x2="480" y2="492" stroke="#475569" stroke-width="1.6" marker-end="url(#arw)"/>
+  <text x="492" y="480" font-size="11" fill="#475569">REST</text>
+
+  <rect x="356" y="496" width="248" height="46" rx="10" fill="#f8fafc" stroke="#334155"/>
+  <text x="480" y="516" text-anchor="middle" font-size="13.5" font-weight="600" fill="#0f172a">API Gateway</text>
+  <text x="480" y="533" text-anchor="middle" font-size="11" fill="#475569">scope / auth forwarding</text>
+
+  <!-- Gateway -> backend -->
+  <line x1="440" y1="542" x2="370" y2="598" stroke="#475569" stroke-width="1.6" marker-end="url(#arw)"/>
+  <line x1="520" y1="542" x2="590" y2="598" stroke="#475569" stroke-width="1.6" marker-end="url(#arw)"/>
+
+  <!-- ============ BACKEND BAND ============ -->
+  <rect x="40" y="574" width="880" height="92" rx="12" fill="#f1f5f9" stroke="#cbd5e1"/>
+  <text x="54" y="592" font-size="11.5" font-weight="600" fill="#475569">MW MICROSERVICES  ·  gc-mw Tomcat</text>
+
+  <rect x="256" y="600" width="208" height="54" rx="10" fill="#ffffff" stroke="#334155"/>
+  <text x="360" y="623" text-anchor="middle" font-size="13.5" font-weight="600" fill="#0f172a">Formulation</text>
+  <text x="360" y="641" text-anchor="middle" font-size="11" fill="#475569">:19070 · baseline / IOP / budget</text>
+
+  <rect x="496" y="600" width="208" height="54" rx="10" fill="#ffffff" stroke="#334155"/>
+  <text x="600" y="623" text-anchor="middle" font-size="13.5" font-weight="600" fill="#0f172a">Administration / Auth</text>
+  <text x="600" y="641" text-anchor="middle" font-size="11" fill="#475569">users · roles · licenses</text>
+
+  <!-- backend -> Oracle -->
+  <line x1="360" y1="654" x2="400" y2="716" stroke="#475569" stroke-width="1.6" marker-end="url(#arw)"/>
+  <line x1="600" y1="654" x2="450" y2="716" stroke="#475569" stroke-width="1.6" marker-end="url(#arw)"/>
+  <text x="300" y="690" font-size="11" fill="#475569">JDBC</text>
+
+  <!-- ============ DATA ============ -->
+  <!-- Oracle cylinder -->
+  <g>
+    <path d="M360 720 a65 12 0 0 1 130 0 v44 a65 12 0 0 1 -130 0 z" fill="#ecfdf5" stroke="#0f766e"/>
+    <ellipse cx="425" cy="720" rx="65" ry="12" fill="#ffffff" stroke="#0f766e"/>
+    <text x="425" y="752" text-anchor="middle" font-size="13" font-weight="600" fill="#065f46">Oracle DB</text>
+  </g>
+
+  <!-- Snapshots -->
+  <rect x="560" y="712" width="230" height="56" rx="10" fill="#ecfdf5" stroke="#0f766e"/>
+  <text x="675" y="735" text-anchor="middle" font-size="13" font-weight="600" fill="#065f46">Snapshots / models / logs</text>
+  <text x="675" y="753" text-anchor="middle" font-size="11" fill="#047857">agent-fs → S3 (air-gap staged)</text>
+
+  <!-- OpenSearch -> Snapshots (dashed) -->
+  <path d="M765 366 L765 712" fill="none" stroke="#0f766e" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#arw)"/>
+  <text x="773" y="540" font-size="11" fill="#0f766e">snapshots</text>
+
+  <!-- legend -->
+  <rect x="40" y="800" width="880" height="112" rx="12" fill="#ffffff" stroke="#e2e8f0"/>
+  <text x="54" y="822" font-size="11.5" font-weight="700" fill="#0f172a">NOTES</text>
+  <text x="54" y="842" font-size="11.5" fill="#334155">• Model (brain) = Qwen today — swap to Granite 3.3 8B / Mistral Nemo 12B for compliance; engine = Ollama/llama.cpp (not Meta Llama).</text>
+  <text x="54" y="861" font-size="11.5" fill="#334155">• Ollama &amp; OpenSearch bind localhost / SG-internal; only Apache is reachable from clients; agent reachable only from the proxy.</text>
+  <text x="54" y="880" font-size="11.5" fill="#334155">• App is stateless (state in OpenSearch) → scale concurrency by adding GPU hosts behind the gateway + a shared OpenSearch node.</text>
+  <text x="54" y="899" font-size="11.5" fill="#334155">• Air-gapped AWS: no IGW/NAT; artifacts staged via S3/VPC endpoints; model updates are a scheduled transfer, never a runtime pull.</text>
+</svg>
