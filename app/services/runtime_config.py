@@ -39,11 +39,19 @@ _MODEL_OPTIONS_BASE = ["qwen2.5:32b", "qwen2.5:14b", "qwen2.5:7b", "llama3.1:lat
 _installed_models: list[str] = []
 
 
+def _is_chat_model(name: str) -> bool:
+    """Exclude embedding models from the chat Model dropdown — they're pulled into the same Ollama
+    runtime (e.g. nomic-embed-text for retrieval) but can't serve chat/tool-calling, so selecting
+    one would break the agent."""
+    return "embed" not in str(name).lower()
+
+
 def set_installed_models(models: list[str]) -> None:
     """Cache the live Ollama model list (from llm_service.installed_models) so the admin Model
-    dropdown shows — and accepts — every pulled model, not just the curated defaults."""
+    dropdown shows — and accepts — every pulled CHAT model, not just the curated defaults.
+    Embedding models are filtered out (they share the runtime but can't serve chat)."""
     global _installed_models
-    _installed_models = [str(m) for m in (models or []) if m]
+    _installed_models = [str(m) for m in (models or []) if m and _is_chat_model(m)]
 
 
 def _model_options() -> list[str]:
