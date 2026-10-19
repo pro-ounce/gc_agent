@@ -39,6 +39,64 @@ classifier slot later (same interface) once the FedRAMP/egress question is clear
 
 ---
 
+## Eval gate (the deploy gate)
+
+The single rule that governs every routing change: **no routing change ships red.** A change to the
+router, classifier, slot resolvers, or handlers must run the gate suite and pass before it deploys —
+the automated equivalent of a Budget Operations Review sign-off (cf. the grounding guard, which is the
+runtime half of the same "never confidently wrong" bar).
+
+**Gate suite (routing-relevant evals in `eval/`):**
+
+| Eval | Covers | Pass bar (current) |
+|---|---|---|
+| `router_eval.py` | deterministic fallback router | **54/54, 0 confident-wrong** |
+| `classifier_eval.py` | primary model classifier | **50/51**, the 1 miss escalates safely |
+| `entity_routing_eval.py` | slot/entity → route resolution | all pass, 0 confident-wrong |
+| `entity_validation_eval.py` | resolved slots validated vs live catalogue | all pass |
+| `skill_routing_eval.py` | mutation verbs route OUT to skills/flows | all pass (hard action gate) |
+| `flow_breakout_eval.py` | read/re-create break-out mid-flow | all pass |
+| `remove_role_eval.py` | remove/revoke action routing | all pass |
+| `baseline_number_guard.py` | no ungrounded baseline figures | all pass (grounding) |
+| `tool_calling_models.py` | **model-selection gate** — candidate models fire the right mutation/read tools with correct args | 0 wrong-mutation for the configured model |
+
+**The pass bar (all must hold):**
+- **0 confident-wrong** — a confident answer that is wrong is a gate FAIL, even if every other case passes. This is the non-negotiable number.
+- No regression in route-correct counts vs. the last green run (misses may only convert to *safe escalations*, never to wrong answers).
+- Every mutation intent routes to a flow/skill, never a read listing.
+- Abstention→LLM rate within the agreed budget (reported, not failed on).
+
+**How to run the gate:**
+```
+cd gc_agent && for f in router classifier entity_routing entity_validation \
+  skill_routing flow_breakout remove_role baseline_number_guard; do \
+  PYTHONPATH=. python eval/$f.py || echo "GATE FAIL: $f"; done
+```
+
+**Enforcement status:**
+- ✅ **Pre-deploy (manual), enforced by discipline** — run the suite before `deploy/pull-deploy.sh`; a red suite blocks the push. This is how changes have shipped this cycle.
+- ⬜ **Automated pre-deploy hook — TODO.** `deploy/pull-deploy.sh` does NOT yet run the gate (today it `git reset --hard` + restarts). Wire the suite as a step that aborts the deploy on any non-zero/`GATE FAIL`.
+- ⬜ **CI — TODO.** No `.github/workflows` yet; add a workflow that runs the gate on every PR touching `app/services/intent_*.py`, `app/services/flows.py`, `app/services/chat_service.py`, or `eval/`, and blocks merge on failure.
+
+**Model-selection gate (`tool_calling_models.py`) — when you swap the LLM, not every deploy.**
+Unlike the routing evals (stdlib/harness), this one needs the model(s) + the MCP catalogue, so it runs
+ON THE BOX and reproduces the real tool-calling turn (skills.match → grounding → `select_tools`
+`only`/`slim` pinning → `llm().complete`) against a gold corpus of create/assign/remove/edit/data-call
++ read + must-not-mutate cases. The gate is **0 wrong-mutation** (fired a different mutation than gold,
+or any mutation on a read/ambiguous query) — the tool-calling analogue of 0-confident-wrong. It gates
+the *currently configured* model (exit non-zero) and, with `TC_MODELS=…`, ranks candidates on a
+`gate · gold+args · partial · miss · wrong-tool · wrong-MUT · abstain-ok` leaderboard. Run it before
+adopting any new base model; candidate selection favours high-reasoning + tool-calling + permissive/
+community license + Western provenance (gpt-oss, Llama, Mistral, Granite — see the defaults).
+```
+APP_SKIP_INIT=1 PYTHONPATH=/apps/gc_agent ./bin/python eval/tool_calling_models.py
+TC_MODELS="gpt-oss:20b,mistral-small:24b" APP_SKIP_INIT=1 PYTHONPATH=/apps/gc_agent ./bin/python eval/tool_calling_models.py
+```
+
+**Growing the gate:** every live mis-route or punt we find becomes a new eval case (seeded from real query logs) *before* the fix — the fix then has to make that case green without reddening any other. That is the only sanctioned way to extend routing coverage (Phase 3 revised / Phase 4).
+
+---
+
 *(Original plan and Phase-2 outcome below.)*
 
 **Status (historical):** Phases 0–1 shipped 2026-09-12. Phase 2 (semantic-first) tried, measured
