@@ -30,14 +30,42 @@ def _spec(key: str, label: str, group: str, type_: str, default: Any, desc: str,
             "default": default, "description": desc, **extra}
 
 
+# ── Model dropdown options ──────────────────────────────────────────────────────
+# A few curated fallbacks, PLUS whatever is actually pulled in the Ollama runtime (incl. models
+# added manually with `ollama pull`). The live list is refreshed from /api/tags by the admin
+# config endpoint (set_installed_models); without it we'd only ever show the curated names and a
+# manually-pulled model would be invisible AND unsaveable (set_many rejects out-of-options selects).
+_MODEL_OPTIONS_BASE = ["qwen2.5:32b", "qwen2.5:14b", "qwen2.5:7b", "llama3.1:latest"]
+_installed_models: list[str] = []
+
+
+def set_installed_models(models: list[str]) -> None:
+    """Cache the live Ollama model list (from llm_service.installed_models) so the admin Model
+    dropdown shows — and accepts — every pulled model, not just the curated defaults."""
+    global _installed_models
+    _installed_models = [str(m) for m in (models or []) if m]
+
+
+def _model_options() -> list[str]:
+    """Union of live Ollama models + curated defaults + the current/default model, installed-first,
+    de-duped. Never empty (falls back to the curated list) so the dropdown always renders, and the
+    currently-selected model is always present even if the runtime is momentarily unreachable."""
+    ordered: list[str] = []
+    for m in [*_installed_models, *_MODEL_OPTIONS_BASE, cfg.LLM_MODEL]:
+        if m and m not in ordered:
+            ordered.append(str(m))
+    return ordered
+
+
 def _param_specs() -> list[dict]:
     """The tunable surface. Defaults are the current .env/cfg values (the fallback when a
     param has no override). type: int | float | bool | string | select."""
     specs = [
         # ── Model ──
         _spec("LLM_MODEL", "Model", "Model", "select", cfg.LLM_MODEL,
-              "Ollama model for chat + tool-calling. Larger = better tool-calls, slower.",
-              options=["qwen2.5:32b", "qwen2.5:14b", "qwen2.5:7b", "llama3.1:latest"]),
+              "Ollama model for chat + tool-calling. Larger = better tool-calls, slower. "
+              "Options are the models pulled in the Ollama runtime (incl. manual pulls).",
+              options=_model_options()),
         _spec("LLM_TEMPERATURE", "Temperature", "Model", "float", cfg.LLM_TEMPERATURE,
               "Sampling temperature. 0 = deterministic; higher = more varied.", min=0.0, max=2.0, step=0.1),
         _spec("LLM_MAX_TOKENS", "Max output tokens", "Model", "int", cfg.LLM_MAX_TOKENS,
@@ -196,7 +224,11 @@ def set_many(updates: dict[str, Any]) -> dict[str, Any]:
             ov.pop(k, None)
             continue
         val = _clamp(spec, _coerce(spec, v))
-        if spec["type"] == "select" and spec.get("options") and val not in spec["options"]:
+        # The model select's options are DYNAMIC (live Ollama list), so validate LLM_MODEL against
+        # the fresh list rather than the import-time snapshot baked into _SPECS_BY_KEY — otherwise a
+        # manually-pulled model, now shown in the dropdown, would still be rejected here.
+        allowed = _model_options() if k == "LLM_MODEL" else spec.get("options")
+        if spec["type"] == "select" and allowed and val not in allowed:
             continue  # ignore an out-of-range select
         ov[k] = val
         applied[k] = val

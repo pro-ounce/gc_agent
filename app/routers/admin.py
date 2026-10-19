@@ -84,15 +84,27 @@ async def wf_guide_asset(request: Request, asset: str):
     return JSONResponse({"detail": "not found"}, status_code=404)
 
 
+async def _refresh_model_options() -> None:
+    """Point the Model dropdown at the live Ollama model list (incl. manually-pulled models).
+    Best-effort — leaves the curated fallback in place if the runtime is unreachable."""
+    try:
+        from ..services.llm_service import llm
+        runtime_config.set_installed_models(await llm().installed_models())
+    except Exception:  # noqa: BLE001 — never let a probe failure break the admin page
+        pass
+
+
 @router.get("/admin/config", summary="Current runtime config (values + defaults)")
 async def admin_get_config(request: Request):
     _guard(request)
+    await _refresh_model_options()
     return {"params": runtime_config.get_all()}
 
 
 @router.post("/admin/config", summary="Update runtime config overrides")
 async def admin_set_config(request: Request):
     _guard(request)
+    await _refresh_model_options()           # so a just-pulled model validates on save
     body = await request.json()
     updates = body.get("updates", body) if isinstance(body, dict) else {}
     applied = runtime_config.set_many(updates)

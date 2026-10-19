@@ -277,12 +277,24 @@ class OllamaProvider:
             usage=usage,
         )
 
-    async def health(self) -> dict[str, Any]:
-        """Probe the Ollama runtime (lists local models). UP if it responds."""
+    async def installed_models(self) -> list[str]:
+        """Model tags actually present in the Ollama runtime (`ollama pull …`), as reported by
+        /api/tags — INCLUDING ones pulled manually, which a curated list would miss. Best-effort:
+        returns [] if Ollama is unreachable, so callers can fall back to a static list."""
         try:
             resp = await self._client.get("/api/tags", timeout=5.0)
             resp.raise_for_status()
-            models = [m.get("name") for m in resp.json().get("models", [])]
+            return [m.get("name") for m in resp.json().get("models", []) if m.get("name")]
+        except Exception as exc:  # noqa: BLE001
+            log.bind(func="installed_models").warning(f"ollama /api/tags failed (non-fatal): {exc}")
+            return []
+
+    async def health(self) -> dict[str, Any]:
+        """Probe the Ollama runtime (lists local models). UP if it responds, DOWN if unreachable."""
+        try:
+            resp = await self._client.get("/api/tags", timeout=5.0)
+            resp.raise_for_status()
+            models = [m.get("name") for m in resp.json().get("models", []) if m.get("name")]
             return {"status": "UP", "provider": "ollama", "model": self._model,
                     "model_available": self._model in models or any(str(self._model).split(":")[0] in str(x) for x in models)}
         except Exception as exc:  # noqa: BLE001
