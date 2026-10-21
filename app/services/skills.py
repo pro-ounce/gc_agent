@@ -154,6 +154,36 @@ SKILLS: list[Skill] = [
         summary="generate a user-access report",
     ),
 
+    # ── List a user's applications (name-based read; focused so a weak model picks the
+    #    per-user tool, not the all-users getAllUserApps_get) ──
+    Skill(
+        name="user_apps",
+        keywords=(
+            "what applications does", "what apps does", "which applications does", "which apps does",
+            "what applications is", "which applications is", "what apps is", "which apps is",
+            "what applications has", "what apps has", "list applications for", "list apps for",
+            "list the applications for", "applications assigned to", "apps assigned to",
+            "show applications for", "show the applications for", "which applications is assigned",
+        ),
+        tool="getUserAppsByUsername_get",
+        required=("username",),
+        focused=True,
+        schema={
+            "type": "object",
+            "properties": {
+                "username": {"type": "string",
+                             "description": "The user's username exactly as given (e.g. GCADMIN)."},
+            },
+            "required": ["username"],
+        },
+        summary="list the applications a user is assigned to",
+        hint=(
+            "Pass the USERNAME in `username` exactly as the user gave it — call "
+            "getUserAppsByUsername_get. Do NOT look up an id first; only ask if no username "
+            "was given."
+        ),
+    ),
+
     # ── Assign an application + role to a user (drives the tool by NAME; ids resolved) ──
     Skill(
         name="assign_access",
@@ -368,6 +398,7 @@ _TOOL_LABELS: dict[str, str] = {
     "getUserProfile_get": "Loading the profile",
     "getAllApplications_get": "Loading applications",
     "getUserAppsByUserId_get": "Loading applications",
+    "getUserAppsByUsername_get": "Loading applications",
     "getUserAppRoleByUserId_post": "Loading roles",
     "getApplicationRolesBy_post": "Loading roles",
     "getApplicationRolesByAppId_get": "Loading roles",

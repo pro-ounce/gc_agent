@@ -107,8 +107,8 @@ CASES: list[dict] = [
      "mutation": False, "note": "user lookup — 'details for'"},
     # ── read: user's apps (getAllUserApps_get) ───────────────────────────────────
     {"q": "what applications does gcadmin have",
-     "expect": "tool", "tool": "getAllUserApps_get", "args": {}, "mutation": False,
-     "note": "list a user's applications"},
+     "expect": "tool", "tool": "getUserAppsByUsername_get", "args": {"username": "gcadmin"},
+     "mutation": False, "note": "list a user's applications"},
     # ── MUST-NOT-fire-a-mutation (the destructive guard) ─────────────────────────
     {"q": "remove the role",
      "expect": "none", "tool": "", "args": {}, "mutation": False,
