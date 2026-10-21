@@ -64,19 +64,19 @@ from app.services.llm_service import llm                        # noqa: E402
 # skills.match no longer maps a phrasing here, the run flags it (MATCH?) so you can tell a
 # matcher-miss from a model-miss.
 CASES: list[dict] = [
-    # ── create user (addUser_post) ──────────────────────────────────────────────
+    # ── create user (createUser_post) ──────────────────────────────────────────────
     {"q": "create a user jdoe for John Doe, email john.doe@agency.gov",
-     "expect": "tool", "tool": "addUser_post", "args": {"userName": "jdoe"}, "mutation": True,
+     "expect": "tool", "tool": "createUser_post", "args": {"userName": "jdoe"}, "mutation": True,
      "note": "create user — full details"},
     {"q": "onboard a new user named Priya Rao, username prao",
-     "expect": "tool", "tool": "addUser_post", "args": {"userName": "prao"}, "mutation": True,
+     "expect": "tool", "tool": "createUser_post", "args": {"userName": "prao"}, "mutation": True,
      "note": "create user — 'onboard' phrasing"},
-    # ── assign / grant role (addUserApplicationAndRole_post) ─────────────────────
+    # ── assign / grant role (createUserApplicationAndRole_post) ─────────────────────
     {"q": "assign the Budget Analyst role in Formulation to gcadmin",
-     "expect": "tool", "tool": "addUserApplicationAndRole_post",
+     "expect": "tool", "tool": "createUserApplicationAndRole_post",
      "args": {"userName": "gcadmin"}, "mutation": True, "note": "assign role to user in app"},
     {"q": "give sauser access to the Allocation application as Viewer",
-     "expect": "tool", "tool": "addUserApplicationAndRole_post",
+     "expect": "tool", "tool": "createUserApplicationAndRole_post",
      "args": {"userName": "sauser"}, "mutation": True, "note": "grant access — 'give … access'"},
     # ── remove role (deleteUserApplicationRoleById_delete) ───────────────────────
     {"q": "remove the Approver role from gcadmin in Formulation",
@@ -86,9 +86,9 @@ CASES: list[dict] = [
     {"q": "change gcadmin's role in Formulation to Budget Administrator",
      "expect": "tool", "tool": "updateUserApplicationRoles_put",
      "args": {}, "mutation": True, "note": "edit/replace a user's role"},
-    # ── data call (saveDataCalls_post) ───────────────────────────────────────────
+    # ── data call (createDataCalls_post) ───────────────────────────────────────────
     {"q": "set up a data call for Q2 FY2027",
-     "expect": "tool", "tool": "saveDataCalls_post", "args": {}, "mutation": True,
+     "expect": "tool", "tool": "createDataCalls_post", "args": {}, "mutation": True,
      "note": "create a data call"},
     # ── reads: user lookup (getUserByUserName_get) ───────────────────────────────
     {"q": "look up user gcadmin",

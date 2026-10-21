@@ -97,7 +97,7 @@ SKILLS: list[Skill] = [
             "new user", "register user", "register a user", "onboard user",
             "create account", "create an account", "set up a user", "set up a new user",
         ),
-        tool="addUser_post",
+        tool="createUser_post",
         # The user provides these mandatory basic fields; the model asks for any missing.
         required=("userName", "firstName", "lastName", "emailAddress",
                   "accountType", "accountCategory"),
@@ -165,7 +165,7 @@ SKILLS: list[Skill] = [
             "assign the application", "assign this application",
             "allocate the role", "give the user the role",
         ),
-        tool="addUserApplicationAndRole_post",
+        tool="createUserApplicationAndRole_post",
         required=("userId", "applicationId", "applicationRoleId"),
         defaults={
             "enabled": "Y", "isDefault": "N", "isFavourite": "N",
@@ -201,7 +201,7 @@ SKILLS: list[Skill] = [
             "code in applicationId, and the role name in applicationRoleId EXACTLY as the user "
             "gave them — the system resolves each name to its numeric id automatically. Do NOT "
             "look up the user, the application, or the role to 'find ids' first, and do NOT ask "
-            "the user for any id: call addUserApplicationAndRole_post directly with the three "
+            "the user for any id: call createUserApplicationAndRole_post directly with the three "
             "names. Only ask a question if one of the three (user, application, or role) is missing."
         ),
     ),
@@ -331,7 +331,7 @@ SKILLS: list[Skill] = [
             "create a data collection", "set up a data collection", "new data collection",
             "start a data collection",
         ),
-        tool="saveDataCalls_post",
+        tool="createDataCalls_post",
         required=("title", "fiscalYear", "fundGroupId"),
         # applicationId 3 = FORMULATION; emailTemplateId/versionNumber are backend-mandatory
         # (verified); startTime is computed to "now" in the executor if not supplied.
@@ -362,7 +362,7 @@ SKILLS: list[Skill] = [
 
 # Human status labels shown while a tool runs — keep method-level names OUT of the UI.
 _TOOL_LABELS: dict[str, str] = {
-    "addUser_post": "Creating the user",
+    "createUser_post": "Creating the user",
     "getUserByUserName_get": "Loading the user",
     "getUserByUsernameAndUserId_get": "Loading the user",
     "getUserProfile_get": "Loading the profile",

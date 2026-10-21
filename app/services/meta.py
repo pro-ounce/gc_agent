@@ -32,7 +32,7 @@ async def handle(message: str, headers: dict[str, str] | None) -> FlowResult | N
     if not msg:
         return None
 
-    m = _TOOL_DETAIL.search(msg)                     # "about addUser_post" / "what does X do"
+    m = _TOOL_DETAIL.search(msg)                     # "about createUser_post" / "what does X do"
     if m:
         return await _tool_detail(m.group(1), headers)
 

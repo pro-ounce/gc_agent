@@ -671,7 +671,7 @@ class ToolRegistry:
         # application-scoped tool works without depending on the model to chain a lookup.
         await self._resolve_application_id(arguments, request_headers)
         # Assignment tools are driven by name → resolve userName/roleName to ids (app id first).
-        if tool_name in ("addUserApplicationAndRole_post", "addUserApplicationRole_post"):
+        if tool_name in ("createUserApplicationAndRole_post", "createUserApplicationRole_post"):
             await self._resolve_user_id(arguments, request_headers)
             await self._resolve_role_id(arguments, request_headers)
         # Un-assign a role: (user, application, role) names → the assignment's join-row id.
@@ -687,7 +687,7 @@ class ToolRegistry:
         if tool_name == "updateUserApplicationRoles_put" and str(arguments.get("action") or "").strip():
             await self._resolve_edit_user_app_role(arguments, request_headers)
         # Data-call flow: fund group + distribution group driven by name/code.
-        if tool_name in ("saveDataCalls_post", "updateDataCalls_post"):
+        if tool_name in ("createDataCalls_post", "updateDataCalls_put"):
             await self._resolve_named_id(arguments, "fundGroupId", _FG_MAP_CACHE,
                 "getAllFundGroups_get", ("code", "name"), "fundGroupId", request_headers)
             if not str(arguments.get("startTime") or "").strip():

@@ -30,7 +30,7 @@ VELOCITY_WINDOW_S = 60
 VELOCITY_MAX = 10                   # >10 requests/min from one user → burst
 TRAVEL_WINDOW_S = 900               # an IP hop within 15 min is suspicious
 EXPECTED_ORIGIN = "proounce"
-_PRIV_TOOLS = {"addUserApplicationAndRole_post", "addUserApplicationRole_post",
+_PRIV_TOOLS = {"createUserApplicationAndRole_post", "createUserApplicationRole_post",
                "updateUserApplicationRoles_put"}
 _ADMIN_WORDS = ("super admin", "super_admin", "superadmin", "administrator", "admin")
 _SCRIPT_UAS = ("curl", "python-", "httpx", "wget", "go-http", "java/")

@@ -14,7 +14,7 @@ granting access one application at a time —
         ▲                                                                        │
         └───────────────────── "assign another?" ◀──(confirm succeeds)───────────┘
 
-The actual write goes through the normal confirm step (``addUserApplicationAndRole_post``
+The actual write goes through the normal confirm step (``createUserApplicationAndRole_post``
 + the registry's name→id resolvers), so the flow only *collects* app + role and hands off.
 """
 from __future__ import annotations
@@ -865,7 +865,7 @@ async def maybe_start(session: Any, message: str, headers: dict[str, str] | None
         has_email = bool(re.search(r"[^@\s]+@[^@\s]+\.[^@\s]+", message or ""))
         if tool == "bobBaseLineGenerate_put":
             return await start_formulation_baseline(session, headers)
-        if tool == "addUser_post" and not has_email:
+        if tool == "createUser_post" and not has_email:
             return start_create(session)
         _ent = _ENTITY_BY_TOOL.get(tool)
         if _ent is not None:
@@ -1046,7 +1046,7 @@ async def _onboard(session: Any, flow: dict[str, Any], msg: str, headers: dict[s
             args = {"userId": flow["userName"], "applicationId": flow["currentAppId"],
                     "applicationRoleId": role["name"]}
             return FlowResult(message=summary,
-                              pending={"tool_name": "addUserApplicationAndRole_post",
+                              pending={"tool_name": "createUserApplicationAndRole_post",
                                        "tool_args": args, "summary": summary})
         return await _prompt_role(flow, headers, roles=roles)   # unrecognised → re-show roles
 
@@ -1207,7 +1207,7 @@ async def _create(session: Any, flow: dict[str, Any], msg: str, headers: dict[st
         summary = (f"Create user **{who}** — username **{data['userName']}**, {data['emailAddress']}, "
                    f"**{data['accountType']}** / **{data['accountCategory']}**. Shall I go ahead?")
         return FlowResult(message=summary,
-                          pending={"tool_name": "addUser_post", "tool_args": dict(data), "summary": summary})
+                          pending={"tool_name": "createUser_post", "tool_args": dict(data), "summary": summary})
 
     # stage == "confirm" (awaiting the Confirm/Cancel buttons)
     return FlowResult(message="Please use **Confirm** or **Cancel** above to finish creating the user.")
@@ -3047,8 +3047,8 @@ async def authorize_onboarding(headers: dict[str, str] | None) -> tuple[bool, st
 # executors + the workflow tool runner) so NO path — skill, flow, or workflow — can run one
 # without proven authority, and up front at skill resolution for a clean refusal.
 ACCESS_MUTATION_TOOLS = frozenset(ENTITY_CREATE_TOOLS) | {
-    "addUser_post",
-    "addUserApplicationAndRole_post", "addUserApplicationRole_post",
+    "createUser_post",
+    "createUserApplicationAndRole_post", "createUserApplicationRole_post",
     "addUsersWithRoleToApp_post", "assignApplicationRolesToUser_post",
     "deleteUserApplicationRoleById_delete", "deleteUserApplicationRolesById_delete",
     "deleteUserApplicationById_delete", "updateUserApplicationRoles_put",

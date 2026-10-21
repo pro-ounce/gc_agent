@@ -558,14 +558,14 @@ class ChatService:
             if fr is not None:
                 return _fr(fr)
 
-        if tool_name == "addUser_post":
+        if tool_name == "createUser_post":
             return _fr(flows.start_onboarding(session, args.get("firstName"), args.get("userName")))
-        if flows.is_active(session) and tool_name == "addUserApplicationAndRole_post":
+        if flows.is_active(session) and tool_name == "createUserApplicationAndRole_post":
             fr = flows.after_assign(session)
             if fr is not None:
                 return _fr(fr)
         # ── Formulation data-call flow ──
-        if tool_name == "saveDataCalls_post":
+        if tool_name == "createDataCalls_post":
             dcid, app_id = await flows.fetch_data_call_id(args, request_headers)
             return _fr(flows.start_data_call(session, dcid, args.get("title"),
                                              app_id or args.get("applicationId")))
