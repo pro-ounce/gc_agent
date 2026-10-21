@@ -314,6 +314,44 @@ SKILLS: list[Skill] = [
         ),
     ),
 
+    # ── Change a user's ROLE in an application (replace the role on the existing assignment) ──
+    Skill(
+        name="change_role",
+        keywords=(
+            "change role", "change the role", "change their role", "change his role",
+            "change her role", "change the user's role", "change role to", "switch role",
+            "switch the role", "update role", "update the role", "set role to", "set the role to",
+            "give them the role", "change to the role", "move them to the role",
+            "change role in", "update their role",
+        ),
+        tool="updateUserApplicationRoles_put",
+        required=("userName", "applicationId", "applicationRoleId"),
+        # action pins the change-role resolver (vs the flag-edit path on the same tool).
+        defaults={"action": "change_role"},
+        focused=True,
+        schema={
+            "type": "object",
+            "properties": {
+                "userName": {"type": "string",
+                             "description": "The user's username exactly as given (e.g. GCADMIN)."},
+                "applicationId": {"type": "string",
+                                  "description": "The application name or code (e.g. FORMULATION)."},
+                "applicationRoleId": {"type": "string",
+                                      "description": "The NEW role name to change the user TO "
+                                                     "(e.g. Budget Administrator)."},
+            },
+            "required": ["userName", "applicationId", "applicationRoleId"],
+        },
+        summary="change a user's role in an application",
+        hint=(
+            "Pass the USERNAME (userName), the APPLICATION name/code (applicationId), and the NEW "
+            "role name (applicationRoleId) EXACTLY as the user gave them — the system finds the "
+            "user's current assignment in that application and updates it to the new role. Do NOT "
+            "look up ids, and do NOT remove-then-reassign. Only ask if the user, the application, "
+            "or the new role is missing."
+        ),
+    ),
+
     # ── Edit an existing assignment: make default / enable / disable / favourite ──
     Skill(
         name="edit_access",

@@ -585,6 +585,69 @@ class ToolRegistry:
         log.bind(func="resolve_edit_uar", action=action, uar=str(body["userApplicationRoleId"])).info(
             f"edit assignment {body['userApplicationRoleId']} action={action}")
 
+    async def _resolve_change_role(
+        self, arguments: dict[str, Any], request_headers: dict[str, str] | None
+    ) -> None:
+        """Change a user's role in an application (driven by NAMES): find the user's CURRENT
+        assignment row for (user, application), then PUT the full row with applicationRoleId swapped
+        to the NEW role's id. The PUT is a full-row replace, so copy every field and change only the
+        role. FAIL-SAFE: only produces a valid body when EXACTLY ONE current assignment matches and
+        the new role resolves — 0 matches (user has no role there), >1 (ambiguous: multiple current
+        roles) or an unresolvable new role leaves no userApplicationRoleId, so the confirm step / PUT
+        reports the problem instead of mutating the wrong assignment."""
+        user = str(arguments.get("userName") or arguments.get("userId") or "").strip()
+        new_role = str(arguments.get("applicationRoleId") or arguments.get("roleName") or "").strip()
+        await self._resolve_application_id(arguments, request_headers)       # app name → id
+        app = str(arguments.get("applicationId") or "").strip()
+        helpers = ("userName", "username", "userId", "roleName", "action")
+        if not (user and new_role and app):
+            for k in helpers:
+                arguments.pop(k, None)
+            return
+        # The user's CURRENT assignment rows in this application.
+        rows: list[dict] = []
+        try:
+            res = await self.execute("getAllUserApplicationRoles_post", {"userName": user}, request_headers)
+            data = res.output.get("data") if getattr(res, "success", False) and isinstance(res.output, dict) else None
+            for r in (data or []):
+                if (isinstance(r, dict)
+                        and str(r.get("userName") or "").strip().lower() == user.lower()
+                        and str(r.get("applicationId") or "") == app):
+                    rows.append(r)
+        except Exception:  # noqa: BLE001 — best-effort
+            rows = []
+        # Resolve the NEW role NAME → id against this application's role list.
+        await self._resolve_role_id(arguments, request_headers)
+        new_role_id = arguments.get("applicationRoleId")
+        if len(rows) != 1 or not str(new_role_id or "").strip().isdigit():
+            # none / ambiguous / unresolved new role → fail safe (no userApplicationRoleId set).
+            for k in helpers:
+                arguments.pop(k, None)
+            log.bind(func="resolve_change_role", user=user, app=app, matches=len(rows),
+                     new_role=str(new_role)).info(
+                "change-role not applied (0/ambiguous match or unresolved role) — left for confirm/PUT to report")
+            return
+        row = rows[0]
+        body = {
+            "userApplicationRoleId": row.get("userApplicationRoleId"),
+            "applicationRoleId": new_role_id,               # the CHANGE
+            "userId": row.get("userId"),
+            "applicationId": row.get("applicationId"),
+            "enabled": row.get("enabled") or "Y",
+            "isDefault": row.get("isDefault") or "N",
+            "isFavourite": row.get("isFavourite") or "N",
+            "versionNumber": row.get("versionNumber") or 0,
+            "displayOrder": row.get("displayOrder") or 1,
+            "startDate": row.get("startDate") or "",
+            "endDate": row.get("endDate") or "",
+            "clientId": row.get("clientId") or "",
+        }
+        arguments.clear()
+        arguments.update(body)
+        log.bind(func="resolve_change_role", user=user, to_role=str(new_role_id),
+                 uar=str(body["userApplicationRoleId"])).info(
+            f"change role for uar {body['userApplicationRoleId']} → applicationRoleId {new_role_id}")
+
     async def _resolve_user_application_id(
         self, arguments: dict[str, Any], request_headers: dict[str, str] | None
     ) -> None:
@@ -683,9 +746,14 @@ class ToolRegistry:
         # Clear all of a user's roles for an application (child rows, before the app row).
         if tool_name == "deleteUserApplicationRolesById_delete":
             await self._resolve_user_application_role_ids(arguments, request_headers)
-        # Edit one assignment (default / enable / disable / favourite) via read-modify-write.
+        # updateUserApplicationRoles_put: either CHANGE the role (action=change_role) or edit a
+        # flag (default/enable/disable/favourite) — both via read-modify-write of the full row.
         if tool_name == "updateUserApplicationRoles_put" and str(arguments.get("action") or "").strip():
-            await self._resolve_edit_user_app_role(arguments, request_headers)
+            _act = str(arguments.get("action") or "").strip().lower().replace(" ", "_")
+            if _act in ("change_role", "set_role", "switch_role", "update_role", "changerole"):
+                await self._resolve_change_role(arguments, request_headers)
+            else:
+                await self._resolve_edit_user_app_role(arguments, request_headers)
         # Data-call flow: fund group + distribution group driven by name/code.
         if tool_name in ("createDataCalls_post", "updateDataCalls_put"):
             await self._resolve_named_id(arguments, "fundGroupId", _FG_MAP_CACHE,

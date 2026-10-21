@@ -86,10 +86,10 @@ CASES: list[dict] = [
     {"q": "remove the Approver role from gcadmin in Formulation",
      "expect": "tool", "tool": "deleteUserApplicationRoleById_delete",
      "args": {}, "mutation": True, "note": "remove one role from a user"},
-    # ── edit / update role (updateUserApplicationRoles_put) ──────────────────────
+    # ── change / replace role (updateUserApplicationRoles_put via change_role skill) ──────
     {"q": "change gcadmin's role in Formulation to Budget Administrator",
      "expect": "tool", "tool": "updateUserApplicationRoles_put",
-     "args": {}, "mutation": True, "note": "edit/replace a user's role"},
+     "args": {"userName": "gcadmin"}, "mutation": True, "note": "change a user's role"},
     # ── data call (createDataCalls_post) ───────────────────────────────────────────
     # title + fiscalYear + fundGroup are required, so the query supplies all three.
     {"q": "set up a data call titled Q2 Review for fiscal year 2027, Appropriated fund group",
