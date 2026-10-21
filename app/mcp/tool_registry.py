@@ -597,9 +597,10 @@ class ToolRegistry:
         reports the problem instead of mutating the wrong assignment."""
         user = str(arguments.get("userName") or arguments.get("userId") or "").strip()
         new_role = str(arguments.get("applicationRoleId") or arguments.get("roleName") or "").strip()
+        from_role = str(arguments.get("fromRole") or arguments.get("currentRole") or "").strip()
         await self._resolve_application_id(arguments, request_headers)       # app name → id
         app = str(arguments.get("applicationId") or "").strip()
-        helpers = ("userName", "username", "userId", "roleName", "action")
+        helpers = ("userName", "username", "userId", "roleName", "action", "fromRole", "currentRole")
         if not (user and new_role and app):
             for k in helpers:
                 arguments.pop(k, None)
@@ -616,6 +617,13 @@ class ToolRegistry:
                     rows.append(r)
         except Exception:  # noqa: BLE001 — best-effort
             rows = []
+        # Disambiguate a multi-role user by the CURRENT role, when the caller named it
+        # ("change X's <fromRole> role to <newRole>").
+        if from_role and len(rows) > 1:
+            want = _norm_label(from_role)
+            rows = [r for r in rows
+                    if any(c and (c == want or want in c or c in want)
+                           for c in (_norm_label(r.get("roleName")), _norm_label(r.get("role"))))]
         # Resolve the NEW role NAME → id against this application's role list.
         await self._resolve_role_id(arguments, request_headers)
         new_role_id = arguments.get("applicationRoleId")

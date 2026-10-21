@@ -339,6 +339,11 @@ SKILLS: list[Skill] = [
                 "applicationRoleId": {"type": "string",
                                       "description": "The NEW role name to change the user TO "
                                                      "(e.g. Budget Administrator)."},
+                "fromRole": {"type": "string",
+                             "description": "OPTIONAL — the user's CURRENT role to change FROM, if "
+                                            "they named it (e.g. 'change their Budget Approver role "
+                                            "to …'). Needed only to disambiguate a user who holds "
+                                            "several roles in the application; omit otherwise."},
             },
             "required": ["userName", "applicationId", "applicationRoleId"],
         },
@@ -346,9 +351,11 @@ SKILLS: list[Skill] = [
         hint=(
             "Pass the USERNAME (userName), the APPLICATION name/code (applicationId), and the NEW "
             "role name (applicationRoleId) EXACTLY as the user gave them — the system finds the "
-            "user's current assignment in that application and updates it to the new role. Do NOT "
-            "look up ids, and do NOT remove-then-reassign. Only ask if the user, the application, "
-            "or the new role is missing."
+            "user's current assignment in that application and updates it to the new role. If the "
+            "user named the role being changed FROM (e.g. 'change their Budget Approver role to "
+            "Super Admin'), pass it in fromRole so the right assignment is picked when the user "
+            "holds several roles. Do NOT look up ids, and do NOT remove-then-reassign. Only ask if "
+            "the user, the application, or the new role is missing."
         ),
     ),
 
