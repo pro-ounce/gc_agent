@@ -65,19 +65,23 @@ from app.services.llm_service import llm                        # noqa: E402
 # matcher-miss from a model-miss.
 CASES: list[dict] = [
     # ── create user (createUser_post) ──────────────────────────────────────────────
-    {"q": "create a user jdoe for John Doe, email john.doe@agency.gov",
+    # NB: accountType + accountCategory are REQUIRED fields — a query that omits them should make
+    # the model ASK, not fire. These queries include them, so a direct call is the correct behaviour.
+    {"q": "create a Local Core user jdoe for John Doe, email john.doe@agency.gov",
      "expect": "tool", "tool": "createUser_post", "args": {"userName": "jdoe"}, "mutation": True,
      "note": "create user — full details"},
-    {"q": "onboard a new user named Priya Rao, username prao",
+    {"q": "onboard a new External partner, Core category user named Priya Rao, username prao",
      "expect": "tool", "tool": "createUser_post", "args": {"userName": "prao"}, "mutation": True,
      "note": "create user — 'onboard' phrasing"},
     # ── assign / grant role (createUserApplicationAndRole_post) ─────────────────────
+    # The slim schema passes NAMES in userId/applicationId/applicationRoleId (resolved to ids
+    # server-side), so the gold arg key is userId holding the username — NOT userName.
     {"q": "assign the Budget Analyst role in Formulation to gcadmin",
      "expect": "tool", "tool": "createUserApplicationAndRole_post",
-     "args": {"userName": "gcadmin"}, "mutation": True, "note": "assign role to user in app"},
+     "args": {"userId": "gcadmin"}, "mutation": True, "note": "assign role to user in app"},
     {"q": "give sauser access to the Allocation application as Viewer",
      "expect": "tool", "tool": "createUserApplicationAndRole_post",
-     "args": {"userName": "sauser"}, "mutation": True, "note": "grant access — 'give … access'"},
+     "args": {"userId": "sauser"}, "mutation": True, "note": "grant access — 'give … access'"},
     # ── remove role (deleteUserApplicationRoleById_delete) ───────────────────────
     {"q": "remove the Approver role from gcadmin in Formulation",
      "expect": "tool", "tool": "deleteUserApplicationRoleById_delete",
@@ -87,8 +91,9 @@ CASES: list[dict] = [
      "expect": "tool", "tool": "updateUserApplicationRoles_put",
      "args": {}, "mutation": True, "note": "edit/replace a user's role"},
     # ── data call (createDataCalls_post) ───────────────────────────────────────────
-    {"q": "set up a data call for Q2 FY2027",
-     "expect": "tool", "tool": "createDataCalls_post", "args": {}, "mutation": True,
+    # title + fiscalYear + fundGroup are required, so the query supplies all three.
+    {"q": "set up a data call titled Q2 Review for fiscal year 2027, Appropriated fund group",
+     "expect": "tool", "tool": "createDataCalls_post", "args": {"title": "Q2 Review"}, "mutation": True,
      "note": "create a data call"},
     # ── reads: user lookup (getUserByUserName_get) ───────────────────────────────
     {"q": "look up user gcadmin",
@@ -175,8 +180,13 @@ async def _offered_tools_and_system(q: str, H: dict) -> tuple[list[dict], str, "
     return tools, system, skill
 
 
-def _classify(case: dict, fired_name: str, fired_args: dict) -> str:
-    """One of: PASS, PARTIAL, MISS, WRONG_TOOL, WRONG_MUTATION, ABSTAIN_OK."""
+def _classify(case: dict, fired_name: str, fired_args: dict, catalogue: set[str]) -> str:
+    """One of: PASS, PARTIAL, MISS, WRONG_TOOL, WRONG_MUTATION, INVALID, ABSTAIN_OK.
+    `catalogue` is the set of REAL tool names: a fired name that isn't in it is a hallucination,
+    which production rejects (→ INVALID), NOT a dangerous mis-fire — so it never fails the gate."""
+    # A hallucinated/unknown tool name can't actually execute — not a wrong mutation.
+    if fired_name and catalogue and fired_name not in catalogue:
+        return "INVALID"
     if case["expect"] == "none":
         if not fired_name:
             return "ABSTAIN_OK"
@@ -186,14 +196,14 @@ def _classify(case: dict, fired_name: str, fired_args: dict) -> str:
         return "MISS"
     if fired_name == case["tool"]:
         return "PASS" if _args_match(case["args"], fired_args) else "PARTIAL"
-    # fired a different tool than the gold one
+    # fired a different REAL tool than the gold one
     return "WRONG_MUTATION" if is_mutation(fired_name) else "WRONG_TOOL"
 
 
-async def _run_model(model: str, H: dict) -> dict:
+async def _run_model(model: str, H: dict, catalogue: set[str]) -> dict:
     runtime_config.set_many({"LLM_MODEL": model})
     tally = {"PASS": 0, "PARTIAL": 0, "MISS": 0, "WRONG_TOOL": 0, "WRONG_MUTATION": 0,
-             "ABSTAIN_OK": 0, "error": 0, "rows": [], "installed": True}
+             "INVALID": 0, "ABSTAIN_OK": 0, "error": 0, "rows": [], "installed": True}
     print(f"\n── {model} " + "─" * max(4, 60 - len(model)))
     for i, case in enumerate(CASES, 1):
         try:
@@ -212,10 +222,11 @@ async def _run_model(model: str, H: dict) -> dict:
         tc = resp.tool_calls[0] if resp.tool_calls else None
         fired_name = tc.name if tc else ""
         fired_args = tc.input if tc else {}
-        verdict = _classify(case, fired_name, fired_args)
+        verdict = _classify(case, fired_name, fired_args, catalogue)
         tally[verdict] += 1
         tally["rows"].append((case["note"], verdict, fired_name))
-        flag = "  <<< WRONG-MUTATION" if verdict == "WRONG_MUTATION" else ""
+        flag = "  <<< WRONG-MUTATION" if verdict == "WRONG_MUTATION" else (
+            "  (hallucinated name)" if verdict == "INVALID" else "")
         matchq = "" if (case["expect"] == "none" or skill) else "  (skills.match MISS?)"
         print(f"  [{i:2}] {verdict:14} {case['note'][:38]:38} fired={fired_name or '(none)':34}{matchq}{flag}")
     return tally
@@ -225,7 +236,7 @@ def _score(t: dict) -> tuple:
     """Leaderboard key: gate first (0 wrong-mutation wins), then good calls, then fewest misses."""
     good = t["PASS"] + t["ABSTAIN_OK"]
     gate_ok = 1 if t["WRONG_MUTATION"] == 0 else 0
-    return (gate_ok, good, t["PASS"], -t["MISS"], -t["PARTIAL"])
+    return (gate_ok, good, t["PASS"], -t["MISS"], -t["PARTIAL"], -t["INVALID"])
 
 
 async def main() -> int:
@@ -237,13 +248,22 @@ async def main() -> int:
     print(f"current (gates the build): {current}")
     print(f"comparing: {', '.join(models)}")
 
+    # Real tool names, so a hallucinated call is scored INVALID (not a dangerous wrong-mutation).
+    try:
+        catalogue = {t["function"]["name"] for t in await tool_registry.as_tools(H)}
+        print(f"catalogue: {len(catalogue)} tools")
+    except Exception:  # noqa: BLE001
+        catalogue = set()
+        print("catalogue: unavailable — INVALID detection off")
+
     results: dict[str, dict] = {}
     for m in models:
-        results[m] = await _run_model(m, H)
+        results[m] = await _run_model(m, H, catalogue)
 
     # ── Leaderboard ──────────────────────────────────────────────────────────────
     print("\n== leaderboard (gate = 0 wrong-mutation) " + "=" * 30)
-    header = f"  {'model':26} {'gate':5} {'gold+args':9} {'partial':7} {'miss':5} {'wrong-tool':10} {'wrong-MUT':9} {'abstain-ok':10}"
+    header = (f"  {'model':26} {'gate':5} {'gold+args':9} {'partial':7} {'miss':5} "
+              f"{'wrong-tool':10} {'wrong-MUT':9} {'invalid':7} {'abstain-ok':10}")
     print(header)
     ranked = sorted((m for m in models if results[m]["installed"]),
                     key=lambda m: _score(results[m]), reverse=True)
@@ -251,7 +271,7 @@ async def main() -> int:
         t = results[m]
         gate = "PASS" if t["WRONG_MUTATION"] == 0 else "FAIL"
         print(f"  {m:26} {gate:5} {t['PASS']:9} {t['PARTIAL']:7} {t['MISS']:5} "
-              f"{t['WRONG_TOOL']:10} {t['WRONG_MUTATION']:9} {t['ABSTAIN_OK']:10}")
+              f"{t['WRONG_TOOL']:10} {t['WRONG_MUTATION']:9} {t['INVALID']:7} {t['ABSTAIN_OK']:10}")
     not_installed = [m for m in models if not results[m]["installed"]]
     if not_installed:
         print(f"\n  not installed (skipped): {', '.join(not_installed)}  →  ollama pull {' '.join(not_installed)}")
