@@ -318,6 +318,23 @@ def _session_base(agent: str, user_id, app: str) -> str:
     return f"{agent}:{user_id}" + (f":{app}" if app else "")
 
 
+async def _resolve_app_info(request: Request, code: str) -> dict:
+    """The current application's {code, name, icon} for the widget header — resolved from the real
+    ecosystem by app code (the icon is the actual /assets/images/appsIcons/*.svg path, not a generic
+    glyph). Best-effort: {} when unknown, {code} when the app isn't found in the catalogue."""
+    c = re.sub(r"[^a-z0-9_]", "", (code or "").lower())
+    if not c:
+        return {}
+    try:
+        from ..services import ecosystem as eco
+        for a in (await eco.applications(_forward_headers(request)) or []):
+            if re.sub(r"[^a-z0-9_]", "", str(a.get("code") or "").lower()) == c:
+                return {"code": a.get("code"), "name": a.get("name"), "icon": a.get("icon") or ""}
+    except Exception:  # noqa: BLE001 — never fail the bootstrap on an app lookup
+        pass
+    return {"code": c}
+
+
 @router.get("/{agent}/reply/questions", summary="Widget bootstrap (gateway-routed under /reply)")
 @router.get("/{agent}/questions", summary="Widget bootstrap: suggestions + greeting name + resume hint")
 async def agent_questions(
@@ -325,6 +342,7 @@ async def agent_questions(
     request: Request,
     taskId: str = "",
     module: str = "",
+    appCode: str = "",
     user: User = Depends(get_current_user),
 ) -> ApiResponse:
     """Everything the widget needs when it opens, in ONE call: suggestion chips, the
@@ -359,6 +377,7 @@ async def agent_questions(
         "questions": _questions_from_balloons(balloons, _SUGGESTIONS),
         "balloons": balloons,
         "module": module,
+        "app": await _resolve_app_info(request, appCode or module),
         "displayName": ident["displayName"],
         "firstName": ident["firstName"],
         "userName": ident["userName"],
