@@ -405,13 +405,14 @@ async def agent_task(agent: str, task_id: str, request: Request,
 
 @router.get("/{agent}/reply/history", summary="Past conversations (gateway-routed under /reply)")
 @router.get("/{agent}/history", summary="The caller's past conversations (durable), newest first")
-async def agent_history(agent: str, request: Request, scope: str = "app",
+async def agent_history(agent: str, request: Request, scope: str = "app", appCode: str = "",
                         user: User = Depends(get_current_user)) -> ApiResponse:
     """Durable conversation history for the current user — persists across page reloads and the
     live-session TTL (reads the history:* archive). Powers the widget's 'Recent history' list.
     `scope=app` (default) → only the CURRENT application's conversations (per-app history);
-    `scope=all` → every application (the cross-app view). App unknown falls back to the full list."""
-    _app = _app_code_for_session(request)
+    `scope=all` → every application (the cross-app view). `appCode` (from the widget, the CLEAN
+    app code) is preferred over the garble-prone X-Selected-App header for scoping."""
+    _app = _app_code_for_session(request, appCode)
     _base = _session_base(agent, user.id, _app) if (_app and str(scope).lower() != "all") else None
     return ApiResponse.ok(message="ok",
                           data={"conversations": session_service.list_history(
@@ -432,14 +433,14 @@ async def agent_history_detail(agent: str, request: Request, key: str = "",
 
 @router.post("/{agent}/reply/history/new", summary="New chat (gateway-routed under /reply)")
 @router.post("/{agent}/history/new", summary="Start a new chat (archives the current conversation)")
-async def agent_history_new(agent: str, request: Request, sessionId: str = "",
+async def agent_history_new(agent: str, request: Request, sessionId: str = "", appCode: str = "",
                             user: User = Depends(get_current_user)) -> ApiResponse:
     """New chat: archive the current conversation as an immutable history entry, then clear the live
     session — so each chat becomes a distinct, reopenable entry going forward. Returns the refreshed
     history list. `sessionId` empty = nothing to clear (just returns the list)."""
     if sessionId:
         session_service.clear_messages(sessionId)
-    _app = _app_code_for_session(request)
+    _app = _app_code_for_session(request, appCode)
     _base = _session_base(agent, user.id, _app) if _app else None
     return ApiResponse.ok(message="ok",
                           data={"conversations": session_service.list_history(
