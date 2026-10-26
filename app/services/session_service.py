@@ -143,9 +143,13 @@ class SessionService:
         self.save(session)
         return True
 
-    def list_history(self, user_id: str | None = None) -> list[dict]:
+    def list_history(self, user_id: str | None = None, session_id: str | None = None) -> list[dict]:
         """Preserved conversations (current + archived) for a user, newest first — the DURABLE
-        history, independent of the live-session TTL. Reads the `history:*` sink."""
+        history, independent of the live-session TTL. Reads the `history:*` sink.
+
+        `session_id` scopes the list to ONE conversation base (e.g. `chatbot:<user>:<app>` for
+        per-app history) — both the live record and its immutable archives share that session_id.
+        None = every conversation for the user (the cross-app view)."""
         from ..connections import redis_client
         try:
             keys = redis_client.keys(f"{_HISTORY_PREFIX}*")
@@ -158,6 +162,8 @@ class SessionService:
             if not isinstance(data, dict):
                 continue
             if user_id and str(data.get("user_id")) != str(user_id):
+                continue
+            if session_id and str(data.get("session_id")) != str(session_id):
                 continue
             msgs = data.get("messages") or []
             # archived = the key carries a `:<ms>` suffix BEYOND `history:<session_id>` (an

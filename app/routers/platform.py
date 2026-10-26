@@ -16,6 +16,7 @@ middleware (PLATFORM_AUTH_MODE=gateway); that same token is forwarded to MCP.
 from __future__ import annotations
 
 import base64
+import re
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
@@ -302,6 +303,21 @@ def _module_from_header(request: Request) -> str:
     return raw.lower()
 
 
+def _app_code_for_session(request: Request, body_app_code: str | None = None) -> str:
+    """Normalized application code used to PARTITION conversations per app (chatbot:<user>:<app>).
+    Prefers the clean body appCode, falls back to the X-Selected-App header; '' when unknown.
+    Reduced to identifier chars so a garbled/encoded header can never poison the session id."""
+    raw = (body_app_code or "").strip() or _module_from_header(request)
+    return re.sub(r"[^a-z0-9_]", "", (raw or "").lower())
+
+
+def _session_base(agent: str, user_id, app: str) -> str:
+    """Per-(user, app) conversation id: `<agent>:<user>:<app>`. The app is appended only when known,
+    so history is isolated by application. (Cross-app history is an opt-in setting layered on later;
+    when the app is unknown we fall back to the per-user id and the unfiltered list.)"""
+    return f"{agent}:{user_id}" + (f":{app}" if app else "")
+
+
 @router.get("/{agent}/reply/questions", summary="Widget bootstrap (gateway-routed under /reply)")
 @router.get("/{agent}/questions", summary="Widget bootstrap: suggestions + greeting name + resume hint")
 async def agent_questions(
@@ -393,9 +409,13 @@ async def agent_history(agent: str, request: Request,
                         user: User = Depends(get_current_user)) -> ApiResponse:
     """Durable conversation history for the current user — persists across page reloads and the
     live-session TTL (reads the history:* archive). Powers the widget's 'Recent history' list, so
-    past chats are no longer lost on reload."""
+    past chats are no longer lost on reload. Scoped to the CURRENT application (per-app history);
+    when the app can't be determined it falls back to the full cross-app list."""
+    _app = _app_code_for_session(request)
+    _base = _session_base(agent, user.id, _app) if _app else None
     return ApiResponse.ok(message="ok",
-                          data={"conversations": session_service.list_history(user_id=user.id)})
+                          data={"conversations": session_service.list_history(
+                              user_id=user.id, session_id=_base)})
 
 
 @router.get("/{agent}/reply/history/detail", summary="Transcript (gateway-routed under /reply)")
@@ -419,8 +439,11 @@ async def agent_history_new(agent: str, request: Request, sessionId: str = "",
     history list. `sessionId` empty = nothing to clear (just returns the list)."""
     if sessionId:
         session_service.clear_messages(sessionId)
+    _app = _app_code_for_session(request)
+    _base = _session_base(agent, user.id, _app) if _app else None
     return ApiResponse.ok(message="ok",
-                          data={"conversations": session_service.list_history(user_id=user.id)})
+                          data={"conversations": session_service.list_history(
+                              user_id=user.id, session_id=_base)})
 
 
 @router.post("/{agent}/reply", summary="Ask an AI agent and get a reply")
@@ -440,8 +463,12 @@ async def agent_reply(
             status_code=404,
         )
 
-    # sessionId from the FE (multi-turn / "new chat"), else one conversation per user+agent.
-    session_id = body.sessionId or f"{agent}:{user.id}"
+    # Per-app conversation id: chatbot:<userId>:<appCode>. A client sessionId is honored only when
+    # it belongs to THIS (user, app) base, so a stale id echoed after an app switch can't bleed one
+    # application's chat into another. App unknown → per-user id (cross-app) as a graceful fallback.
+    _app = _app_code_for_session(request, body.appCode)
+    _base = _session_base(agent, user.id, _app)
+    session_id = body.sessionId if (body.sessionId and body.sessionId.startswith(_base)) else _base
 
     # Long-running action → start a background task and return immediately.
     task = await _start_task_if_async(body.question, session_id, request=request, user=user)
