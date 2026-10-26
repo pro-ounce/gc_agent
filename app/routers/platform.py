@@ -405,17 +405,17 @@ async def agent_task(agent: str, task_id: str, request: Request,
 
 @router.get("/{agent}/reply/history", summary="Past conversations (gateway-routed under /reply)")
 @router.get("/{agent}/history", summary="The caller's past conversations (durable), newest first")
-async def agent_history(agent: str, request: Request,
+async def agent_history(agent: str, request: Request, scope: str = "app",
                         user: User = Depends(get_current_user)) -> ApiResponse:
     """Durable conversation history for the current user — persists across page reloads and the
-    live-session TTL (reads the history:* archive). Powers the widget's 'Recent history' list, so
-    past chats are no longer lost on reload. Scoped to the CURRENT application (per-app history);
-    when the app can't be determined it falls back to the full cross-app list."""
+    live-session TTL (reads the history:* archive). Powers the widget's 'Recent history' list.
+    `scope=app` (default) → only the CURRENT application's conversations (per-app history);
+    `scope=all` → every application (the cross-app view). App unknown falls back to the full list."""
     _app = _app_code_for_session(request)
-    _base = _session_base(agent, user.id, _app) if _app else None
+    _base = _session_base(agent, user.id, _app) if (_app and str(scope).lower() != "all") else None
     return ApiResponse.ok(message="ok",
                           data={"conversations": session_service.list_history(
-                              user_id=user.id, session_id=_base)})
+                              user_id=user.id, session_id=_base), "scope": str(scope).lower()})
 
 
 @router.get("/{agent}/reply/history/detail", summary="Transcript (gateway-routed under /reply)")

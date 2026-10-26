@@ -186,9 +186,11 @@ class SessionService:
                 by_day = {str(data.get("updated_at") or "")[:10] or "undated": []}
             for day, dmsgs in by_day.items():
                 last_ts = (dmsgs[-1].get("timestamp") if dmsgs else "") or data.get("updated_at", "")
+                _parts = str(sid).split(":")
                 out.append({
                     "key": f"{key}#{day}",                       # drill-down handle (day-scoped)
                     "session_id": sid,
+                    "app": _parts[2] if len(_parts) >= 3 else "",  # app code (per-app id), "" = legacy/unscoped
                     "day": day,
                     "archived": archived,                        # True → immutable, cleared convo
                     "category": _category({"messages": dmsgs, "metadata": data.get("metadata")}),
