@@ -76,6 +76,30 @@ def run() -> list[tuple[str, bool, str]]:
     detail = session_service.get_history_detail(hist[0]["key"])
     check("get_history_detail returns the full transcript for a key",
           isinstance(detail, dict) and "messages" in detail)
+    # ── Expired-session archive: a session that times out (no explicit "new chat") must NOT lose
+    #    its history when a new session reuses the same id. ─────────────────────────────────────
+    s2 = session_service.get_or_create("agent:user2", user_id="user2")
+    s2.add_user("show my baselines")
+    s2.add_assistant("Here are your 3 baselines.")
+    session_service.save(s2)
+    before = len([k for k in redis_client.keys(f"{_HISTORY_PREFIX}agent:user2:*")])
+    # Simulate the 24h TTL firing: the LIVE session is gone, but history:<id> still holds the convo.
+    redis_client.delete(_key("agent:user2"))
+    check("expired: live session gone but history:<id> still present",
+          session_service.get("agent:user2") is None
+          and redis_get_json(_hkey("agent:user2")) is not None)
+    # A new turn comes in → get_or_create must archive the prior convo BEFORE overwriting it.
+    s2b = session_service.get_or_create("agent:user2", user_id="user2")
+    after_keys = [k.decode() if isinstance(k, (bytes, bytearray)) else k
+                  for k in redis_client.keys(f"{_HISTORY_PREFIX}agent:user2:*")]
+    check("expired session's history was ARCHIVED (new immutable record)", len(after_keys) == before + 1,
+          after_keys)
+    arch = redis_get_json(after_keys[0]) if after_keys else {}
+    check("archived expired convo preserved its messages",
+          any("baseline" in str(m.get("content", "")).lower() for m in (arch.get("messages") or [])))
+    check("new session started empty (old convo not carried into the live one)",
+          len(s2b.messages) == 0)
+
     check("get_history_detail rejects a non-history key",
           session_service.get_history_detail("session:agent:user1") is None)
 

@@ -80,10 +80,31 @@ class SessionService:
         existing = self.get(session_id)
         if existing:
             return existing
+        # The live session is gone (expired past its TTL, or never existed). If a prior conversation
+        # still sits in the durable mirror history:<id>, the new empty session's save() is about to
+        # OVERWRITE it — losing that conversation. Preserve it as an immutable, per-conversation
+        # archive first, so an expired session's history survives exactly like an explicit "new chat".
+        self._archive_live_history(session_id)
         session = Session(session_id=session_id, user_id=user_id)
         self.save(session)
         log.bind(func="get_or_create", session_id=session_id).info("New session created")
         return session
+
+    def _archive_live_history(self, session_id: str) -> None:
+        """Snapshot the current history:<id> (the soon-to-be-overwritten conversation) into an
+        immutable history:<id>:<ms> record. No-op when there is nothing to preserve. This is what
+        keeps a session that expired WITHOUT an explicit 'new chat' from losing its history."""
+        try:
+            prior = redis_get_json(_hkey(session_id))
+            if isinstance(prior, dict) and (prior.get("messages") or []):
+                import time as _time
+                redis_set_json(_hkey_archived(session_id, int(_time.time() * 1000)), prior)
+                log.bind(func="archive_live_history", session_id=session_id,
+                         msgs=len(prior.get("messages") or [])).info(
+                    "archived expired-session history before new session")
+        except Exception as exc:  # noqa: BLE001 — preservation is best-effort, never block a new chat
+            log.bind(func="archive_live_history", session_id=session_id).warning(
+                f"archive-before-new-session failed (non-fatal): {exc}")
 
     def save(self, session: Session) -> None:
         session.touch()
