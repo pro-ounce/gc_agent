@@ -243,3 +243,30 @@ grant_access · data_call · baseline · edit_assignment` — plus **`other`** (
 - The **grounding guard** and **verify-after-write** — already shipped this cycle.
 - Guided **flows** (grant_access, create_user, …) — the action path is unchanged; we only stop the
   read router from stealing action intents.
+
+## Live observations — production use (2026-10-27)
+
+Driving the **live** widget on sparkbee (Formulation Planner, SUPER ADMIN) surfaced two real
+mis-routes, both **definitional "what is X" queries armed to an ACTION flow** on the entity noun —
+the exact precision gap this redesign targets — and both on the **flow triggers**, not the
+`ecosystem_qa` read classifier:
+
+1. **"What is a budget baseline, in two sentences?"** → ran **list_baselines** and rendered the
+   baselines table instead of a 2-sentence definition. The baseline workflow is armed by
+   `_BASELINE_INTENT_RE`: the regex fires on the noun "baseline" regardless of the leading
+   "what is". The read executed — data correct, **intent wrong**.
+2. **"What is a budget data call?"** → armed the **create-data-call flow** (progress rail
+   "Creating the data call / Adding attendees / Setting a reminder") before falling through to a
+   correct 14.9 s text answer. A **definitional query armed a CREATE (mutation) flow** — the
+   break-out / action gate caught it (no mutation ran), but the user first saw a misleading
+   "Creating…" rail. This is the most concerning class.
+
+**Takeaways for the plan:**
+- The hard **action gate (Phase 1)** must cover the **flow triggers themselves**, not just
+  `ecosystem_qa`. A definitional frame ("what is / what does / explain / define …" with **no
+  mutation verb**) must **not** arm a create/list flow, even when the entity-noun regex matches:
+  interrogative framing should veto the action arm (route to a definition/read instead).
+- Add both as **router_eval** should-NOT-arm cases: "what is a budget baseline" → definition (not
+  `list_baselines`); "what is a budget data call" → definition (not the create-data-call flow).
+- Cold-start aside: both paid the "waking up the assistant" penalty (model not resident) — unrelated
+  to routing, but it compounds the bad UX of a wrong-intent flow.
