@@ -12,6 +12,31 @@ All notable changes to the GC Agent (`gc_agent`, the COMPASS chatbot backend) ar
   history (the running build reported `1.0.0` throughout). `1.0.0` marks the production baseline that
   has been serving sandbox since 2026-10-27; `1.0.1` is the first formally versioned patch.
 
+## [1.0.2] — 2026-11-02
+
+Follow-up found while **validating 1.0.1** against the live agent (replaying the history prompts).
+
+### Fixed
+
+- **Definitional baseline question now gets a definition, not an app card.**
+  *What went wrong:* 1.0.1 stopped *"What is a budget baseline?"* from listing baselines, but the
+  query then fell through to the ecosystem read router, where the catalogue extractor token-matched
+  *"budget"* → the **Budget Analytics** application and answered with that app's card. Still not a
+  definition.
+  *Fix:* `ecosystem_qa.handle` now escalates a definitional concept question (`_CONCEPT_DEF_RE`) to
+  the grounded LLM — the same path that already answers *"what is a budget data call"* correctly —
+  instead of resolving it to a fuzzy app-about match. Real app-about (*"what is Smart Hub"*) is
+  untouched; *"list my baselines"* / *"what baselines do I have"* still list.
+
+### Validation (1.0.1 + 1.0.2, replayed live against the deployed agent)
+
+- **#2 question-as-slot — confirmed fixed live:** mid-flow questions ("does the current user have
+  permission…", "i am asking…") now break out and are not captured as name/email field values.
+- **#1 false-success — gate proven by `confirm_success_gating_eval` (5/5);** the live write path is
+  guardrail-blocked (it is a real mutation), so it is validated by the eval of the exact gate, not by
+  performing a create.
+- **#3 baseline definitional — fixed here (1.0.2)** after 1.0.1 left it answering with an app card.
+
 ## [1.0.1] — 2026-11-02
 
 Correctness fixes found by reviewing the live conversation history (12 conversations / 554 user

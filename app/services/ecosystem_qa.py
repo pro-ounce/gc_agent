@@ -365,6 +365,15 @@ _MUTATION_CUE = re.compile(
     r"|\bnew (user|account|person)\b"
     r"|\b(make|set|mark)\b[^.?]{0,60}\b(default|favou?rite)\b"   # edit: make/set … default/favourite
     r"|\bdefault (app|application)\b|\bfavou?rite\b", re.I)
+# A DEFINITIONAL question about a domain CONCEPT (not an application) must be defined by the LLM, not
+# answered as an app read. "what is a budget baseline" token-matches the Budget Analytics app via the
+# catalogue extractor and was answered with that app's card; escalate it so the grounded LLM defines
+# the concept (as it already does for "what is a budget data call"). Tight by design — a real
+# app-about like "what is Smart Hub" does not match.
+_CONCEPT_DEF_RE = re.compile(
+    r"\bwhat(?:'?s| is| are)\s+(?:a|an|the)?\s*(?:budget\s+)?baselines?\b"
+    r"|\b(?:define|explain|meaning of|definition of)\s+(?:a\s+|an\s+|the\s+)?(?:budget\s+)?baselines?\b",
+    re.I)
 _WHO_ACCESS = re.compile(
     r"\bwho (?:can|has|have|is|are|uses?)\b|\bwhich users?\b|\b(?:list|show|how many) users?\b|"
     r"\busers? (?:in|with|for|of|that|who)\b|\bwho('?s| are)\b", re.I)
@@ -470,6 +479,11 @@ async def handle(message: str, headers: dict[str, str] | None) -> FlowResult | N
     # Read-only module: never intercept a mutation (assign/grant/revoke a role, etc.) — let it
     # reach the assign_access skill / guided flow instead of answering with a role listing.
     if _MUTATION_CUE.search(msg):
+        return None
+
+    # A definitional concept question ("what is a budget baseline") must be DEFINED by the LLM, not
+    # answered as a fuzzy app-about match — escalate (return None) so the grounded LLM answers it.
+    if _CONCEPT_DEF_RE.search(msg):
         return None
 
     # ── Resolve SLOTS deterministically, pick the ROUTE with the model classifier ──
