@@ -188,7 +188,10 @@ _READ_INTENT_RE = re.compile(
 _QUESTION_RE = re.compile(
     r"^\s*(?:what|what'?s|whats|why|how|when|where|who|whom|whose|which|explain|describe|"
     r"define|tell\s+me|can\s+you|could\s+you|would\s+you|do\s+you|does|is\s+there|are\s+there|"
-    r"help\s+me\s+understand)\b",
+    r"help\s+me\s+understand|"
+    # meta-ask openers — a user restating a question ("i am asking…", "i'm asking…", "im asking…")
+    # mid-flow is never a field value; capturing it made a user literally named "i am asking…".
+    r"i\s+am\s+asking|i'?m\s+asking)\b",
     re.I)
 # A STANDALONE re-create command — the whole message is essentially "create a new role" /
 # "add another application" etc. (ends right after the entity noun). Used to let a re-issued create
@@ -512,6 +515,17 @@ _BASELINE_DETAILS_RE = re.compile(
     r"|\bopen\b[^.?!]{0,40}\bbaseline\b", re.I)
 _BASELINE_FY_RE = re.compile(r"(?:fy|fiscal\s*year)\s*'?(\d{2,4})", re.I)
 
+# DEFINITIONAL question about the CONCEPT ("what is a baseline", "define a baseline", "in two
+# sentences, what is a budget baseline") — must be ANSWERED, never routed to the list/details read.
+# `_LIST_BASELINE_RE` includes the word "what", so without this veto "what is a baseline" matched the
+# list and replied "Your 13 FORMULATION baselines:" (the history definitional-misroute bug). Tight by
+# design: it matches "what is a/the baseline" but NOT "what baselines do I have" / "what are my
+# baselines" (those have no is/are+determiner before the noun) so real list requests still list.
+_BASELINE_DEF_RE = re.compile(
+    r"\bwhat(?:'?s| is| are)\s+(?:a|an|the)?\s*(?:budget\s+)?baselines?\b"
+    r"|\b(?:define|explain|meaning of|definition of)\s+(?:a\s+|an\s+|the\s+)?(?:budget\s+)?baselines?\b",
+    re.I)
+
 
 async def _baseline_fund_groups(headers: dict[str, str] | None) -> list[dict[str, Any]]:
     """EVERY fund group (getAllFundGroups_get, ADMINISTRATION/GLOBAL) so baselines span all of them,
@@ -815,9 +829,11 @@ async def maybe_start(session: Any, message: str, headers: dict[str, str] | None
     # the create flow, and it never asks "which application?" (the app is the current one).
     # DRILL-DOWN: "details / line items for the <FY/title> baseline" → one baseline's program-office
     # breakdown. Checked before the list (more specific) so "baseline details" never just re-lists.
-    if _BASELINE_DETAILS_RE.search(message or ""):
+    # A definitional "what is a baseline" is answered (falls through), never routed to list/details.
+    _baseline_def = bool(_BASELINE_DEF_RE.search(message or ""))
+    if not _baseline_def and _BASELINE_DETAILS_RE.search(message or ""):
         return await baseline_details(session, message or "", headers)
-    if _LIST_BASELINE_RE.search(message or ""):
+    if not _baseline_def and _LIST_BASELINE_RE.search(message or ""):
         return await list_baselines(session, headers)
     # Skill authoring intent takes precedence ("create a skill" must not read as create-user).
     if _SKILL_INTENT_RE.search(message or "") and not _is_query:
@@ -882,30 +898,34 @@ def _should_break_out(flow: dict[str, Any], msg: str) -> bool:
     name = flow.get("name")
     if name == "workflow":
         return False
-    if _FLOW_QUERY_RE.search(msg):          # a question / read / status never breaks out to a flow
-        return False
-    if _detect_remove_role(msg):
-        return name != "remove_role"
-    ent = _detect_entity(msg)                     # requires a create verb + a concrete entity noun
-    if ent not in (None, "AMBIGUOUS"):
-        if name == "entity_create":
-            # A DIFFERENT entity always breaks out; the SAME entity only when the whole message is a
-            # standalone re-create command ("create a new role"), not a field value that merely
-            # contains those words (e.g. a role named "New Role Coordinator").
-            return flow.get("entity") != ent or bool(_STANDALONE_CREATE_RE.search(msg))
-        if name == "create_user":
-            return ent != "user" or bool(_STANDALONE_CREATE_RE.search(msg))
-        return True
-    if _SKILL_INTENT_RE.search(msg):
-        return name != "create_skill"
-    if _BASELINE_INTENT_RE.search(msg) and not _FLOW_QUERY_RE.search(msg):
-        return name != "formulation_baseline"
-    # A clear read/navigation command (e.g. "my access", "roles in Smart HuB", "look up a license")
-    # never belongs to a create/remove flow, so it breaks out rather than being eaten as a value.
+    is_query = bool(_FLOW_QUERY_RE.search(msg))
+    # Flow-STARTING intents (create / remove-role / skill / baseline) only count when the message is
+    # NOT itself a question — a question must never be read as a command to open a DIFFERENT flow.
+    if not is_query:
+        if _detect_remove_role(msg):
+            return name != "remove_role"
+        ent = _detect_entity(msg)                 # requires a create verb + a concrete entity noun
+        if ent not in (None, "AMBIGUOUS"):
+            if name == "entity_create":
+                # A DIFFERENT entity always breaks out; the SAME entity only when the whole message is
+                # a standalone re-create command ("create a new role"), not a field value that merely
+                # contains those words (e.g. a role named "New Role Coordinator").
+                return flow.get("entity") != ent or bool(_STANDALONE_CREATE_RE.search(msg))
+            if name == "create_user":
+                return ent != "user" or bool(_STANDALONE_CREATE_RE.search(msg))
+            return True
+        if _SKILL_INTENT_RE.search(msg):
+            return name != "create_skill"
+        if _BASELINE_INTENT_RE.search(msg):
+            return name != "formulation_baseline"
+    # A clear read/navigation command (e.g. "my access", "roles in Smart HuB"), OR a question, is
+    # never a create/remove flow FIELD VALUE — break out so a stale/active flow can't swallow it as a
+    # slot answer (the history bug: "does the current user have permission…" / "i am asking…" were
+    # captured as a last name / email and a garbage user was created). This is now REACHED for
+    # questions — previously a _FLOW_QUERY_RE match short-circuited to "don't break out" and the
+    # question was stored as the field value.
     if _READ_INTENT_RE.search(msg):
         return True
-    # A clear question (general Q&A) is never a create-flow field value — break out so a stray/
-    # stale flow can't swallow it. Conservative: a question WORD at the start, or a trailing '?'.
     if _QUESTION_RE.search(msg) or msg.rstrip().endswith("?"):
         return True
     return False

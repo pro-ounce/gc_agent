@@ -819,15 +819,20 @@ class ChatService:
         output = str(result.output) if result.success else f"Error: {result.error}"
         session.add_tool_result(tc_id, tool_name, output)
 
+        # A confirmed WRITE can come back HTTP-200 with a business-error ENVELOPE ({success:false});
+        # transport success alone must NOT be read as the write landing. Gate every completion and
+        # flow hand-off on this envelope-aware `accepted` flag, so the agent never claims
+        # "created/assigned/ready" on a rejected write (the history false-success bug).
+        from .ui_blocks import _coerce, _envelope_error
+        _env = _coerce(result.output) if result.success else None
+        accepted = result.success and not _envelope_error(_env)
+
         # ── Baseline generate: mirror the FE (wait for the response → show the backend's OWN
         #    message). A guard rejection (IOP / already-in-process / conflict) comes back as a
         #    business-error ENVELOPE ({success:false}) even on HTTP 200, so success alone isn't
         #    enough — detect the envelope and route to the retry path instead of claiming success.
         if tool_name == "bobBaseLineGenerate_put" and flows.is_active(session):
-            from .ui_blocks import _coerce, _envelope_error
-            env = _coerce(result.output) if result.success else None
-            out_dict = env if isinstance(env, dict) else {}
-            accepted = result.success and not _envelope_error(env)
+            out_dict = _env if isinstance(_env, dict) else {}
             if accepted:
                 session.metadata["_flow_complete"] = flows.terminal_progress(session.metadata.get("flow"))
                 fr = flows.baseline_after_generate(session, out_dict)
@@ -855,7 +860,7 @@ class ChatService:
         # Run the skill's dependency chain (if any), then render the outcome as a block +
         # one-line lead-in — no re-run LLM synthesis (which garbles on a bare result turn).
         render_out, render_name = result.output, tool_name
-        if result.success:
+        if accepted:
             async for _ev in self._skill_chain_events(tool_name, tool_args, result.output, request_headers):
                 if _ev[0] == "status":
                     yield StreamChunk(type="tool_use", session_id=session_id, content=_ev[1])
@@ -867,7 +872,7 @@ class ChatService:
             lead = ("Done." if result.success
                     else f"That didn't go through — {result.error or 'the platform rejected the request'}.")
         suggestions: list[Suggestion] = []
-        if result.success:
+        if accepted:
             lead, suggestions = await self._post_confirm_flow(session, tool_name, tool_args, lead, request_headers)
         session.add_assistant(lead)
         session_service.save(session)
@@ -1396,9 +1401,15 @@ class ChatService:
         output_text = str(result.output) if result.success else f"Error: {result.error}"
         session.add_tool_result(action_id, pending.tool_name, output_text)
 
+        # Envelope-aware outcome: a write can come back HTTP-200 with {success:false}; never claim
+        # the write landed on transport success alone (mirrors confirm_stream — the false-success fix).
+        from .ui_blocks import _coerce, _envelope_error
+        _env = _coerce(result.output) if result.success else None
+        accepted = result.success and not _envelope_error(_env)
+
         # Run the skill's dependency chain (if any), threading the entry's collected args.
         render_out, render_name = result.output, pending.tool_name
-        if result.success:
+        if accepted:
             async for _ev in self._skill_chain_events(
                 pending.tool_name, pending.tool_args, result.output, request_headers):
                 if _ev[0] == "result":
@@ -1409,7 +1420,7 @@ class ChatService:
         blocks = blocks_from_outputs([(render_name, render_out if result.success else result.error, result.success)])
         final_text = lead_in(blocks) if blocks else output_text
         suggestions: list[Suggestion] = []
-        if result.success:
+        if accepted:
             final_text, suggestions = await self._post_confirm_flow(
                 session, pending.tool_name, pending.tool_args, final_text, request_headers)
         session.add_assistant(final_text)

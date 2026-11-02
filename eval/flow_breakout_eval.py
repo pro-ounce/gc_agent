@@ -51,7 +51,7 @@ class _S:
 
 
 async def _create_role_at_name(s):
-    flows.start_entity_create(s, "role")
+    await flows.start_entity_create(s, "role")         # async — must be awaited to arm the flow
     await flows.handle(s, "Formulation Planner", {})   # answer app → now collecting roleName
 
 
@@ -72,7 +72,7 @@ async def run():
     check("field value does NOT break out",
           (s.metadata.get("flow") or {}).get("name") == "entity_create" and not (fr and fr.reroute))
 
-    s = _S(); flows.maybe_start(s, "remove a role in Formulation")
+    s = _S(); await flows.maybe_start(s, "remove a role in Formulation")
     fr = await flows.handle(s, "remove a role in Formulation", {})
     check("same intent does NOT break out",
           (s.metadata.get("flow") or {}).get("name") == "remove_role" and not (fr and fr.reroute))
@@ -82,16 +82,49 @@ async def run():
     check("different-entity create breaks out",
           fr is not None and fr.reroute and s.metadata.get("flow") is None)
 
+    # A STANDALONE same-entity re-create ("create a role") IS a fresh command → per the documented
+    # design (_should_break_out) it breaks out and re-routes, and the caller re-arms a clean
+    # create-role flow. Only a field VALUE that merely contains those words (covered above) stays.
     s = _S(); await _create_role_at_name(s)
     fr = await flows.handle(s, "create a role", {})
-    check("same-entity create does NOT break out",
-          (s.metadata.get("flow") or {}).get("name") == "entity_create")
+    check("standalone same-entity re-create breaks out (re-issues the flow)",
+          fr is not None and fr.reroute and s.metadata.get("flow") is None)
 
     s = _S(); await _create_role_at_name(s)
     await flows.handle(s, "Budget Reviewer", {})
     fr = await flows.handle(s, "New reviewer for budgets", {})
     check("ambiguous 'new …' (no entity noun) does NOT break out",
           (s.metadata.get("flow") or {}).get("name") == "entity_create")
+
+    # ── #2 QUESTION-AS-SLOT: a question typed mid create-user must BREAK OUT, never be captured as a
+    #    field value (the history bug — questions became a last name / email and a garbage user was
+    #    created). A real name must still be captured. ──
+    s = _S(); flows.start_create(s); await flows.handle(s, "one at a time", {})   # → stage 'first'
+    fr = await flows.handle(s, "does the current user have permission to create a user?", {})
+    check("interrogative mid create-user breaks out (not captured)",
+          fr is not None and fr.reroute and s.metadata.get("flow") is None)
+
+    s = _S(); flows.start_create(s); await flows.handle(s, "one at a time", {})
+    fr = await flows.handle(s, "i am asking do we have the permission to change this user", {})
+    check("'i am asking …' mid create-user breaks out (not captured)",
+          fr is not None and fr.reroute and s.metadata.get("flow") is None)
+
+    s = _S(); flows.start_create(s); await flows.handle(s, "one at a time", {})
+    fr = await flows.handle(s, "Jane", {})
+    check("a real first name does NOT break out of create-user",
+          (s.metadata.get("flow") or {}).get("name") == "create_user" and not (fr and fr.reroute))
+
+    # ── #3 DEFINITIONAL baseline question must NOT arm the list/generate flow (history: "what is a
+    #    baseline" → "Your 13 FORMULATION baselines:"). A real list request still lists. ──
+    s = _S()
+    fr = await flows.maybe_start(s, "What is a budget baseline, in two sentences?")
+    check("'what is a baseline' does NOT arm a baseline flow (answered instead)",
+          fr is None and s.metadata.get("flow") is None)
+
+    s = _S()
+    fr = await flows.maybe_start(s, "list my baselines")
+    check("'list my baselines' still routes to the baseline list read",
+          fr is not None)
 
     return r
 
