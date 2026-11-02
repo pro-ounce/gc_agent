@@ -259,6 +259,43 @@ def _is_cancel(msg: str) -> bool:
     return bool(_CANCEL_LEAD.match(msg) and _CANCEL_OBJ.search(msg))
 
 
+# ── Mid-intake navigation: honoured at ANY step of a guided intake so a validation step can
+# never dead-end. The history bug: a user stuck at "email?" typed "lets start from first" and
+# "what are the details do you have upto now" and every try came back "That doesn't look like a
+# valid email" — no way back, no restart, no progress short of the exact cancel words. Each regex
+# anchors to a whole-message intent (not a word buried in a field value) so a real answer is safe.
+_RESTART_RE = re.compile(
+    r"^\s*(?:please\s+|let'?s\s+|can\s+(?:we|you)\s+|i(?:'d| would| want to| wanna)?\s+(?:like\s+to\s+)?)?"
+    r"(?:re[-\s]?start(?:\s+it|\s+this)?"
+    r"|start\s+(?:again|over|afresh|from\s+(?:the\s+)?(?:first|start|beginning|top|scratch))"
+    r"|begin\s+(?:again|from\s+(?:the\s+)?(?:first|start|beginning|top))"
+    r"|from\s+(?:the\s+)?(?:first|beginning|top|scratch)"
+    r"|redo(?:\s+it)?|reset|do\s+it\s+again|scratch\s+that)"
+    r"\s*\.?\??\s*$", re.I)
+_BACK_RE = re.compile(
+    r"^\s*(?:go\s+back|back\s+up|(?:one\s+)?step\s+back|previous(?:\s+step)?|prev|undo|back)"
+    r"\s*\.?\??\s*$", re.I)
+_PROGRESS_RE = re.compile(
+    r"\b(?:so\s*far|upto\s*now|up\s*to\s*now)\b"
+    r"|\bwhat(?:'?s| is| are| do| did| have)\b[^?]*\bdetails?\b"
+    r"|\bdetails?\b[^?]*\b(?:do\s+you\s+have|so\s*far|got|entered|given|collected|captured)\b"
+    r"|\bwhat\s+(?:have|did)\s+(?:you|we|i)\b[^?]*\b(?:got|given|entered|collected|captured|provided|said)\b"
+    r"|\bwhere\s+(?:are|were)\s+we\b"
+    r"|\bwhat\s+(?:info|information|fields?)\b[^?]*\b(?:so\s*far|have|collected)\b", re.I)
+
+
+def _is_restart(msg: str) -> bool:
+    return bool(_RESTART_RE.match(msg or ""))
+
+
+def _is_back(msg: str) -> bool:
+    return bool(_BACK_RE.match(msg or ""))
+
+
+def _is_progress(msg: str) -> bool:
+    return bool(_PROGRESS_RE.search(msg or ""))
+
+
 def _cancel_flow(session: Any, flow: dict[str, Any]) -> FlowResult:
     """Fail-safe exit: drop the flow and any armed confirm; nothing is written."""
     name = flow.get("name")
@@ -523,7 +560,16 @@ _BASELINE_FY_RE = re.compile(r"(?:fy|fiscal\s*year)\s*'?(\d{2,4})", re.I)
 # baselines" (those have no is/are+determiner before the noun) so real list requests still list.
 _BASELINE_DEF_RE = re.compile(
     r"\bwhat(?:'?s| is| are)\s+(?:a|an|the)?\s*(?:budget\s+)?baselines?\b"
-    r"|\b(?:define|explain|meaning of|definition of)\s+(?:a\s+|an\s+|the\s+)?(?:budget\s+)?baselines?\b",
+    r"|\b(?:define|explain|meaning of|definition of)\s+(?:a\s+|an\s+|the\s+)?(?:budget\s+)?baselines?\b"
+    # Conceptual phrasings that still carry no list/read intent — previously these fell through
+    # to _LIST_BASELINE_RE (it matches the bare word "what") and the agent replied "Your N
+    # baselines:" instead of explaining. Each requires a definitional CUE next to the noun, so a
+    # real list request ("what baselines do I have", "tell me my baselines") is NOT vetoed.
+    r"|\b(?:tell|remind)\s+me\s+(?:about\s+)?what\s+(?:a\s+|an\s+|the\s+)?(?:budget\s+)?baselines?\b"
+    r"|\b(?:tell|remind)\s+me\s+about\s+(?:a\s+|an\s+|the\s+)?(?:budget\s+)?baselines?\b"
+    r"|\bwhat\b[^.?!]{0,24}\bbaselines?\b[^.?!]{0,12}\b(?:mean|means|used\s+for)\b"
+    r"|\b(?:purpose|point|idea|concept|meaning|definition)\s+of\s+(?:a\s+|an\s+|the\s+)?(?:budget\s+)?baselines?\b"
+    r"|\bhow\s+do(?:es)?\s+(?:a\s+|an\s+|the\s+)?(?:budget\s+)?baselines?\s+work\b",
     re.I)
 
 
@@ -951,6 +997,14 @@ async def handle(session: Any, message: str, headers: dict[str, str] | None) -> 
             and not _BASELINE_INTENT_RE.search(msg) and _match_baseline_field(msg) is not None:
         return _bp(await _baseline(session, flow, msg, headers), session.metadata.get("flow"))
 
+    # Mid-intake NAVIGATION (restart / go back / "what do you have so far?") is owned by the
+    # active intake — intercept it BEFORE the break-out guard so a progress question phrased as
+    # "what are the details you have?" isn't mistaken for a new intent and the whole flow discarded
+    # (the history dead-end: a user stuck at the email step had no way back or restart).
+    if name == "create_user" and flow.get("stage") not in (None, "mode", "bulk_wait") \
+            and (_is_restart(msg) or _is_back(msg) or _is_progress(msg)):
+        return await _create(session, flow, msg, headers)
+
     # SELF-HEALING: a clear new flow-intent that isn't this flow's continuation breaks out —
     # abandon the stale flow and re-route the message fresh (maybe_start picks it up). This stops
     # an abandoned flow in a long-lived session from eating "remove a role" / "create a role".
@@ -1135,6 +1189,89 @@ async def _user_exists(user_name: str, headers: dict[str, str] | None) -> bool:
         return False
 
 
+# Guided one-by-one order + the data key each step fills — used by back/restart/progress nav.
+_CREATE_GUIDED = ["first", "last", "username", "email", "type", "category"]
+_CREATE_FIELD = {"first": "firstName", "last": "lastName", "username": "userName",
+                 "email": "emailAddress", "type": "accountType", "category": "accountCategory"}
+
+
+def _create_escape() -> list[dict[str, Any]]:
+    """Always-available exits, appended to every guided prompt so no step can trap the user."""
+    return [_chip("Go back", "go back", icon="skip"),
+            _chip("Start over", "restart", icon="list"),
+            _chip("Cancel", "cancel", icon="skip")]
+
+
+def _create_question(flow: dict[str, Any]) -> tuple[str, list[dict[str, Any]]]:
+    """The prompt + option chips for the CURRENT guided step (re-used after back / progress)."""
+    stage = flow.get("stage")
+    data = flow.get("data", {})
+    if stage == "first":
+        return ("What's the new user's **first name**?", [])
+    if stage == "last":
+        fn = data.get("firstName", "")
+        return (f"And **{fn}**'s **last name**?" if fn else "What's the **last name**?", [])
+    if stage == "username":
+        suggested = (data.get("firstName", "")[:1] + data.get("lastName", "")).upper().replace(" ", "")
+        tail = f" (e.g. {suggested})" if suggested else ""
+        return (f"What **username** should they sign in with?{tail}", [])
+    if stage == "email":
+        return ("What's their **email address**?", [])
+    if stage == "type":
+        return ("What **account type**? _Local = internal staff · External = outside partner · "
+                "Global = cross-tenant · Stale = dormant._",
+                [_chip(t, t, icon="app") for t in TYPE_CHIPS])
+    if stage == "category":
+        return ("And the **account category**? _Core = standard user · Service/API = system "
+                "accounts · Temporary/Testing = short-lived · Help & Support = support desk._",
+                [_chip(c, c, icon="role") for c in CAT_CHIPS])
+    return ("Please use **Confirm** or **Cancel** above to finish creating the user.", [])
+
+
+def _create_recap(data: dict[str, Any]) -> str:
+    """Human-readable summary of what's been collected so far (for 'what do you have?')."""
+    rows: list[str] = []
+    who = f"{data.get('firstName', '')} {data.get('lastName', '')}".strip()
+    if who:
+        rows.append(f"• Name: **{who}**")
+    if data.get("userName"):
+        rows.append(f"• Username: **{data['userName']}**")
+    if data.get("emailAddress"):
+        rows.append(f"• Email: **{data['emailAddress']}**")
+    if data.get("accountType"):
+        rows.append(f"• Account type: **{data['accountType']}**")
+    if data.get("accountCategory"):
+        rows.append(f"• Account category: **{data['accountCategory']}**")
+    return "\n".join(rows)
+
+
+def _create_nav(session: Any, flow: dict[str, Any], msg: str) -> "FlowResult | None":
+    """Honour restart / go-back / show-progress at any guided step. Returns None when `msg` is
+    not a navigation command (so the step handles it as a normal answer)."""
+    data = flow.setdefault("data", {})
+    if _is_restart(msg):
+        return start_create(session)
+    if _is_progress(msg):
+        recap = _create_recap(data)
+        q, sugg = _create_question(flow)
+        body = ((f"Here's what I have so far:\n{recap}\n\nLet's continue — {q}") if recap
+                else f"I haven't recorded anything yet. {q}")
+        return FlowResult(message=body, suggestions=sugg + _create_escape())
+    if _is_back(msg):
+        stage = flow.get("stage")
+        if stage in _CREATE_GUIDED:
+            i = _CREATE_GUIDED.index(stage)
+            if i > 0:
+                prev = _CREATE_GUIDED[i - 1]
+                flow["stage"] = prev
+                data.pop(_CREATE_FIELD[prev], None)   # clear it so they re-enter that answer
+                q, sugg = _create_question(flow)
+                return FlowResult(message=f"Sure — let's go back. {q}",
+                                  suggestions=sugg + _create_escape())
+        return start_create(session)                  # at the first step → restart from the top
+    return None
+
+
 def start_create(session: Any) -> FlowResult:
     """Begin creating a user — first offer HOW: all at once, or one question at a time."""
     session.metadata["flow"] = {"name": "create_user", "stage": "mode", "data": {}}
@@ -1149,6 +1286,14 @@ def start_create(session: Any) -> FlowResult:
 async def _create(session: Any, flow: dict[str, Any], msg: str, headers: dict[str, str] | None) -> FlowResult:
     stage = flow.get("stage")
     data = flow.setdefault("data", {})
+
+    # Mid-intake navigation (restart / go back / "what do you have so far?") — honoured at every
+    # guided step so a validation step can never dead-end. Skipped at mode/bulk_wait (no answers
+    # collected yet there). Returns None when `msg` is a real answer, so the step logic runs.
+    if stage not in (None, "mode", "bulk_wait"):
+        nav = _create_nav(session, flow, msg)
+        if nav is not None:
+            return nav
 
     if stage == "mode":
         low = msg.lower()
@@ -1188,7 +1333,9 @@ async def _create(session: Any, flow: dict[str, Any], msg: str, headers: dict[st
         if not uname:
             return FlowResult(message="Please give me a **username**.")
         if await _user_exists(uname, headers):
-            return FlowResult(message=f"**{uname}** is already taken. Please pick a different username.")
+            return FlowResult(
+                message=f"**{uname}** is already taken. Please pick a different username.",
+                suggestions=_create_escape())
         data["userName"] = uname
         flow["stage"] = "email"
         return FlowResult(message=f"Got it — **{uname}**. What's their **email address**?")
@@ -1196,7 +1343,10 @@ async def _create(session: Any, flow: dict[str, Any], msg: str, headers: dict[st
     if stage == "email":
         email = msg.strip()
         if not _EMAIL_RE.match(email):
-            return FlowResult(message="That doesn't look like a valid email. Please enter a valid **email address**.")
+            return FlowResult(
+                message=("That doesn't look like an email address (I need something like "
+                         "**name@agency.gov**). Enter their email, or tap an option below."),
+                suggestions=_create_escape())
         data["emailAddress"] = email
         flow["stage"] = "type"
         return FlowResult(
@@ -1207,8 +1357,8 @@ async def _create(session: Any, flow: dict[str, Any], msg: str, headers: dict[st
     if stage == "type":
         choice = _pick_label(msg, TYPE_CHIPS)
         if not choice:
-            return FlowResult(message="Please pick an **account type**:",
-                              suggestions=[_chip(t, t, icon="app") for t in TYPE_CHIPS])
+            return FlowResult(message="Please pick an **account type** from the options:",
+                              suggestions=[_chip(t, t, icon="app") for t in TYPE_CHIPS] + _create_escape())
         data["accountType"] = choice
         flow["stage"] = "category"
         return FlowResult(
@@ -1219,8 +1369,8 @@ async def _create(session: Any, flow: dict[str, Any], msg: str, headers: dict[st
     if stage == "category":
         choice = _pick_label(msg, CAT_CHIPS)
         if not choice:
-            return FlowResult(message="Please pick an **account category**:",
-                              suggestions=[_chip(c, c, icon="role") for c in CAT_CHIPS])
+            return FlowResult(message="Please pick an **account category** from the options:",
+                              suggestions=[_chip(c, c, icon="role") for c in CAT_CHIPS] + _create_escape())
         data["accountCategory"] = choice
         flow["stage"] = "confirm"
         who = f"{data.get('firstName','')} {data.get('lastName','')}".strip()
@@ -1321,7 +1471,10 @@ async def _create_skill(session: Any, flow: dict[str, Any], msg: str, headers: d
         sugg = await skill_store.suggest_tools(data.get("summary", ""), 6)
         data["_sugg"] = [s["name"] for s in sugg]
         if not sugg:
-            return FlowResult(message="Which MCP tool should it run? Type the exact tool name.")
+            return FlowResult(
+                message=("I couldn't match your description to an action I can run yet. Tell me in a "
+                         "few more words what the skill should **do**, or tap Cancel."),
+                suggestions=[_chip("Cancel", "cancel", icon="skip")])
         lines = "\n".join(
             f"• **{s['name']}** — {s['desc'] or 'No description available.'}"
             + (f"  \n  _needs: {', '.join(s['required'])}_" if s.get("required") else "")
@@ -1333,6 +1486,19 @@ async def _create_skill(session: Any, flow: dict[str, Any], msg: str, headers: d
 
     if stage == "tool":
         sugg_names = data.get("_sugg", [])
+        # Flow-control / filler words ("next", "yes", "ok", "continue") are NOT tool-name guesses —
+        # the history leak: a user typed "NEXT"/"YES" and got "I couldn't find a tool called NEXT …
+        # type an exact tool name", exposing raw MCP ids. Treat them as "nothing chosen yet" and
+        # just re-show the tappable list.
+        if re.fullmatch(r"(?:next|yes|y|yeah|yep|sure|ok(?:ay)?|continue|proceed|go(?:\s+ahead)?|"
+                        r"done|finish|no|nope|skip|help|\?+)\.?", msg.strip(), re.I):
+            if sugg_names:
+                return FlowResult(message="Tap the action this skill should run:",
+                                  suggestions=[_chip(n, n, icon="app") for n in sugg_names])
+            return FlowResult(
+                message=("I don't have an action matched yet. Describe what the skill should do in a "
+                         "few more words, or tap Cancel."),
+                suggestions=[_chip("Cancel", "cancel", icon="skip")])
         # "about <tool>" / "details <tool>" / "what is <tool>" → show full detail, don't pick yet.
         m = re.match(r"^\s*(?:about|details?|more(?:\s+about)?|explain|what\s*'?s?\s*is|tell me about)\s+(.+)$",
                      msg, re.I)
@@ -1352,10 +1518,15 @@ async def _create_skill(session: Any, flow: dict[str, Any], msg: str, headers: d
                               suggestions=[_chip(n, n, icon="app") for n in sugg_names])
         picked = await skill_store.find_tool(msg)
         if not picked:
+            if sugg_names:
+                return FlowResult(
+                    message="I didn't catch which action you meant — tap one of these:",
+                    suggestions=[_chip(n, n, icon="app") for n in sugg_names]
+                                + [_chip("Cancel", "cancel", icon="skip")])
             return FlowResult(
-                message=(f"I couldn't find a tool called “{msg}”. Pick one below, type an exact "
-                         "tool name, or type **about <tool>** for details."),
-                suggestions=[_chip(n, n, icon="app") for n in sugg_names])
+                message=("I couldn't match that to an action I can run. Try describing the skill "
+                         "differently, or tap Cancel."),
+                suggestions=[_chip("Cancel", "cancel", icon="skip")])
         data["tool"] = picked
         data["required"] = await skill_store.tool_required_fields(picked)
         flow["stage"] = "review"
