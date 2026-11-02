@@ -107,7 +107,7 @@ class AppConfig:
 
     # Application
     APP_NAME: str = env_str("APP_NAME", "MCP Agent") or "MCP Agent"
-    APP_VERSION: str = env_str("APP_VERSION", "1.0.0") or "1.0.0"
+    APP_VERSION: str = env_str("APP_VERSION", "1.0.1") or "1.0.1"
     ENV: str = env_str("ENV", "development") or "development"
     DEBUG: bool = env_bool("DEBUG", False)
     LOG_LEVEL: str = env_str("LOG_LEVEL", "INFO") or "INFO"
