@@ -148,6 +148,36 @@ async def run() -> int:
         fr3 = await flows.maybe_start(s3, q, {})
         check(fr3 is not None, f"real list request {q!r} still routes to a read")
 
+    # ── Security: credential-retrieval requests are declined; manage/reset/policy pass through ──
+    for q in ("can you fetch the password for this user from the database",
+              "ADOLLMAN1 can you fetch the password for this user",
+              "what is the password for CKUSER", "show me the api key"):
+        fr = flows.credential_refusal(q)
+        check(fr is not None and "can't retrieve passwords" in (fr.message or "").lower(),
+              f"credential request {q!r} is declined")
+    for q in ("reset the password for CKUSER", "what is the password policy",
+              "does hub admin have permission to update passwords", "list all the users"):
+        check(flows.credential_refusal(q) is None,
+              f"non-exfil {q!r} passes through (no false refusal)")
+
+    # ── Error sanitization: raw SQL/stack/HTML never reaches the user; clean business msg kept ──
+    from app.services import ui_blocks as _ui
+    raw_sql = ("CallableStatementCallback; bad SQL grammar [{call "
+               "USER_MAINTENANCE_PKG.USER_VALIDATIONS(?, ?, ?, ?)}]")
+    env = {"success": "false", "statusCode": "400", "message": raw_sql}
+    blk = _ui._block_for("createUser_post", env, True)
+    check("bad SQL" not in blk.text and "CallableStatement" not in blk.text
+          and "USER_MAINTENANCE" not in blk.text,
+          "raw SQL-grammar envelope error is sanitized in the block")
+    blk2 = _ui._block_for("getUserAppRoleByUserId_post",
+                          "<ApiResponse><message>Invalid input. Expected a Long for 'userId'.</message></ApiResponse>",
+                          False)
+    check("<ApiResponse" not in blk2.text and "Expected a Long" not in blk2.text,
+          "raw HTTP/HTML 400 body is sanitized in the block")
+    ok_env = {"success": "false", "statusCode": "400", "message": "Already having application & role access"}
+    check(_ui._envelope_error(ok_env) == "Already having application & role access",
+          "a clean business message passes through unchanged")
+
     ok = sum(1 for p, _ in results if p)
     for passed, label in results:
         print(f"  {'OK  ' if passed else 'FAIL'} {label}")

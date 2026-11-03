@@ -291,6 +291,11 @@ class ChatService:
         skill = None
         sel_app = _sa
         sel_role = eco.selected_role(request_headers)
+        # Security guard FIRST: decline any request to retrieve a password/secret/token safely.
+        _cred = flows.credential_refusal(user_message)
+        if _cred is not None:
+            return self._flow_response(session, _cred, source="guard", question=user_message,
+                                       app=sel_app, role=sel_role)
         if flows.is_active(session):
             fr = await flows.handle(session, user_message, request_headers)
             if fr is not None and fr.reroute:
@@ -681,6 +686,21 @@ class ChatService:
             session.metadata["app"] = turn.app
         session_service.save(session)
 
+        # Security guard FIRST: a request to retrieve a password/secret/token is declined safely,
+        # before any flow / read / LLM routing can emit something (the history gap: it returned an
+        # irrelevant people-list instead of refusing).
+        _cred = flows.credential_refusal(user_message)
+        if _cred is not None:
+            chunks = self._flow_chunks(session, _cred)
+            turn.answered_by = "guard"
+            _log_turn_source(session_id, "guard", question=user_message,
+                             answer=(_cred.message or "")[:240], request_id=turn.request_id,
+                             app=turn.app, role=turn.role)
+            turn.finish("stop")
+            for ch in chunks:
+                yield ch
+            return
+
         # Guided flow active (e.g. onboarding)? Advance it deterministically — no LLM.
         # Or a fresh intent (create user without full detail) may START a guided intake.
         skill = None
@@ -869,8 +889,9 @@ class ChatService:
         blocks = blocks_from_outputs([(render_name, render_out if result.success else result.error, result.success)])
         lead = (lead_in(blocks) if blocks else "").strip()
         if not lead or lead == "—":            # never return an empty/blank bubble to the widget
+            from .ui_blocks import _user_safe_error
             lead = ("Done." if result.success
-                    else f"That didn't go through — {result.error or 'the platform rejected the request'}.")
+                    else _user_safe_error(result.error or "the platform rejected the request"))
         suggestions: list[Suggestion] = []
         if accepted:
             lead, suggestions = await self._post_confirm_flow(session, tool_name, tool_args, lead, request_headers)

@@ -13,9 +13,35 @@ defensive: anything it can't structure degrades to a text block, never raises.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 from ..models.chat import UIBlock
+
+# Raw backend/infra error signatures that must NEVER be shown to an end user (the history leak:
+# a failed createUser surfaced "CallableStatementCallback; bad SQL grammar [{call USER_MAINTENANCE_
+# PKG.USER_VALIDATIONS(…)}]" verbatim; a bad arg surfaced a raw <ApiResponse> HTTP-400 body). When
+# any of these appear we replace the whole message with a safe, generic line — the raw text still
+# lives in the tool-result history + audit for admins to diagnose.
+_TECH_ERROR_RE = re.compile(
+    r"bad SQL grammar|CallableStatement|SQLException|SQLGrammar|DataAccess|\{call\b|\bORA-\d|\bPLS-\d"
+    r"|Exception\b|nested exception|\bat [\w.$]+\([\w.]+:\d+\)|Stacktrace|NullPointer|JDBC|Hibernate"
+    r"|PreparedStatement|could not (?:execute|extract)|<\s*(?:html|ApiResponse|\?xml)|&lt;ApiResponse"
+    r"|on (?:GET|POST|PUT|DELETE) request for\s|Expected a Long|Internal Server Error|500 ",
+    re.I)
+_SAFE_ERROR = ("That didn't go through — the system rejected the request. Please try again, and if it "
+               "keeps happening, contact an administrator.")
+
+
+def _user_safe_error(msg: Any) -> str:
+    """Pass a clean business message through unchanged ('Already having application & role access',
+    'User already exists'); replace anything carrying a raw SQL/stack/HTTP/HTML signature with a
+    generic line so internal detail never reaches the user."""
+    s = ("" if msg is None else str(msg)).strip()
+    if not s:
+        return _SAFE_ERROR
+    return _SAFE_ERROR if _TECH_ERROR_RE.search(s) else s
+
 
 _MAX_ROWS = 50          # cap table rows so a huge list can't bloat the reply
 _MAX_COLS = 6           # cap table columns (keep the widget readable)
@@ -192,13 +218,14 @@ def _envelope_error(data: Any) -> str | None:
     if not failed:
         return None
     msg = data.get("message") or "Request failed"
-    return f"{msg} — {_fmt(errors)}" if has_errors else str(msg)
+    raw = f"{msg} — {_fmt(errors)}" if has_errors else str(msg)
+    return _user_safe_error(raw)
 
 
 def _block_for(name: str, raw: Any, success: bool) -> UIBlock:
     if not success:
         return UIBlock(type="notice", level="error", title=_humanize(name),
-                       text=_fmt(raw), source_tool=name)
+                       text=_user_safe_error(_fmt(raw)), source_tool=name)
     coerced = _coerce(raw)
     err = _envelope_error(coerced)
     if err:

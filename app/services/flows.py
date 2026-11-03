@@ -284,6 +284,35 @@ _PROGRESS_RE = re.compile(
     r"|\bwhat\s+(?:info|information|fields?)\b[^?]*\b(?:so\s*far|have|collected)\b", re.I)
 
 
+# ── Security: never retrieve secrets. The history gap: "fetch the password for this user from the
+# database" / "ADOLLMAN1 can you fetch the password" got an irrelevant people-list, not a refusal.
+# A RETRIEVE verb aimed at a secret noun → a clear, safe decline (manage/reset/policy asks pass
+# through to normal routing, so legitimate admin flows aren't blocked).
+_SECRET_NOUN = (r"(?:passwords?|passwd|pwd|credentials?|\bsecret\b|api[\s-]?keys?|access[\s-]?tokens?"
+                r"|private[\s-]?keys?|\bssn\b|social security)")
+_CRED_REQ_RE = re.compile(
+    r"(?:fetch|retriev\w+|show|display|reveal|give|tell|look\s?up|find|read|extract|pull|export|"
+    r"provide|get|what(?:'s| is| are)|see)[^.?!]{0,40}" + _SECRET_NOUN
+    + r"|" + _SECRET_NOUN + r"[^.?!]{0,25}(?:from|in|of|out of)\s+(?:the\s+)?(?:db|database|table|system)",
+    re.I)
+_CRED_EXCL_RE = re.compile(
+    r"\b(reset|chang\w+|updat\w+|forgot|set\s*up|setup|create|policy|policies|requirement|rule|"
+    r"complexity|expir\w+|strength|manage|permission to|able to|allowed to)\b", re.I)
+
+
+def credential_refusal(msg: str) -> "FlowResult | None":
+    """A safe, deterministic decline for requests to retrieve a password/secret/token/credential.
+    Returns None for anything else (incl. reset/change/policy asks, which route normally)."""
+    m = msg or ""
+    if _CRED_REQ_RE.search(m) and not _CRED_EXCL_RE.search(m):
+        return FlowResult(
+            message=("I can't retrieve passwords, credentials, or other secrets — they aren't "
+                     "accessible to me and are never shown in plain text. If someone needs access, "
+                     "an administrator can reset their password through the admin console."),
+            done=True)
+    return None
+
+
 def _is_restart(msg: str) -> bool:
     return bool(_RESTART_RE.match(msg or ""))
 
