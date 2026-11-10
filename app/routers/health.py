@@ -28,6 +28,7 @@ from ..commons import metrics as M
 from ..commons.config import cfg
 from ..commons.flags import flags
 from ..connections import store_health
+from ..services import runtime_config
 from ..mcp.client import mcp_client
 from ..mcp.tool_registry import tool_registry
 from ..services import backup_service
@@ -174,11 +175,14 @@ async def actuator_info(request: Request) -> dict:
         },
         "runtime": {
             "uptime_seconds": round(time.time() - _START_TS, 1),
+            # Effective (admin-override-aware) values, not the static .env defaults:
+            # the live model is whatever /admin set (runtime_config), falling back to
+            # cfg. Reporting cfg here would misstate what actually serves inference.
             "llm": {
                 "provider": cfg.LLM_PROVIDER,
-                "model": cfg.LLM_MODEL,
-                "num_ctx": cfg.LLM_NUM_CTX,
-                "max_tokens": cfg.LLM_MAX_TOKENS,
+                "model": runtime_config.get_str("LLM_MODEL"),
+                "num_ctx": runtime_config.get_int("LLM_NUM_CTX"),
+                "max_tokens": runtime_config.get_int("LLM_MAX_TOKENS"),
             },
             "embed_model": cfg.EMBED_MODEL,
             "store_backend": store_health().get("backend"),
